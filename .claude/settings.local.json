@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -r -i \"firebase\\\\|koin\\\\|hilt\\\\|dagger\" /mnt/c/Users/DELL/AndroidStudioProjects/BakeryERP/*.gradle.kts /mnt/c/Users/DELL/AndroidStudioProjects/BakeryERP/gradle/libs.versions.toml)",
+      "Bash(find /mnt/c/Users/DELL/AndroidStudioProjects/BakeryERP -maxdepth 4 -not -path */.gradle/* -not -path */.git/* -not -path */build/* -type f)",
+      "Read(//tmp/**)",
+      "Bash(jar xf:*)",
+      "Bash(grep -r \"putBytes\\\\|putData\\\\|putFile\\\\|fun put\" . --include=*.kt)",
+      "Bash(python3 -c \":*)",
+      "Bash(python3:*)",
+      "Bash(find /mnt/c/Users/DELL/.gradle/caches/modules-2 -name firebase-storage*android*.jar)",
+      "Bash(Get-ChildItem *)",
+      "Bash(Select-Object FullName)",
+      "Bash(xargs grep -l \"Branch\\\\|Organization\\\\|Company\")",
+      "Bash(grep -E \"\\\\.kt$\")",
+      "Bash(git ls-tree *)",
+      "Bash(grep \"\\\\.kt$\")",
+      "Bash(powershell *)",
+      "Bash(xargs grep -l \"firestore\\\\|index\")",
+      "Bash(./gradlew composeApp:compileDebugKotlin)",
+      "Bash(Select-Object Name)",
+      "Bash(grep -v \"^$\")",
+      "Bash(xargs grep -l \"class.*IngredientRepository\")",
+      "Bash(Find-ChildItem *)",
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\DELL\\\\AndroidStudioProjects\\\\BakeryERP\" -Recurse -Directory | Where-Object { $_.Name -match \"functions|firebase|triggers\" } | ForEach-Object { $_.FullName })",
+      "Bash(xargs grep -l \"Table\\\\|DataGrid\")",
+      "Bash(./gradlew composeApp:installDebug)",
+      "Bash(xargs grep -l \"BranchCapability\\\\|CAN_PRODUCE\\\\|IS_WAREHOUSE\")",
+      "Bash(grep -E \"\\\\.\\(kt\\)$\")"
+    ]
+  }
+}

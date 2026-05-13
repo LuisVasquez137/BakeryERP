@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "412638080390",
+    "project_id": "bakery-erp-saas",
+    "storage_bucket": "bakery-erp-saas.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:412638080390:android:aff656351eb73eae305007",
+        "android_client_info": {
+          "package_name": "com.bakery.erp"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "412638080390-f9da5rn2mui3qe47bnthcttvtrv0ckjs.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.bakery.erp",
+            "certificate_hash": "17b8e89fa540cba2b11d69e2b5740394143bc67a"
+          }
+        },
+        {
+          "client_id": "412638080390-10uq96sisqntdn3fc5u64rhsj79hi5mi.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAJlB1FxrMjgVKRdtzt_6v6CAThpmYuAP4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "412638080390-10uq96sisqntdn3fc5u64rhsj79hi5mi.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

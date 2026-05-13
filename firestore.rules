@@ -1,0 +1,45 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function callerOrgId() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.orgId;
+    }
+
+    match /users/{userId} {
+      allow read, write: if request.auth != null
+                         && request.auth.uid == userId;
+    }
+
+    match /organizations/{orgId} {
+      allow create: if request.auth != null
+                    && request.resource.data.ownerEmail == request.auth.token.email;
+      allow read, update, delete: if request.auth != null
+                                  && callerOrgId() == orgId;
+    }
+
+    match /organizations/{orgId}/{document=**} {
+      allow read, write: if request.auth != null
+                         && callerOrgId() == orgId;
+    }
+
+    // Datos de la empresa (productos, inventario, ventas, etc.)
+    // Una sola regla cubre TODAS las subcolecciones actuales y futuras.
+    match /companies/{companyId}/{document=**} {
+      allow read, write: if request.auth != null
+                         && callerOrgId() == companyId;
+    }
+
+    // Códigos de invitación:
+    // get (leer uno): cualquier usuario autenticado puede verificar un código específico
+    // list: bloqueado — nadie puede enumerar todos los códigos
+    // create: solo usuarios autenticados (ocurre al crear la organización)
+    // update/delete: bloqueados
+    match /inviteCodes/{code} {
+      allow get: if request.auth != null;
+      allow list: if false;
+      allow create: if request.auth != null;
+      allow update, delete: if false;
+    }
+  }
+}
