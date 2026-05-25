@@ -32,6 +32,7 @@ class AuthViewModel(
 
     private val _uiState = MutableStateFlow(AuthUiState())
     val uiState: StateFlow<AuthUiState> = _uiState.asStateFlow()
+    val isGoogleAvailable: Boolean = googleAuthHandler.isAvailable
 
     init {
         repository.authState
@@ -157,9 +158,16 @@ class AuthViewModel(
     fun signInWithGoogle() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
-            val idToken = googleAuthHandler.getIdToken()
+            val idToken = try {
+                googleAuthHandler.getIdToken()
+            } catch (e: Exception) {
+                // Popup cancelled or error (e.g. auth/popup-closed-by-user)
+                _uiState.update { it.copy(isLoading = false, error = null) }
+                return@launch
+            }
             if (idToken == null) {
-                _uiState.update { it.copy(isLoading = false) }
+                // Web: signInWithPopup already authenticated — authState flow handles navigation.
+                // Keep isLoading=true until the flow emits.
                 return@launch
             }
             repository.signInWithGoogle(idToken)

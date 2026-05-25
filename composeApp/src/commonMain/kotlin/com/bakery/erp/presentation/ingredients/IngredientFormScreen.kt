@@ -1,5 +1,6 @@
 package com.bakery.erp.presentation.ingredients
 
+import com.bakery.erp.util.fmt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -545,18 +546,18 @@ private fun PurchaseFormatItem(
             ) {
                 Column {
                     Text(
-                        text = "Paquete: ${format.unitsPerPackage.toInt().let { if (format.unitsPerPackage == it.toDouble()) it.toString() else "%.2f".format(format.unitsPerPackage) }} ${format.unit}",
+                        text = "Paquete: ${format.unitsPerPackage.toInt().let { if (format.unitsPerPackage == it.toDouble()) it.toString() else format.unitsPerPackage.fmt(2) }} ${format.unit}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = "Costo del paquete: Q ${"%.2f".format(format.packageCost)}",
+                        text = "Costo del paquete: Q ${format.packageCost.fmt(2)}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 Text(
-                    text = "= Q ${"%.2f".format(format.costPerUnit)} / ${format.unit}",
+                    text = "= Q ${format.costPerUnit.fmt(2)} / ${format.unit}",
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary
@@ -584,8 +585,8 @@ private fun PurchaseFormatDialog(
     var supplierExpanded by remember { mutableStateOf(false) }
     var selectedUnit by remember { mutableStateOf(format?.unit?.takeIf { it.isNotEmpty() } ?: allowedUnits.firstOrNull() ?: "") }
     var unitExpanded by remember { mutableStateOf(false) }
-    var unitsPerPackage by remember { mutableStateOf(format?.unitsPerPackage?.takeIf { it != 1.0 || format.id.isNotEmpty() }?.let { "%.2f".format(it).trimEnd('0').trimEnd('.') } ?: "") }
-    var packageCost by remember { mutableStateOf(format?.packageCost?.takeIf { it > 0 }?.let { "%.2f".format(it) } ?: "") }
+    var unitsPerPackage by remember { mutableStateOf(format?.unitsPerPackage?.takeIf { it != 1.0 || format.id.isNotEmpty() }?.let { it.fmt(2).trimEnd('0').trimEnd('.') } ?: "") }
+    var packageCost by remember { mutableStateOf(format?.packageCost?.takeIf { it > 0 }?.let { it.fmt(2) } ?: "") }
 
     val units = unitsPerPackage.toDoubleOrNull() ?: 0.0
     val cost = packageCost.toDoubleOrNull() ?: 0.0
@@ -760,7 +761,7 @@ private fun PurchaseFormatDialog(
                                 color = MaterialTheme.colorScheme.onPrimaryContainer
                             )
                             Text(
-                                text = "Q ${"%.2f".format(cost)} / paquete  →  Q ${"%.2f".format(costPerUnit)} / $selectedUnit",
+                                text = "Q ${cost.fmt(2)} / paquete  →  Q ${costPerUnit.fmt(2)} / $selectedUnit",
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer

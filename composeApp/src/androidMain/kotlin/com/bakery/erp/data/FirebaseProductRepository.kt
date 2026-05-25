@@ -1,8 +1,10 @@
 package com.bakery.erp.data
 
 import com.bakery.erp.domain.ProductRepository
+import com.bakery.erp.model.BakingTechnicalSheet
 import com.bakery.erp.model.Product
 import com.bakery.erp.model.ProductCharacteristics
+import com.bakery.erp.model.ProductDecoration
 import dev.gitlive.firebase.firestore.DocumentSnapshot
 import dev.gitlive.firebase.firestore.FirebaseFirestore
 import dev.gitlive.firebase.firestore.Timestamp
@@ -55,6 +57,7 @@ class FirebaseProductRepository(
         "unit" to unit,
         "weightPerUnit" to weightPerUnit,
         "rawWeightGrams" to rawWeightGrams,
+        "rawWeightUnit" to rawWeightUnit,
         "shelfLife" to shelfLife,
         "storageType" to storageType,
         // Características aplanadas al nivel raíz
@@ -64,6 +67,21 @@ class FirebaseProductRepository(
         "shape" to characteristics.shape,
         "aroma" to characteristics.aroma,
         "flavorProfile" to characteristics.flavorProfile,
+        // Ficha técnica de producción aplanada al nivel raíz
+        "bakingTemperatureCelsius" to technicalSheet.bakingTemperatureCelsius,
+        "bakingTimeMinutes" to technicalSheet.bakingTimeMinutes,
+        "fermentationTimeHours" to technicalSheet.fermentationTimeHours,
+        "fermentationTemperatureCelsius" to technicalSheet.fermentationTemperatureCelsius,
+        "hydrationPercentage" to technicalSheet.hydrationPercentage,
+        "shapingNotes" to technicalSheet.shapingNotes,
+        "bakingNotes" to technicalSheet.bakingNotes,
+        "decorations" to decorations.map {
+            mapOf(
+                "preparationId" to it.preparationId,
+                "preparationName" to it.preparationName,
+                "gramsPerUnit" to it.gramsPerUnit
+            )
+        },
         "notes" to notes,
         "createdAt" to if (createdAt == 0L) System.currentTimeMillis() else createdAt,
         "updatedAt" to System.currentTimeMillis()
@@ -80,6 +98,7 @@ class FirebaseProductRepository(
         unit = get<String?>("unit") ?: "",
         weightPerUnit = get<Double?>("weightPerUnit"),
         rawWeightGrams = get<Double?>("rawWeightGrams"),
+        rawWeightUnit = get<String?>("rawWeightUnit"),
         shelfLife = get<Long?>("shelfLife")?.toInt(),
         storageType = get<String?>("storageType"),
         characteristics = ProductCharacteristics(
@@ -90,6 +109,25 @@ class FirebaseProductRepository(
             aroma = get<String?>("aroma"),
             flavorProfile = get<String?>("flavorProfile")
         ),
+        technicalSheet = BakingTechnicalSheet(
+            bakingTemperatureCelsius = get<Long?>("bakingTemperatureCelsius")?.toInt(),
+            bakingTimeMinutes = get<Long?>("bakingTimeMinutes")?.toInt(),
+            fermentationTimeHours = get<Double?>("fermentationTimeHours"),
+            fermentationTemperatureCelsius = get<Long?>("fermentationTemperatureCelsius")?.toInt(),
+            hydrationPercentage = get<Double?>("hydrationPercentage"),
+            shapingNotes = get<String?>("shapingNotes"),
+            bakingNotes = get<String?>("bakingNotes")
+        ),
+        decorations = runCatching {
+            @Suppress("UNCHECKED_CAST")
+            (get<List<Map<String, Any?>>?>("decorations") ?: emptyList()).map {
+                ProductDecoration(
+                    preparationId = it["preparationId"] as? String ?: "",
+                    preparationName = it["preparationName"] as? String ?: "",
+                    gramsPerUnit = (it["gramsPerUnit"] as? Number)?.toDouble() ?: 0.0
+                )
+            }
+        }.getOrElse { emptyList() },
         notes = get<String?>("notes"),
         createdAt = readTimestampAsMillis("createdAt"),
         updatedAt = readTimestampAsMillis("updatedAt")

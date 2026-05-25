@@ -1,21 +1,24 @@
-package com.bakery.erp.data
+﻿package com.bakery.erp.data
 
 import com.bakery.erp.domain.IngredientUsage
 import com.bakery.erp.domain.RecipeRepository
 import com.bakery.erp.model.Recipe
 import com.bakery.erp.model.RecipeComponent
 import com.bakery.erp.model.RecipeStage
+import com.bakery.erp.model.RecipeStep
 import com.bakery.erp.model.RecipeYield
 import dev.gitlive.firebase.firestore.DocumentSnapshot
 import dev.gitlive.firebase.firestore.FirebaseFirestore
 import dev.gitlive.firebase.firestore.Timestamp
 import dev.gitlive.firebase.firestore.toMilliseconds
+import kotlin.time.Clock
 
 /**
  * Estructura Firestore:
  *   companies/{orgId}/recipes/{recipeId}                    ← datos de la receta (flat)
  *   companies/{orgId}/recipes/{recipeId}/stages/{stageId}   ← etapas
  *   companies/{orgId}/recipes/{recipeId}/components/{id}    ← ingredientes (con stageId)
+ *   companies/{orgId}/recipes/{recipeId}/steps/{stepId}     ← pasos (con stageId, foto opcional)
  *   companies/{orgId}/recipes/{recipeId}/yields/{yieldId}   ← productos que produce
  */
 class FirebaseRecipeRepository(
@@ -30,6 +33,9 @@ class FirebaseRecipeRepository(
 
     private fun componentsCol(companyId: String, recipeId: String) =
         firestore.collection("companies/$companyId/recipes/$recipeId/components")
+
+    private fun stepsCol(companyId: String, recipeId: String) =
+        firestore.collection("companies/$companyId/recipes/$recipeId/steps")
 
     private fun yieldsCol(companyId: String, recipeId: String) =
         firestore.collection("companies/$companyId/recipes/$recipeId/yields")
@@ -60,21 +66,45 @@ class FirebaseRecipeRepository(
             componentsCol(companyId, recipeId).get().documents.map { it.toRecipeComponent() }
         }.getOrElse { emptyList() }
 
+        val allSteps = runCatching {
+            stepsCol(companyId, recipeId).get().documents.map { it.toRecipeStep() }
+        }.getOrElse { emptyList() }
+
         val yields = runCatching {
             yieldsCol(companyId, recipeId).get().documents.map { it.toRecipeYield() }
         }.getOrElse { emptyList() }
 
+        // Receta plana: la lista raíz son los componentes/pasos sin agrupar por etapa.
+        val flatComponents = allComponents.sortedBy { it.order }
+        val flatSteps = allSteps.sortedBy { it.order }
+
+        // Hidratar stages (legacy) solo si la receta vieja todavía no se guardó plana.
         val componentsByStage = allComponents.groupBy { it.stageId }
+        val stepsByStage = allSteps.groupBy { it.stageId }
         val hydratedStages = stages
             .sortedBy { it.order }
             .map { stage ->
+                val stageSteps = (stepsByStage[stage.id] ?: emptyList()).sortedBy { it.order }
                 stage.copy(
                     components = (componentsByStage[stage.id] ?: emptyList())
-                        .sortedBy { it.order }
+                        .sortedBy { it.order },
+                    steps = stageSteps.ifEmpty {
+                        (stage.instructions ?: "")
+                            .split("\n")
+                            .filter { it.isNotBlank() }
+                            .mapIndexed { i, line ->
+                                RecipeStep(id = "${stage.id}_$i", stageId = stage.id, order = i, text = line)
+                            }
+                    }
                 )
             }
 
-        return doc.toRecipe().copy(stages = hydratedStages, yields = yields)
+        return doc.toRecipe().copy(
+            components = flatComponents,
+            steps = flatSteps,
+            stages = hydratedStages,
+            yields = yields
+        )
     }
 
     // ── Escritura ────────────────────────────────────────────────────────────
@@ -129,11 +159,12 @@ class FirebaseRecipeRepository(
     // ── Helpers de escritura ─────────────────────────────────────────────────
 
     private suspend fun writeSubcollections(companyId: String, recipeId: String, recipe: Recipe) {
-        recipe.stages.forEach { stage ->
-            stagesCol(companyId, recipeId).document(stage.id).set(stage.toMap())
-            stage.components.forEach { component ->
-                componentsCol(companyId, recipeId).document(component.id).set(component.toMap())
-            }
+        // Persistir plano: componentes y pasos directo bajo la receta (sin stages).
+        recipe.components.forEach { component ->
+            componentsCol(companyId, recipeId).document(component.id).set(component.toMap())
+        }
+        recipe.steps.forEach { step ->
+            stepsCol(companyId, recipeId).document(step.id).set(step.toMap())
         }
         recipe.yields.forEach { yld ->
             yieldsCol(companyId, recipeId).document(yld.id).set(yld.toMap())
@@ -144,6 +175,11 @@ class FirebaseRecipeRepository(
         runCatching {
             componentsCol(companyId, recipeId).get().documents.forEach { doc ->
                 componentsCol(companyId, recipeId).document(doc.id).delete()
+            }
+        }
+        runCatching {
+            stepsCol(companyId, recipeId).get().documents.forEach { doc ->
+                stepsCol(companyId, recipeId).document(doc.id).delete()
             }
         }
         runCatching {
@@ -160,22 +196,23 @@ class FirebaseRecipeRepository(
 
     // ── Serialización → Firestore ────────────────────────────────────────────
 
-    private fun Recipe.toMap(): Map<String, Any?> = mapOf(
+    private fun Recipe.toMap(): Map<String, Any?> = firestoreSafeOf(
         "id" to id,
         "name" to name,
         "description" to description,
         "category" to category,
         "inputMode" to inputMode,
-        "stageCount" to stages.size,
+        // Receta plana: ya no hay etapas en recetas nuevas.
+        "stageCount" to 0,
         "yieldCount" to yields.size,
         "notes" to notes,
         "active" to active,
-        "createdAt" to if (createdAt == 0L) System.currentTimeMillis() else createdAt,
-        "updatedAt" to System.currentTimeMillis()
-        // stages y yields NO se guardan en el documento raíz
+        "createdAt" to if (createdAt == 0L) Clock.System.now().toEpochMilliseconds() else createdAt,
+        "updatedAt" to Clock.System.now().toEpochMilliseconds()
+        // components, steps y yields NO se guardan en el documento raíz
     )
 
-    private fun RecipeStage.toMap(): Map<String, Any?> = mapOf(
+    private fun RecipeStage.toMap(): Map<String, Any?> = firestoreSafeOf(
         "id" to id,
         "name" to name,
         "order" to order,
@@ -186,7 +223,7 @@ class FirebaseRecipeRepository(
         // components NO se guardan en el documento de la etapa
     )
 
-    private fun RecipeComponent.toMap(): Map<String, Any?> = mapOf(
+    private fun RecipeComponent.toMap(): Map<String, Any?> = firestoreSafeOf(
         "id" to id,
         "stageId" to stageId,
         "ingredientId" to ingredientId,
@@ -197,7 +234,15 @@ class FirebaseRecipeRepository(
         "order" to order
     )
 
-    private fun RecipeYield.toMap(): Map<String, Any?> = mapOf(
+    private fun RecipeStep.toMap(): Map<String, Any?> = firestoreSafeOf(
+        "id" to id,
+        "stageId" to stageId,
+        "order" to order,
+        "text" to text,
+        "photoUrl" to photoUrl
+    )
+
+    private fun RecipeYield.toMap(): Map<String, Any?> = firestoreSafeOf(
         "id" to id,
         "productId" to productId,
         "productName" to productName
@@ -238,6 +283,14 @@ class FirebaseRecipeRepository(
         percentage = get<Double?>("percentage") ?: 0.0,
         isBase = get<Boolean?>("isBase") ?: false,
         order = get<Long?>("order")?.toInt() ?: 0
+    )
+
+    private fun DocumentSnapshot.toRecipeStep() = RecipeStep(
+        id = id,
+        stageId = get<String?>("stageId") ?: "",
+        order = get<Long?>("order")?.toInt() ?: 0,
+        text = get<String?>("text") ?: "",
+        photoUrl = get<String?>("photoUrl")
     )
 
     private fun DocumentSnapshot.toRecipeYield() = RecipeYield(

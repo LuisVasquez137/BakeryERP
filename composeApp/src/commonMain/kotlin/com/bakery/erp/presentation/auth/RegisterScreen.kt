@@ -1,12 +1,14 @@
 package com.bakery.erp.presentation.auth
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -28,12 +30,12 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import org.koin.compose.viewmodel.koinViewModel
+import androidx.compose.runtime.remember
 
 @Composable
 fun RegisterScreen(
     onNavigateToLogin: () -> Unit,
-    viewModel: AuthViewModel = koinViewModel()
+    viewModel: AuthViewModel
 ) {
     val state by viewModel.uiState.collectAsState()
     val isGoogleUser = state.user != null
@@ -47,9 +49,14 @@ fun RegisterScreen(
     var passwordMismatch by remember { mutableStateOf(false) }
     var step by remember { mutableStateOf(0) } // solo usado en Path B (email)
 
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
     Column(
         modifier = Modifier
-            .fillMaxSize()
+            .widthIn(max = 440.dp)
+            .fillMaxWidth()
             .verticalScroll(rememberScrollState())
             .padding(24.dp),
         verticalArrangement = Arrangement.Center,
@@ -252,5 +259,6 @@ fun RegisterScreen(
                 }
             }
         }
+    }
     }
 }

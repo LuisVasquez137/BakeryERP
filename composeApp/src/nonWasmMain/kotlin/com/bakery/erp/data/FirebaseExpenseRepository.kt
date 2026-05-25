@@ -1,12 +1,15 @@
-package com.bakery.erp.data
+﻿package com.bakery.erp.data
 
 import com.bakery.erp.domain.ExpenseRepository
+import com.bakery.erp.domain.report.BranchExpenseStat
+import com.bakery.erp.domain.report.ExpenseSummary
 import com.bakery.erp.model.Expense
 import com.bakery.erp.model.ExpenseCategory
 import dev.gitlive.firebase.firestore.DocumentSnapshot
 import dev.gitlive.firebase.firestore.FirebaseFirestore
 import dev.gitlive.firebase.firestore.Timestamp
 import dev.gitlive.firebase.firestore.toMilliseconds
+import kotlin.time.Clock
 
 class FirebaseExpenseRepository(
     private val firestore: FirebaseFirestore
@@ -32,9 +35,37 @@ class FirebaseExpenseRepository(
         col(companyId).document(expenseId).delete()
     }
 
+    override suspend fun getExpensesForPeriod(companyId: String, period: String): List<Expense> =
+        col(companyId).get().documents.map { it.toExpense() }.filter { it.period == period }
+
+    override suspend fun aggregateExpensesForPeriod(
+        companyId: String, period: String
+    ): ExpenseSummary {
+        val expenses = getExpensesForPeriod(companyId, period)
+        if (expenses.isEmpty()) return ExpenseSummary()
+        val total = expenses.sumOf { it.amount }
+        val byCategory = expenses.groupBy { it.category }
+            .mapValues { (_, list) -> list.sumOf { it.amount } }
+        val byBranch = expenses.groupBy { it.branchId to it.branchName }
+            .map { (key, list) ->
+                BranchExpenseStat(
+                    branchId = key.first,
+                    branchName = key.second.ifEmpty { "Sin sucursal" },
+                    total = list.sumOf { it.amount }
+                )
+            }
+            .sortedByDescending { it.total }
+        return ExpenseSummary(
+            total = total,
+            recordsCount = expenses.size,
+            byCategory = byCategory,
+            byBranch = byBranch
+        )
+    }
+
     // ── Serialization ────────────────────────────────────────────────────────
 
-    private fun Expense.toMap(): Map<String, Any?> = mapOf(
+    private fun Expense.toMap(): Map<String, Any?> = firestoreSafeOf(
         "id" to id,
         "orgId" to orgId,
         "branchId" to branchId,
@@ -44,8 +75,8 @@ class FirebaseExpenseRepository(
         "amount" to amount,
         "period" to period,
         "notes" to notes,
-        "createdAt" to if (createdAt == 0L) System.currentTimeMillis() else createdAt,
-        "updatedAt" to System.currentTimeMillis()
+        "createdAt" to if (createdAt == 0L) Clock.System.now().toEpochMilliseconds() else createdAt,
+        "updatedAt" to Clock.System.now().toEpochMilliseconds()
     )
 
     private fun DocumentSnapshot.toExpense() = Expense(

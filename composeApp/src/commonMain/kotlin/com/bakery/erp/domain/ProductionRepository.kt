@@ -1,10 +1,12 @@
 package com.bakery.erp.domain
 
+import com.bakery.erp.domain.report.ProductionSummary
 import com.bakery.erp.model.ProductionLot
 import com.bakery.erp.model.ProductionLotLine
 import com.bakery.erp.model.ProductionOrder
 import com.bakery.erp.model.ProductionOrderLine
 import com.bakery.erp.model.ProductionShift
+import kotlinx.coroutines.flow.Flow
 
 interface ProductionRepository {
 
@@ -16,12 +18,72 @@ interface ProductionRepository {
 
     // ── Pedidos de producción ─────────────────────────────────────────────────
 
+    /**
+     * Flow en vivo de todos los pedidos de la organización. Una sola suscripción
+     * con snapshot listener; el cliente filtra por sucursales, fechas y turno.
+     * Reemplaza el polling múltiple por sucursal y mantiene la lista actualizada
+     * en tiempo real (las nuevas órdenes aparecen sin recargar).
+     */
+    fun observeOrders(companyId: String): Flow<List<ProductionOrder>>
+
+    /**
+     * Flow en vivo de todos los lotes de la organización. Usado para enriquecer
+     * los pedidos con el estado del lote ("Lote abierto", "En producción", ...).
+     */
+    fun observeLots(companyId: String): Flow<List<ProductionLot>>
+
+    /**
+     * Flow en vivo de las líneas de un lote específico. Empuja cambios cuando se
+     * agregan/modifican/eliminan productos del lote (p. ej. al aprobar un pedido
+     * tardío). Usado por la pantalla "Lista de Producción" para que los panaderos
+     * vean las actualizaciones sin recargar.
+     */
+    fun observeLotLines(companyId: String, lotId: String): Flow<List<ProductionLotLine>>
+
     suspend fun getOrdersForBranch(companyId: String, branchId: String): List<ProductionOrder>
     suspend fun getOrdersForProducingBranch(
         companyId: String,
         producingBranchId: String,
         requestedDate: Long
     ): List<ProductionOrder>
+    /**
+     * Pedidos donde [sellingBranchId] es origen, con [requestedDate] dentro de
+     * `[fromMillis, untilMillis)`. Filtrado server-side por rango de fechas para
+     * evitar cargar histórico completo.
+     */
+    suspend fun getOrdersForSellingBranchInRange(
+        companyId: String,
+        sellingBranchId: String,
+        fromMillis: Long,
+        untilMillis: Long
+    ): List<ProductionOrder>
+    /**
+     * Pedidos donde [producingBranchId] es destino, con [requestedDate] dentro de
+     * `[fromMillis, untilMillis)`.
+     */
+    suspend fun getOrdersForProducingBranchInRange(
+        companyId: String,
+        producingBranchId: String,
+        fromMillis: Long,
+        untilMillis: Long
+    ): List<ProductionOrder>
+    /** Todos los pedidos PENDING en cualquier fecha para una planta productora. */
+    suspend fun getPendingOrdersForProducingBranch(
+        companyId: String,
+        producingBranchId: String
+    ): List<ProductionOrder>
+    /**
+     * Pedido PENDING (si existe) que coincida con la cuádrupla `(sellingBranch,
+     * producingBranch, fecha calendario, shiftId)`. Usado para detectar duplicados
+     * en la creación y sugerir editar el existente.
+     */
+    suspend fun findPendingOrderForCombination(
+        companyId: String,
+        sellingBranchId: String,
+        producingBranchId: String,
+        requestedDate: Long,
+        shiftId: String
+    ): ProductionOrder?
     suspend fun getOrder(companyId: String, orderId: String): ProductionOrder?
     suspend fun getOrderLines(companyId: String, orderId: String): List<ProductionOrderLine>
     suspend fun saveOrder(
@@ -29,11 +91,70 @@ interface ProductionRepository {
         order: ProductionOrder,
         lines: List<ProductionOrderLine>
     )
+    /**
+     * Actualiza un pedido existente: header + reemplaza completamente la subcolección
+     * de líneas (borra las que ya no están y escribe/actualiza las nuevas).
+     * Falla si [order.id] está vacío.
+     */
+    suspend fun updateOrder(
+        companyId: String,
+        order: ProductionOrder,
+        lines: List<ProductionOrderLine>
+    )
     suspend fun updateOrderStatus(companyId: String, orderId: String, newStatus: String)
+    /**
+     * Anexa las líneas de [orderId] al [lotId] existente, fusionando por `productId`:
+     * si el producto ya está en el lote suma cantidades; si no, agrega línea nueva.
+     * Marca el pedido como CONFIRMED y lo añade a `lot.sourceOrderIds`.
+     * No descuenta stock — eso ocurre al completar el lote.
+     */
+    suspend fun addOrderToLot(
+        companyId: String,
+        lotId: String,
+        orderId: String,
+        newLines: List<ProductionLotLine>
+    )
+
+    /**
+     * Inverso de [addOrderToLot]: resta las líneas de [orderId] del [lotId] (por
+     * `productId`). Si una línea del lote queda en 0 o menos, se elimina. Quita
+     * [orderId] de `lot.sourceOrderIds` y refresca `lineCount`. NO cambia el
+     * estado del pedido (eso lo hace el caller — típicamente para cancelarlo o
+     * regresarlo a PENDING).
+     */
+    suspend fun removeOrderFromLot(
+        companyId: String,
+        lotId: String,
+        orderId: String,
+        orderLines: List<ProductionOrderLine>
+    )
 
     // ── Lotes de producción ───────────────────────────────────────────────────
 
     suspend fun getLotsForBranch(companyId: String, branchId: String): List<ProductionLot>
+    /**
+     * Lotes con [productionDate] dentro de `[fromMillis, untilMillis)` para una planta.
+     * Si [producingBranchId] está vacío, devuelve los de toda la organización (útil
+     * para reportes consolidados a nivel owner).
+     */
+    suspend fun getLotsForBranchInRange(
+        companyId: String,
+        producingBranchId: String,
+        fromMillis: Long,
+        untilMillis: Long
+    ): List<ProductionLot>
+    /**
+     * Lote activo (no CANCELLED) que coincida con `(producingBranchId, productionDate,
+     * shiftId)`. Si no existe devuelve null. Usado para bloquear la creación de
+     * lotes duplicados y para resolver el panel de "pedidos tardíos".
+     * Se compara `productionDate` por día calendario en TZ del sistema.
+     */
+    suspend fun getActiveLotForBranchDateShift(
+        companyId: String,
+        producingBranchId: String,
+        productionDate: Long,
+        shiftId: String
+    ): ProductionLot?
     suspend fun getLot(companyId: String, lotId: String): ProductionLot?
     suspend fun getLotLines(companyId: String, lotId: String): List<ProductionLotLine>
     suspend fun saveLot(
@@ -42,10 +163,25 @@ interface ProductionRepository {
         lines: List<ProductionLotLine>
     )
     suspend fun updateLotStatus(companyId: String, lotId: String, newStatus: String)
+    suspend fun saveLotLine(companyId: String, lotId: String, line: ProductionLotLine)
+    /** Elimina una línea del lote. Falla si el lote no está OPEN. */
+    suspend fun deleteLotLine(companyId: String, lotId: String, lineId: String)
     suspend fun completeLot(
         companyId: String,
         lotId: String,
         producedLines: List<ProductionLotLine>
     )
     suspend fun markStockDeducted(companyId: String, lotId: String)
+
+    /**
+     * Agrega lotes (+ líneas) en rango para un set de plantas productoras (null/vacío =
+     * toda la organización). También calcula `lateOrderCount` cruzando con pedidos
+     * `isLateOrder=true` PENDING en el mismo rango.
+     */
+    suspend fun aggregateProductionInRange(
+        companyId: String,
+        producingBranchIds: List<String>?,
+        fromMillis: Long,
+        untilMillis: Long
+    ): ProductionSummary
 }

@@ -17,6 +17,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.ProductionLotLine
 import com.bakery.erp.presentation.auth.AuthViewModel
+import com.bakery.erp.presentation.products.ProductViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -24,9 +25,11 @@ fun ProductionLotCompleteScreen(
     lotId: String,
     onNavigateBack: () -> Unit,
     authViewModel: AuthViewModel,
-    viewModel: ProductionViewModel
+    viewModel: ProductionViewModel,
+    productViewModel: ProductViewModel
 ) {
     val state by viewModel.uiState.collectAsState()
+    val productState by productViewModel.uiState.collectAsState()
     val authState by authViewModel.uiState.collectAsState()
     val user = authState.user
     val companyId = user?.orgId ?: ""
@@ -37,6 +40,12 @@ fun ProductionLotCompleteScreen(
 
     LaunchedEffect(lotId) {
         if (companyId.isNotEmpty()) viewModel.loadLotDetail(companyId, lotId)
+    }
+    LaunchedEffect(companyId) {
+        if (companyId.isNotEmpty()) productViewModel.loadProducts(companyId)
+    }
+    LaunchedEffect(productState.productList) {
+        viewModel.updateProductsCache(productState.productList)
     }
 
     LaunchedEffect(state.error) {

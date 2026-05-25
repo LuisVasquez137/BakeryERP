@@ -1,4 +1,4 @@
-package com.bakery.erp.data
+﻿package com.bakery.erp.data
 
 import com.bakery.erp.domain.PurchaseRepository
 import com.bakery.erp.model.Purchase
@@ -8,6 +8,7 @@ import dev.gitlive.firebase.firestore.DocumentSnapshot
 import dev.gitlive.firebase.firestore.FirebaseFirestore
 import dev.gitlive.firebase.firestore.Timestamp
 import dev.gitlive.firebase.firestore.toMilliseconds
+import kotlin.time.Clock
 
 class FirebasePurchaseRepository(
     private val firestore: FirebaseFirestore
@@ -31,7 +32,7 @@ class FirebasePurchaseRepository(
         val finalPurchase = purchase.copy(
             id = docRef.id,
             lineCount = lines.size,
-            createdAt = System.currentTimeMillis()
+            createdAt = Clock.System.now().toEpochMilliseconds()
         )
         docRef.set(finalPurchase.toPurchaseMap())
         lines.forEach { line ->
@@ -50,7 +51,7 @@ class FirebasePurchaseRepository(
 
     // ── Serialización ────────────────────────────────────────────────────────
 
-    private fun Purchase.toPurchaseMap(): Map<String, Any?> = mapOf(
+    private fun Purchase.toPurchaseMap(): Map<String, Any?> = firestoreSafeOf(
         "id" to id,
         "branchId" to branchId,
         "branchName" to branchName,
@@ -66,7 +67,7 @@ class FirebasePurchaseRepository(
         "status" to status
     )
 
-    private fun PurchaseLine.toLineMap(): Map<String, Any?> = mapOf(
+    private fun PurchaseLine.toLineMap(): Map<String, Any?> = firestoreSafeOf(
         "id" to id,
         "ingredientId" to ingredientId,
         "ingredientName" to ingredientName,

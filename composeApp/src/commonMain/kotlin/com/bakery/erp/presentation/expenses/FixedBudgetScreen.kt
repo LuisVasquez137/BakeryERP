@@ -1,5 +1,6 @@
 package com.bakery.erp.presentation.expenses
 
+import com.bakery.erp.util.fmt
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -150,7 +151,7 @@ fun FixedBudgetListScreen(
                     val byBranch = state.itemList
                         .filter { it.active }
                         .groupBy { it.branchName.ifEmpty { "Sin sucursal" } }
-                        .toSortedMap()
+                        .entries.sortedBy { it.key }.associate { it.key to it.value }
 
                     LazyColumn(
                         contentPadding = PaddingValues(12.dp),
@@ -212,7 +213,7 @@ private fun FbItemCard(item: FixedBudgetItem, onEdit: () -> Unit, onDelete: () -
                 }
             }
             Text(
-                text = "Q ${"%.2f".format(item.amount)}",
+                text = "Q ${item.amount.fmt(2)}",
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.error
@@ -278,7 +279,7 @@ fun FixedBudgetFormScreen(
     var name by rememberSaveable { mutableStateOf(existing?.name ?: "") }
     var notes by rememberSaveable { mutableStateOf(existing?.notes ?: "") }
     var amountText by rememberSaveable {
-        mutableStateOf(if (existing != null && existing.amount > 0) "%.2f".format(existing.amount) else "")
+        mutableStateOf(if (existing != null && existing.amount > 0) existing.amount.fmt(2) else "")
     }
     var selectedCategory by remember { mutableStateOf(existing?.category ?: ExpenseCategory.OTROS) }
     var selectedBranch by remember {

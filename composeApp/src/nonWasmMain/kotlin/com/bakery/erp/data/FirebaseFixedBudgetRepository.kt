@@ -1,10 +1,11 @@
-package com.bakery.erp.data
+﻿package com.bakery.erp.data
 
 import com.bakery.erp.domain.FixedBudgetRepository
 import com.bakery.erp.model.ExpenseCategory
 import com.bakery.erp.model.FixedBudgetItem
 import dev.gitlive.firebase.firestore.DocumentSnapshot
 import dev.gitlive.firebase.firestore.FirebaseFirestore
+import kotlin.time.Clock
 
 class FirebaseFixedBudgetRepository(
     private val firestore: FirebaseFirestore
@@ -29,7 +30,7 @@ class FirebaseFixedBudgetRepository(
         col(companyId).document(itemId).delete()
     }
 
-    private fun FixedBudgetItem.toMap(): Map<String, Any?> = mapOf(
+    private fun FixedBudgetItem.toMap(): Map<String, Any?> = firestoreSafeOf(
         "id" to id,
         "orgId" to orgId,
         "branchId" to branchId,
@@ -39,7 +40,7 @@ class FirebaseFixedBudgetRepository(
         "amount" to amount,
         "notes" to notes,
         "active" to active,
-        "updatedAt" to System.currentTimeMillis()
+        "updatedAt" to Clock.System.now().toEpochMilliseconds()
     )
 
     private fun DocumentSnapshot.toItem(): FixedBudgetItem = FixedBudgetItem(

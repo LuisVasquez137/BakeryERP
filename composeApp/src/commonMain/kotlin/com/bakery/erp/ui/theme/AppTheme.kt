@@ -12,42 +12,43 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-// Bakery Boutique Palette
-private val DeepSeaBlue    = Color(0xFF123456) // Tu color elegido
-private val WheatLight     = Color(0xFFF7F2E9) // Fondo Trigo muy claro y limpio
-private val BurntOrange = Color(0xFFCC5500) // El nuevo protagonista
-private val WheatDeep      = Color(0xFFE9DCC9) // Trigo para contenedores (Adiós al morado)
-private val DeepSeaLow     = Color(0xFF345678) // Versión más clara para textos secundarios
-private val HoneyAccent    = Color(0xFFC27A3F) // Acento para botones especiales
-private val WarmIvory   = Color(0xFFFDFBF7)
+// Bagueto — Helvetia Blue Palette
+private val HelvetiaBlue  = Color(0xFF004F7C) // Primary brand color (slightly deeper)
+private val WarmCream     = Color(0xFFFDFBF7) // Main background
+private val CoffeeBrown   = Color(0xFF2E4A6E) // Dark marine accent
+private val SandLight     = Color(0xFFF5EFE6) // Light beige containers
+private val SlateText     = Color(0xFF1A2B38) // Primary dark text
+private val MutedSlate    = Color(0xFF5E6E7A) // Secondary text
+private val CafeLatte     = Color(0xFFC8A882) // Subtle warm border/outline
 
 private val BakeryLightColorScheme = lightColorScheme(
-    primary            = DeepSeaBlue,
+    primary            = HelvetiaBlue,
     onPrimary          = Color.White,
-    primaryContainer   = WheatLight,
-    onPrimaryContainer = DeepSeaBlue,
+    primaryContainer   = Color(0xFFE3F2FB),
+    onPrimaryContainer = HelvetiaBlue,
 
-    secondary            = BurntOrange,
+    secondary            = CoffeeBrown,
     onSecondary          = Color.White,
-    secondaryContainer   = Color(0xFFFDEFD9),
-    onSecondaryContainer = Color(0xFF8D5A2E),
+    secondaryContainer   = SandLight,
+    onSecondaryContainer = CoffeeBrown,
 
-    background       = WarmIvory,
-    onBackground     = DeepSeaBlue,
+    background       = WarmCream,
+    onBackground     = SlateText,
 
-    surface          = Color.White, // Las cards blancas resaltan sobre el trigo
-    onSurface        = DeepSeaBlue,
-    surfaceVariant   = Color(0xFFEEE4D3),
-    onSurfaceVariant = DeepSeaLow,
+    surface          = Color.White,
+    onSurface        = SlateText,
+    surfaceVariant   = Color(0xFFF0EAE2),
+    onSurfaceVariant = MutedSlate,
 
-    outline = Color(0xFFB4A089)
+    outline = CafeLatte
 )
+
 private val BakeryShapes = Shapes(
     extraSmall = RoundedCornerShape(6.dp),
     small      = RoundedCornerShape(10.dp),
     medium     = RoundedCornerShape(14.dp),
-    large      = RoundedCornerShape(20.dp),
-    extraLarge = RoundedCornerShape(28.dp),
+    large      = RoundedCornerShape(18.dp),
+    extraLarge = RoundedCornerShape(24.dp),
 )
 
 private val BakeryTypography = Typography(

@@ -1,5 +1,7 @@
 package com.bakery.erp.model
 
+import kotlin.math.roundToLong
+
 enum class UnitFamily { WEIGHT, VOLUME, COUNT }
 
 fun unitFamily(unit: String): UnitFamily? = when (unit) {
@@ -51,6 +53,11 @@ fun convertUnits(value: Double, fromUnit: String, toUnit: String): Double {
     return if (toBase > 0) fromBase / toBase else value
 }
 
+private fun formatOneDecimal(value: Double): String {
+    val r = (value * 10).roundToLong()
+    return "${r / 10}.${r % 10}"
+}
+
 /** Muestra el stock en presentaciones (ej: "5 × Saco 100 lb") o en unidad mayor (ej: "2.0 lb"). */
 fun formatStockDisplay(currentStock: Double, ingredient: Ingredient): String {
     val defaultFormat = ingredient.purchaseFormats.firstOrNull { it.isDefault }
@@ -60,11 +67,11 @@ fun formatStockDisplay(currentStock: Double, ingredient: Ingredient): String {
         val factor = convertUnits(defaultFormat.unitsPerPackage, defaultFormat.unit, ingredient.effectiveBaseUnit)
         val packages = if (factor > 0) currentStock / factor else 0.0
         val pkgStr = if (packages == packages.toLong().toDouble()) packages.toLong().toString()
-                     else "%.1f".format(packages)
+                     else formatOneDecimal(packages)
         "$pkgStr × ${defaultFormat.description}"
     } else {
         val largest = largestUnit(ingredient.allowedUnits)
         val converted = convertUnits(currentStock, ingredient.effectiveBaseUnit, largest)
-        "${"%.1f".format(converted)} $largest"
+        "${formatOneDecimal(converted)} $largest"
     }
 }

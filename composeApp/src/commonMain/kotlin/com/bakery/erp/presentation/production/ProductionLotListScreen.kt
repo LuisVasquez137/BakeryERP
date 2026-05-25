@@ -8,9 +8,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CalendarToday
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Factory
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -21,6 +25,13 @@ import com.bakery.erp.model.ProductionLot
 import com.bakery.erp.model.ProductionLotStatus
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.presentation.auth.AuthViewModel
+import kotlin.time.Clock
+import kotlinx.datetime.Instant
+import kotlinx.datetime.LocalDateTime
+import kotlinx.datetime.LocalTime
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toInstant
+import kotlinx.datetime.toLocalDateTime
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -45,9 +56,19 @@ fun ProductionLotListScreen(
         state.error?.let { snackbarHostState.showSnackbar(it); viewModel.clearError() }
     }
 
-    val filteredLots = remember(state.lots, state.lotDateFilter) {
-        val filter = state.lotDateFilter
-        if (filter == null) state.lots else state.lots.filter { it.productionDate == filter }
+    // Día seleccionado para filtrar lotes — default = hoy. Persistido en
+    // rememberSaveable para sobrevivir rotación.
+    var selectedDateMillis by rememberSaveable { mutableStateOf(startOfTodayLotListMillis()) }
+    val tz = remember { TimeZone.currentSystemDefault() }
+    val selectedDay = remember(selectedDateMillis) {
+        Instant.fromEpochMilliseconds(selectedDateMillis).toLocalDateTime(tz).date
+    }
+
+    // Filtrado por día calendario (no por millis exactos, tolera drifts).
+    val filteredLots = remember(state.lots, selectedDay) {
+        state.lots.filter {
+            Instant.fromEpochMilliseconds(it.productionDate).toLocalDateTime(tz).date == selectedDay
+        }.sortedBy { it.shiftName }
     }
 
     Scaffold(
@@ -77,34 +98,102 @@ fun ProductionLotListScreen(
         },
         containerColor = Color(0xFFFDFBF7)
     ) { padding ->
-        if (state.isLoading) {
-            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-        } else if (filteredLots.isEmpty()) {
-            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Default.Factory, null, Modifier.size(48.dp), tint = Color.Gray)
-                    Spacer(Modifier.height(8.dp))
-                    Text("Sin lotes de producción", color = Color.Gray)
-                    if (canManage) {
-                        Spacer(Modifier.height(4.dp))
-                        Text("Crea un nuevo lote para comenzar", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            DateHeader(
+                dateMillis = selectedDateMillis,
+                onPrev = { selectedDateMillis -= 86_400_000L },
+                onNext = { selectedDateMillis += 86_400_000L },
+                onResetToday = { selectedDateMillis = startOfTodayLotListMillis() }
+            )
+
+            when {
+                state.isLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+                filteredLots.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Default.Factory, null, Modifier.size(48.dp), tint = Color.Gray)
+                        Spacer(Modifier.height(8.dp))
+                        Text("Sin lotes para este día", color = Color.Gray)
+                        if (canManage) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "Crea uno nuevo o navega a otro día",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.Gray
+                            )
+                        }
                     }
                 }
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier.padding(padding),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                items(filteredLots) { lot ->
-                    ProductionLotCard(lot = lot, onClick = { onNavigateToDetail(lot.id) })
+                else -> LazyColumn(
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    items(filteredLots) { lot ->
+                        ProductionLotCard(lot = lot, onClick = { onNavigateToDetail(lot.id) })
+                    }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun DateHeader(
+    dateMillis: Long,
+    onPrev: () -> Unit,
+    onNext: () -> Unit,
+    onResetToday: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = Color.White,
+        shadowElevation = 1.dp
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onPrev) {
+                Icon(Icons.Default.ChevronLeft, "Día anterior", tint = Color(0xFF123456))
+            }
+            Row(
+                modifier = Modifier.weight(1f).clickable(onClick = onResetToday),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.CalendarToday,
+                    contentDescription = null,
+                    tint = Color(0xFF123456),
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    formatProductionDate(dateMillis),
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF123456),
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "(toca para hoy)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.Gray
+                )
+            }
+            IconButton(onClick = onNext) {
+                Icon(Icons.Default.ChevronRight, "Día siguiente", tint = Color(0xFF123456))
+            }
+        }
+    }
+}
+
+private fun startOfTodayLotListMillis(): Long {
+    val tz = TimeZone.currentSystemDefault()
+    val today = Clock.System.now().toLocalDateTime(tz).date
+    return LocalDateTime(today, LocalTime(0, 0, 0)).toInstant(tz).toEpochMilliseconds()
 }
 
 @Composable

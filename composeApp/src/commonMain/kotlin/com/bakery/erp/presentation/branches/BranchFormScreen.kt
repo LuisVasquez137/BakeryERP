@@ -20,9 +20,13 @@ import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -49,7 +53,10 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.Branch
 import com.bakery.erp.model.BranchCapability
+import com.bakery.erp.model.PriceList
+import com.bakery.erp.model.PriceListType
 import com.bakery.erp.presentation.auth.AuthViewModel
+import com.bakery.erp.presentation.pricing.PriceListViewModel
 import com.bakery.erp.presentation.products.ProductViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -59,11 +66,13 @@ fun BranchFormScreen(
     onNavigateBack: () -> Unit,
     authViewModel: AuthViewModel,
     viewModel: BranchViewModel,
-    productViewModel: ProductViewModel
+    productViewModel: ProductViewModel,
+    priceListViewModel: PriceListViewModel
 ) {
     val state by viewModel.uiState.collectAsState()
     val authState by authViewModel.uiState.collectAsState()
     val productState by productViewModel.uiState.collectAsState()
+    val priceState by priceListViewModel.uiState.collectAsState()
     val companyId = authState.user?.orgId ?: ""
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -92,8 +101,17 @@ fun BranchFormScreen(
     var nameError by remember { mutableStateOf(false) }
     var locationError by remember { mutableStateOf(false) }
 
+    // Lista de precios por defecto para despachos hacia esta sucursal.
+    var defaultPriceListId by rememberSaveable(existing?.id) {
+        mutableStateOf(existing?.defaultPriceListId ?: "")
+    }
+    var priceListExpanded by remember { mutableStateOf(false) }
+
     LaunchedEffect(companyId) {
-        if (companyId.isNotEmpty()) productViewModel.loadProducts(companyId)
+        if (companyId.isNotEmpty()) {
+            productViewModel.loadProducts(companyId)
+            priceListViewModel.loadLists(companyId)
+        }
     }
     LaunchedEffect(state.isSaved) {
         if (state.isSaved) { viewModel.clearSaved(); onNavigateBack() }
@@ -111,6 +129,7 @@ fun BranchFormScreen(
         notes = notes.trim().ifEmpty { null },
         capabilities = capabilities.toList(),
         assignedProductIds = assignedProductIds.toList(),
+        defaultPriceListId = defaultPriceListId,
         active = active
     )
 
@@ -303,6 +322,60 @@ fun BranchFormScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+                }
+
+                // ── Lista de precios para despacho ────────────────────────────
+                if (BranchCapability.CAN_SELL in capabilities) {
+                    SectionDivider()
+                    SectionHeader("Lista de precios para despacho")
+                    Text(
+                        text = "Precio al que la planta productora despacha producto a esta sucursal. Vacío = usar la lista mayorista default.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    val candidateLists = remember(priceState.lists) {
+                        priceState.lists.filter {
+                            it.active && (it.type == PriceListType.WHOLESALE || it.type == PriceListType.CUSTOM)
+                        }
+                    }
+                    val selectedList: PriceList? = remember(candidateLists, defaultPriceListId) {
+                        candidateLists.firstOrNull { it.id == defaultPriceListId }
+                    }
+                    ExposedDropdownMenuBox(
+                        expanded = priceListExpanded,
+                        onExpandedChange = { priceListExpanded = !priceListExpanded }
+                    ) {
+                        OutlinedTextField(
+                            readOnly = true,
+                            value = selectedList?.let {
+                                "${it.name} · ${PriceListType.label(it.type)}${if (it.isDefault) " (default)" else ""}"
+                            } ?: "Usar lista mayorista default",
+                            onValueChange = {},
+                            label = { Text("Lista asignada") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = priceListExpanded) },
+                            modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth()
+                        )
+                        ExposedDropdownMenu(
+                            expanded = priceListExpanded,
+                            onDismissRequest = { priceListExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Usar lista mayorista default") },
+                                onClick = { defaultPriceListId = ""; priceListExpanded = false }
+                            )
+                            candidateLists.forEach { list ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            "${list.name} · ${PriceListType.label(list.type)}" +
+                                                if (list.isDefault) " (default)" else ""
+                                        )
+                                    },
+                                    onClick = { defaultPriceListId = list.id; priceListExpanded = false }
+                                )
+                            }
+                        }
                     }
                 }
 

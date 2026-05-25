@@ -12,8 +12,17 @@ data class Recipe(
     val active: Boolean = true,
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L,
+    val components: List<RecipeComponent> = emptyList(),
+    val steps: List<RecipeStep> = emptyList(),
     val stages: List<RecipeStage> = emptyList(),
     val yields: List<RecipeYield> = emptyList()
-)
+) {
+    val allComponents: List<RecipeComponent>
+        get() = if (components.isNotEmpty()) components
+                else stages.flatMap { it.components }
+    val allSteps: List<RecipeStep>
+        get() = if (steps.isNotEmpty()) steps
+                else stages.flatMap { it.steps }
+}
 
 val RECIPE_CATEGORIES = listOf("Pan Principal", "Cubierta", "Relleno")

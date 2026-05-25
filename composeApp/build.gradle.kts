@@ -28,7 +28,13 @@ kotlin {
     }
     
     js {
-        browser()
+        browser {
+            commonWebpackConfig {
+                devServer = (devServer ?: org.jetbrains.kotlin.gradle.targets.js.webpack.KotlinWebpackConfig.DevServer()).apply {
+                    port = 8080
+                }
+            }
+        }
         binaries.executable()
     }
     
@@ -52,6 +58,9 @@ kotlin {
         // JS necesita su propio actual porque inicializa Firebase con config web
         val nativeMobileMain by creating {
             dependsOn(nonWasmMain)
+            dependencies {
+                implementation(libs.koin.core)
+            }
         }
         androidMain.get().dependsOn(nativeMobileMain)
         getByName("iosArm64Main").dependsOn(nativeMobileMain)
@@ -66,6 +75,7 @@ kotlin {
             implementation(libs.androidx.credentials)
             implementation(libs.androidx.credentials.play.services)
             implementation(libs.googleid)
+            implementation("androidx.biometric:biometric:1.1.0")
         }
         commonMain.dependencies {
             implementation(libs.compose.runtime)
@@ -77,9 +87,6 @@ kotlin {
             implementation(libs.compose.uiToolingPreview)
             implementation(libs.androidx.lifecycle.viewmodelCompose)
             implementation(libs.androidx.lifecycle.runtimeCompose)
-            implementation(libs.koin.core)
-            implementation(libs.koin.compose)
-            implementation(libs.koin.compose.viewmodel)
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.datetime)
             implementation(libs.navigation.compose)

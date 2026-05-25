@@ -1,5 +1,6 @@
 package com.bakery.erp.presentation.recipes
 
+import com.bakery.erp.util.fmt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -25,7 +27,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
@@ -44,6 +45,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -70,17 +72,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.bakery.erp.model.Ingredient
 import com.bakery.erp.model.Product
-import com.bakery.erp.model.RECIPE_CATEGORIES
 import com.bakery.erp.model.toBaseUnit
 import com.bakery.erp.model.Recipe
 import com.bakery.erp.model.RecipeComponent
-import com.bakery.erp.model.RecipeStage
-import com.bakery.erp.model.RecipeStageType
+import com.bakery.erp.model.RecipeStep
 import com.bakery.erp.model.RecipeYield
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.presentation.ingredients.IngredientViewModel
 import com.bakery.erp.presentation.products.ProductViewModel
 import com.bakery.erp.ui.AdaptiveContainer
+import com.bakery.erp.ui.ImagePickerButton
 import kotlin.random.Random
 
 // ── Tipos internos del formulario ─────────────────────────────────────────────
@@ -95,14 +96,11 @@ private data class ComponentEntry(
     val order: Int = 0
 )
 
-private data class StageEntry(
+private data class StepEntry(
     val id: String,
-    val name: String = "",
-    val type: String = "MASA_PRINCIPAL",
-    val instructions: String = "",
-    val restTimeMinutes: String = "",
-    val notes: String = "",
-    val components: List<ComponentEntry> = emptyList()
+    val text: String = "",
+    val photoUrl: String? = null,
+    val newBytes: ByteArray? = null
 )
 
 private data class YieldEntry(
@@ -113,14 +111,11 @@ private data class YieldEntry(
 
 // ── Conversiones desde modelos de dominio ─────────────────────────────────────
 
-private fun RecipeStage.toStageEntry() = StageEntry(
+private fun RecipeStep.toStepEntry() = StepEntry(
     id = id,
-    name = name,
-    type = type,
-    instructions = instructions ?: "",
-    restTimeMinutes = restTimeMinutes?.toString() ?: "",
-    notes = notes ?: "",
-    components = components.sortedBy { it.order }.map { it.toComponentEntry() }
+    text = text,
+    photoUrl = photoUrl,
+    newBytes = null
 )
 
 private fun RecipeComponent.toComponentEntry() = ComponentEntry(
@@ -129,7 +124,7 @@ private fun RecipeComponent.toComponentEntry() = ComponentEntry(
     ingredientName = ingredientName,
     ingredientUnit = ingredientUnit,
     rawInput = if (percentage == percentage.toLong().toDouble()) percentage.toLong().toString()
-               else "%.2f".format(percentage).trimEnd('0').trimEnd('.'),
+               else percentage.fmt(2).trimEnd('0').trimEnd('.'),
     isBase = isBase,
     order = order
 )
@@ -140,6 +135,13 @@ private fun RecipeYield.toYieldEntry() = YieldEntry(
     productName = productName
 )
 
+/** Construye los RecipeStep persistibles (descarta pasos totalmente vacíos). */
+private fun List<StepEntry>.toRecipeSteps(): List<RecipeStep> =
+    filter { it.text.isNotBlank() || it.photoUrl != null || it.newBytes != null }
+        .mapIndexed { i, s ->
+            RecipeStep(id = s.id, stageId = "", order = i, text = s.text.trim(), photoUrl = s.photoUrl)
+        }
+
 // ── Conversión peso → porcentaje ──────────────────────────────────────────────
 
 private fun toPercentageComponents(
@@ -148,10 +150,9 @@ private fun toPercentageComponents(
 ): List<RecipeComponent> {
     if (components.isEmpty()) return emptyList()
     return if (inputMode == "WEIGHT") {
-        val baseComp = components.firstOrNull { it.isBase } ?: return emptyList()
-        val baseRaw  = baseComp.rawInput.toDoubleOrNull() ?: 0.0
-        if (baseRaw == 0.0) return emptyList()
-        val baseNorm = toBaseUnit(baseRaw, baseComp.ingredientUnit)
+        // El 100% = suma de pesos de las harinas marcadas como base.
+        val baseNorm = components.filter { it.isBase }
+            .sumOf { toBaseUnit(it.rawInput.toDoubleOrNull() ?: 0.0, it.ingredientUnit) }
         if (baseNorm == 0.0) return emptyList()
         components.mapIndexed { i, c ->
             val norm = toBaseUnit(c.rawInput.toDoubleOrNull() ?: 0.0, c.ingredientUnit)
@@ -173,6 +174,32 @@ private fun toPercentageComponents(
                 isBase = c.isBase, order = i
             )
         }
+    }
+}
+
+// ── Validación de ingredientes base ───────────────────────────────────────────
+
+private fun validateBase(comps: List<ComponentEntry>, inputMode: String): String? {
+    if (comps.size < 2) return "Una receta debe tener al menos 2 ingredientes"
+    val missing = comps.filter {
+        val v = it.rawInput.toDoubleOrNull()
+        v == null || v <= 0.0
+    }
+    if (missing.isNotEmpty()) {
+        val label = if (inputMode == "PERCENTAGE") "porcentaje" else "cantidad"
+        val names = missing.joinToString(", ") { it.ingredientName.ifBlank { "(sin nombre)" } }
+        return "Falta $label en: $names"
+    }
+    val bases = comps.filter { it.isBase }
+    if (bases.isEmpty())
+        return "Marca al menos un ingrediente como base (harina = 100%)"
+    return if (inputMode == "WEIGHT") {
+        val sum = bases.sumOf { toBaseUnit(it.rawInput.toDoubleOrNull() ?: 0.0, it.ingredientUnit) }
+        if (sum <= 0.0) "El peso de las harinas base debe ser mayor a 0" else null
+    } else {
+        val sum = bases.sumOf { it.rawInput.toDoubleOrNull() ?: 0.0 }
+        if (kotlin.math.abs(sum - 100.0) > 0.5)
+            "Los % de las harinas base deben sumar 100 (suman ${sum.fmt(1)})" else null
     }
 }
 
@@ -238,35 +265,27 @@ private fun RecipeFormContent(
     val productState by productViewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // ── Form state ────────────────────────────────────────────────────────────
+    // ── Form state (flat: components + steps, sin etapas) ─────────────────────
     var name by rememberSaveable { mutableStateOf(existing?.name ?: "") }
     var description by rememberSaveable { mutableStateOf(existing?.description ?: "") }
-    var category by rememberSaveable { mutableStateOf(existing?.category ?: "Pan Principal") }
-    var categoryExpanded by remember { mutableStateOf(false) }
     var inputMode by rememberSaveable { mutableStateOf(existing?.inputMode ?: "PERCENTAGE") }
     var notes by rememberSaveable { mutableStateOf(existing?.notes ?: "") }
     var active by rememberSaveable { mutableStateOf(existing?.active ?: true) }
-    var stages by remember { mutableStateOf(existing?.stages?.map { it.toStageEntry() } ?: emptyList<StageEntry>()) }
+    var components by remember {
+        mutableStateOf(
+            existing?.allComponents?.sortedBy { it.order }?.map { it.toComponentEntry() }
+                ?: emptyList<ComponentEntry>()
+        )
+    }
+    var steps by remember {
+        mutableStateOf(
+            existing?.allSteps?.sortedBy { it.order }?.map { it.toStepEntry() }
+                ?: emptyList<StepEntry>()
+        )
+    }
     var yields by remember { mutableStateOf(existing?.yields?.map { it.toYieldEntry() } ?: emptyList<YieldEntry>()) }
-    // Estado para Cubierta / Relleno (preparación única, sin etapas)
-    var simpleComponents by remember {
-        mutableStateOf(
-            if (existing != null && existing.category != "Pan Principal")
-                existing.stages.firstOrNull()?.components?.map { it.toComponentEntry() } ?: emptyList()
-            else emptyList<ComponentEntry>()
-        )
-    }
-    var simpleSteps by remember {
-        mutableStateOf(
-            if (existing != null && existing.category != "Pan Principal")
-                (existing.stages.firstOrNull()?.instructions ?: "").split("\n").filter { it.isNotEmpty() }
-            else emptyList<String>()
-        )
-    }
-    val isPanPrincipal = category == "Pan Principal"
 
-    var showStageDialog by remember { mutableStateOf(false) }
-    var editingStage by remember { mutableStateOf<StageEntry?>(null) }
+    var showIngredientPicker by remember { mutableStateOf(false) }
     var showYieldDialog by remember { mutableStateOf(false) }
     var nameError by remember { mutableStateOf(false) }
     var formError by remember { mutableStateOf<String?>(null) }
@@ -282,68 +301,41 @@ private fun RecipeFormContent(
     }
 
     fun buildRecipe(): Recipe {
-        val builtStages: List<RecipeStage>
-        val builtYields: List<RecipeYield>
-
-        if (isPanPrincipal) {
-            builtStages = stages.mapIndexed { stageIdx, entry ->
-                val comps = toPercentageComponents(entry.components, inputMode)
-                    .map { it.copy(stageId = entry.id) }
-                RecipeStage(
-                    id = entry.id, name = entry.name.trim(), order = stageIdx, type = entry.type,
-                    instructions = entry.instructions.trim().ifEmpty { null },
-                    restTimeMinutes = entry.restTimeMinutes.toIntOrNull(),
-                    notes = entry.notes.trim().ifEmpty { null },
-                    components = comps
-                )
-            }
-            builtYields = yields.map { y ->
-                RecipeYield(id = y.id, productId = y.productId, productName = y.productName)
-            }
-        } else {
-            val stageId = existing?.stages?.firstOrNull()?.id ?: generateEntryId()
-            val stageType = if (category == "Cubierta") "CUBIERTA" else "RELLENO"
-            val comps = toPercentageComponents(simpleComponents, inputMode)
-                .map { it.copy(stageId = stageId) }
-            builtStages = listOf(
-                RecipeStage(
-                    id = stageId, name = category, order = 0, type = stageType,
-                    instructions = simpleSteps.filter { it.isNotEmpty() }.joinToString("\n").ifEmpty { null },
-                    components = comps
-                )
-            )
-            builtYields = emptyList()
+        val builtComponents = toPercentageComponents(components, inputMode)
+        val builtSteps = steps.toRecipeSteps()
+        val builtYields = yields.map { y ->
+            RecipeYield(id = y.id, productId = y.productId, productName = y.productName)
         }
-
         return Recipe(
             id = existing?.id ?: "",
             name = name.trim().replaceFirstChar { it.uppercase() },
             description = description.trim().ifEmpty { null },
-            category = category, inputMode = inputMode,
-            notes = notes.trim().ifEmpty { null }, active = active,
-            stages = builtStages, yields = builtYields
+            category = "Pan Principal",
+            inputMode = inputMode,
+            notes = notes.trim().ifEmpty { null },
+            active = active,
+            components = builtComponents,
+            steps = builtSteps,
+            yields = builtYields
         )
     }
 
-    // ── Diálogos ──────────────────────────────────────────────────────────────
-    if (showStageDialog) {
-        StageDialog(
-            stage = editingStage,
-            inputMode = inputMode,
+    if (showIngredientPicker) {
+        IngredientPickerDialog(
             ingredients = ingredientState.ingredientList,
-            existingTypes = if (editingStage != null)
-                stages.filter { it.id != editingStage!!.id }.map { it.type }
-            else
-                stages.map { it.type },
-            onConfirm = { newStage ->
-                stages = if (editingStage != null) {
-                    stages.map { if (it.id == newStage.id) newStage else it }
-                } else {
-                    stages + newStage
-                }
-                showStageDialog = false; editingStage = null
+            alreadyAddedIds = components.map { it.ingredientId }.toSet(),
+            onPick = { ing ->
+                components = components + ComponentEntry(
+                    id = generateEntryId(),
+                    ingredientId = ing.id,
+                    ingredientName = ing.name,
+                    ingredientUnit = ing.allowedUnits.firstOrNull() ?: "",
+                    isBase = components.none { it.isBase },
+                    order = components.size
+                )
+                showIngredientPicker = false
             },
-            onDismiss = { showStageDialog = false; editingStage = null }
+            onDismiss = { showIngredientPicker = false }
         )
     }
 
@@ -351,8 +343,8 @@ private fun RecipeFormContent(
         YieldDialog(
             existingYieldIds = yields.map { it.productId }.toSet(),
             products = productState.productList,
-            onConfirm = { newYield ->
-                yields = yields + newYield
+            onConfirm = { nuevos ->
+                yields = yields + nuevos
                 showYieldDialog = false
             },
             onDismiss = { showYieldDialog = false }
@@ -382,15 +374,20 @@ private fun RecipeFormContent(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
-        AdaptiveContainer(modifier = Modifier.padding(padding)) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(padding)
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+        Column(
+            modifier = Modifier
+                .widthIn(max = 560.dp)
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // ── Información Básica ─────────────────────────────────────────────
             SectionHeader("Información Básica")
 
             OutlinedTextField(
@@ -398,6 +395,7 @@ private fun RecipeFormContent(
                 onValueChange = { name = it; nameError = false },
                 label = { Text("Nombre *") },
                 placeholder = { Text("Ej: Masa de Pan Francés") },
+                colors = recipeFieldColors(),
                 modifier = Modifier.fillMaxWidth(),
                 isError = nameError,
                 supportingText = if (nameError) ({ Text("El nombre es requerido") }) else null,
@@ -413,31 +411,6 @@ private fun RecipeFormContent(
                 minLines = 2, maxLines = 3
             )
 
-            ExposedDropdownMenuBox(
-                expanded = categoryExpanded,
-                onExpandedChange = { categoryExpanded = it },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                OutlinedTextField(
-                    value = category,
-                    onValueChange = {},
-                    readOnly = true,
-                    label = { Text("Categoría") },
-                    trailingIcon = { Icon(Icons.Default.ArrowDropDown, null) },
-                    modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                )
-                ExposedDropdownMenu(expanded = categoryExpanded, onDismissRequest = { categoryExpanded = false }) {
-                    RECIPE_CATEGORIES.forEach { opt ->
-                        DropdownMenuItem(
-                            text = { Text(opt) },
-                            onClick = { category = opt; categoryExpanded = false },
-                            contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
-                        )
-                    }
-                }
-            }
-
-            // Modo de entrada
             Column {
                 Text("Modo de ingreso de ingredientes", style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -459,8 +432,8 @@ private fun RecipeFormContent(
                 Text(
                     text = if (inputMode == "PERCENTAGE") "Ingresa porcentajes del panadero (base = 100%)"
                            else "Ingresa pesos reales; se guardará en % automáticamente",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
                     modifier = Modifier.padding(top = 4.dp)
                 )
             }
@@ -476,129 +449,90 @@ private fun RecipeFormContent(
 
             SectionDivider()
 
-            if (isPanPrincipal) {
-                // ── Etapas ─────────────────────────────────────────────────────
-                SectionHeader("Etapas de Preparación")
-
-                if (stages.isEmpty()) {
-                    Text(
-                        text = "Sin etapas. Agrega al menos una etapa con sus ingredientes.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                } else {
-                    stages.forEachIndexed { index, stage ->
-                        StageFormCard(
-                            stage = stage,
-                            order = index + 1,
-                            onEdit = { editingStage = stage; showStageDialog = true },
-                            onDelete = { stages = stages.filter { it.id != stage.id } }
-                        )
-                        Spacer(Modifier.height(6.dp))
-                    }
-                }
-
-                if (stages.size < 2) {
-                    OutlinedButton(
-                        onClick = { editingStage = null; showStageDialog = true },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(if (stages.isEmpty()) "Agregar etapa" else "Agregar pre-fermento")
-                    }
-                }
-
-                SectionDivider()
-
-                // ── Productos que genera ───────────────────────────────────────
-                SectionHeader("Tipos de productos que genera")
-
-                if (yields.isEmpty()) {
-                    Text(
-                        text = "Referencia qué tipos de pan salen de esta masa. La cantidad exacta se maneja en producción.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                } else {
-                    yields.forEach { yld ->
-                        YieldFormCard(
-                            yield_ = yld,
-                            onDelete = { yields = yields.filter { it.id != yld.id } }
-                        )
-                        Spacer(Modifier.height(6.dp))
-                    }
-                }
-
-                OutlinedButton(
-                    onClick = { showYieldDialog = true },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Agregar producto")
-                }
-
-                SectionDivider()
-
-            } else {
-                // ── Ingredientes (Cubierta / Relleno) ─────────────────────────
-                SectionHeader("Ingredientes")
-
-                if (simpleComponents.isEmpty()) {
-                    Text(
-                        text = "Sin ingredientes. El primero que agregues será la base (100%).",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                } else {
-                    simpleComponents.forEach { comp ->
-                        ComponentRow(
-                            comp = comp,
-                            inputMode = inputMode,
-                            ingredients = ingredientState.ingredientList,
-                            onUpdate = { updated ->
-                                simpleComponents = if (updated.isBase) {
-                                    simpleComponents.map { c ->
-                                        if (c.id == updated.id) updated else c.copy(isBase = false)
-                                    }
-                                } else {
-                                    simpleComponents.map { c -> if (c.id == updated.id) updated else c }
-                                }
-                            },
-                            onDelete = { simpleComponents = simpleComponents.filter { it.id != comp.id } }
-                        )
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                    }
-                }
-
-                OutlinedButton(
-                    onClick = {
-                        simpleComponents = simpleComponents + ComponentEntry(
-                            id = generateEntryId(),
-                            isBase = simpleComponents.isEmpty(),
-                            order = simpleComponents.size
-                        )
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Agregar ingrediente")
-                }
-
-                SectionDivider()
-
-                // ── Instrucciones paso a paso ──────────────────────────────────
-                StepListEditor(
-                    steps = simpleSteps,
-                    onStepsChange = { simpleSteps = it }
+            // ── Ingredientes ──────────────────────────────────────────────────
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Ingredientes", style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary)
+                Text(
+                    text = if (inputMode == "PERCENTAGE") "(% panadero)" else "(peso → se convierte a %)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-
-                SectionDivider()
             }
 
-            // ── Notas ─────────────────────────────────────────────────────────
+            if (components.isEmpty()) {
+                Text(
+                    text = "Sin ingredientes. Marca como base la(s) harina(s): su suma = 100%.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                components.forEach { comp ->
+                    ComponentRow(
+                        comp = comp,
+                        inputMode = inputMode,
+                        ingredients = ingredientState.ingredientList,
+                        otherSelectedIds = components.filter { it.id != comp.id }.map { it.ingredientId }.toSet(),
+                        onUpdate = { updated ->
+                            components = components.map { c -> if (c.id == updated.id) updated else c }
+                        },
+                        onDelete = { components = components.filter { it.id != comp.id } }
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                }
+            }
+
+            OutlinedButton(
+                onClick = { showIngredientPicker = true },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Agregar ingrediente")
+            }
+
+            SectionDivider()
+
+            // ── Instrucciones paso a paso ────────────────────────────────────
+            StepListEditor(steps = steps, onStepsChange = { steps = it })
+
+            SectionDivider()
+
+            // ── Productos que genera ──────────────────────────────────────────
+            SectionHeader("Tipos de productos que genera")
+
+            if (yields.isEmpty()) {
+                Text(
+                    text = "Referencia qué tipos de pan salen de esta masa. La cantidad exacta se maneja en producción.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                yields.forEach { yld ->
+                    YieldFormCard(
+                        yield_ = yld,
+                        onDelete = { yields = yields.filter { it.id != yld.id } }
+                    )
+                    Spacer(Modifier.height(6.dp))
+                }
+            }
+
+            OutlinedButton(
+                onClick = { showYieldDialog = true },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Agregar producto")
+            }
+
+            SectionDivider()
+
             SectionHeader("Notas")
 
             OutlinedTextField(
@@ -615,23 +549,12 @@ private fun RecipeFormContent(
                 onClick = {
                     var hasError = false
                     if (name.isBlank()) { nameError = true; hasError = true }
-                    if (isPanPrincipal && inputMode == "WEIGHT") {
-                        for (stage in stages.filter { it.components.isNotEmpty() }) {
-                            val base = stage.components.firstOrNull { it.isBase }
-                            if (base == null || (base.rawInput.toDoubleOrNull() ?: 0.0) == 0.0) {
-                                formError = "La etapa \"${stage.name.ifEmpty { "sin nombre" }}\" necesita un ingrediente base con peso mayor a 0"
-                                hasError = true; break
-                            }
-                        }
-                    } else if (!isPanPrincipal && inputMode == "WEIGHT" && simpleComponents.isNotEmpty()) {
-                        val base = simpleComponents.firstOrNull { it.isBase }
-                        if (base == null || (base.rawInput.toDoubleOrNull() ?: 0.0) == 0.0) {
-                            formError = "Necesita un ingrediente base con peso mayor a 0"
-                            hasError = true
-                        }
-                    }
+                    val err = validateBase(components, inputMode)
+                    if (err != null) { formError = err; hasError = true }
                     if (hasError) return@Button
-                    viewModel.saveRecipe(companyId, buildRecipe())
+                    val stepPhotos: Map<String, ByteArray> =
+                        steps.mapNotNull { s -> s.newBytes?.let { s.id to it } }.toMap()
+                    viewModel.saveRecipe(companyId, buildRecipe(), stepPhotos)
                 },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !state.isLoading
@@ -651,63 +574,11 @@ private fun RecipeFormContent(
 
             Spacer(Modifier.height(16.dp))
         }
-        } // AdaptiveContainer
-    }
-}
-
-// ── Card de etapa en el formulario ────────────────────────────────────────────
-
-@Composable
-private fun StageFormCard(
-    stage: StageEntry,
-    order: Int,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit
-) {
-    val stageTypeDisplay = RecipeStageType.entries.firstOrNull { it.name == stage.type }?.displayName ?: stage.type
-
-    Card(
-        shape = RoundedCornerShape(10.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(32.dp)
-                    .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("$order", color = MaterialTheme.colorScheme.onPrimary,
-                    style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-            }
-            Spacer(Modifier.width(10.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stage.name.ifEmpty { stageTypeDisplay },
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    SmallBadge(stageTypeDisplay)
-                    SmallBadge("${stage.components.size} ingrediente${if (stage.components.size != 1) "s" else ""}")
-                }
-            }
-            IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Default.Edit, contentDescription = "Editar", modifier = Modifier.size(18.dp))
-            }
-            IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Default.Delete, contentDescription = "Eliminar",
-                    tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
-            }
         }
     }
 }
 
-// ── Card de producto que genera en el formulario ───────────────────────────────
+// ── Card de producto que genera ──────────────────────────────────────────────
 
 @Composable
 private fun YieldFormCard(yield_: YieldEntry, onDelete: () -> Unit) {
@@ -734,218 +605,7 @@ private fun YieldFormCard(yield_: YieldEntry, onDelete: () -> Unit) {
     }
 }
 
-// ── Diálogo de etapa ──────────────────────────────────────────────────────────
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun StageDialog(
-    stage: StageEntry?,
-    inputMode: String,
-    ingredients: List<Ingredient>,
-    existingTypes: List<String>,
-    onConfirm: (StageEntry) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val allStageTypes = listOf(RecipeStageType.PREFERMENTO, RecipeStageType.MASA_PRINCIPAL)
-    val availableTypes = allStageTypes.filter { it.name !in existingTypes }
-    val forcedType: RecipeStageType? = if (stage == null && availableTypes.size == 1) availableTypes.first() else null
-    var stageType by remember {
-        mutableStateOf(
-            when {
-                stage != null -> stage.type
-                forcedType != null -> forcedType.name
-                else -> "MASA_PRINCIPAL"
-            }
-        )
-    }
-    var stageTypeExpanded by remember { mutableStateOf(false) }
-    var restTime by remember { mutableStateOf(stage?.restTimeMinutes ?: "") }
-    var steps by remember {
-        mutableStateOf(
-            (stage?.instructions ?: "").split("\n").filter { it.isNotEmpty() }
-        )
-    }
-    var components by remember { mutableStateOf(stage?.components ?: emptyList<ComponentEntry>()) }
-
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surface,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(
-                modifier = Modifier
-                    .padding(20.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text(
-                    text = if (stage == null) "Agregar Etapa" else "Editar Etapa",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
-                )
-
-                // Tipo de preparación — chip si está forzado, dropdown si hay opciones
-                val typeLabel = forcedType?.displayName
-                    ?: allStageTypes.firstOrNull { it.name == stageType }?.displayName
-                    ?: stageType
-                if (stage != null || forcedType != null) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            "Tipo de preparación",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Surface(
-                            color = MaterialTheme.colorScheme.primaryContainer,
-                            shape = RoundedCornerShape(50)
-                        ) {
-                            Text(
-                                text = typeLabel,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
-                            )
-                        }
-                    }
-                } else {
-                    ExposedDropdownMenuBox(
-                        expanded = stageTypeExpanded,
-                        onExpandedChange = { stageTypeExpanded = it },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        OutlinedTextField(
-                            value = typeLabel,
-                            onValueChange = {},
-                            readOnly = true,
-                            label = { Text("Tipo de preparación") },
-                            trailingIcon = { Icon(Icons.Default.ArrowDropDown, null) },
-                            modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                        )
-                        ExposedDropdownMenu(expanded = stageTypeExpanded, onDismissRequest = { stageTypeExpanded = false }) {
-                            availableTypes.forEach { t ->
-                                DropdownMenuItem(
-                                    text = { Text(t.displayName) },
-                                    onClick = { stageType = t.name; stageTypeExpanded = false },
-                                    contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
-                                )
-                            }
-                        }
-                    }
-                }
-
-                if (stageType == "PREFERMENTO") {
-                    OutlinedTextField(
-                        value = restTime,
-                        onValueChange = { restTime = it },
-                        label = { Text("Tiempo de reposo (minutos)") },
-                        modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        suffix = { Text("min") }
-                    )
-                }
-
-                HorizontalDivider()
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Ingredientes", style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold)
-                    Text(
-                        text = if (inputMode == "PERCENTAGE") "(% panadero)" else "(peso → se convierte a %)",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                if (components.isEmpty()) {
-                    Text(
-                        text = "Sin ingredientes. El primero que agregues será la base (100%).",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                } else {
-                    components.forEach { comp ->
-                        ComponentRow(
-                            comp = comp,
-                            inputMode = inputMode,
-                            ingredients = ingredients,
-                            onUpdate = { updated ->
-                                components = if (updated.isBase) {
-                                    components.map { c ->
-                                        if (c.id == updated.id) updated else c.copy(isBase = false)
-                                    }
-                                } else {
-                                    components.map { c -> if (c.id == updated.id) updated else c }
-                                }
-                            },
-                            onDelete = { components = components.filter { it.id != comp.id } }
-                        )
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                    }
-                }
-
-                OutlinedButton(
-                    onClick = {
-                        val isFirstComponent = components.isEmpty()
-                        components = components + ComponentEntry(
-                            id = generateEntryId(),
-                            isBase = isFirstComponent,
-                            order = components.size
-                        )
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Default.Add, null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Agregar ingrediente")
-                }
-
-                HorizontalDivider()
-
-                StepListEditor(
-                    steps = steps,
-                    onStepsChange = { steps = it }
-                )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    TextButton(onClick = onDismiss) { Text("Cancelar") }
-                    Spacer(Modifier.width(8.dp))
-                    Button(
-                        onClick = {
-                            val derivedName = allStageTypes.firstOrNull { it.name == stageType }?.displayName ?: stageType
-                            onConfirm(
-                                StageEntry(
-                                    id = stage?.id ?: generateEntryId(),
-                                    name = derivedName,
-                                    type = stageType,
-                                    instructions = steps.filter { it.isNotEmpty() }.joinToString("\n"),
-                                    restTimeMinutes = restTime,
-                                    notes = "",
-                                    components = components
-                                )
-                            )
-                        }
-                    ) { Text("Confirmar") }
-                }
-            }
-        }
-    }
-}
-
-// ── Fila de ingrediente dentro del StageDialog ────────────────────────────────
+// ── Fila de ingrediente ──────────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -953,11 +613,30 @@ private fun ComponentRow(
     comp: ComponentEntry,
     inputMode: String,
     ingredients: List<Ingredient>,
+    otherSelectedIds: Set<String>,
     onUpdate: (ComponentEntry) -> Unit,
     onDelete: () -> Unit
 ) {
-    var ingredientExpanded by remember { mutableStateOf(false) }
+    var showIngredientPicker by remember { mutableStateOf(false) }
     val inputLabel = if (inputMode == "PERCENTAGE") "%" else "Peso"
+
+    if (showIngredientPicker) {
+        IngredientPickerDialog(
+            ingredients = ingredients,
+            alreadyAddedIds = otherSelectedIds,
+            onPick = { ing ->
+                onUpdate(
+                    comp.copy(
+                        ingredientId = ing.id,
+                        ingredientName = ing.name,
+                        ingredientUnit = ing.allowedUnits.firstOrNull() ?: ""
+                    )
+                )
+                showIngredientPicker = false
+            },
+            onDismiss = { showIngredientPicker = false }
+        )
+    }
 
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         Row(
@@ -965,62 +644,23 @@ private fun ComponentRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            ExposedDropdownMenuBox(
-                expanded = ingredientExpanded,
-                onExpandedChange = { ingredientExpanded = it },
+            IngredientPickerField(
+                value = comp.ingredientName,
+                onClick = { showIngredientPicker = true },
                 modifier = Modifier.weight(1f)
-            ) {
-                OutlinedTextField(
-                    value = comp.ingredientName.ifEmpty { "Ingrediente" },
-                    onValueChange = {},
-                    readOnly = true,
-                    label = { Text("Ingrediente") },
-                    trailingIcon = { Icon(Icons.Default.ArrowDropDown, null) },
-                    modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable),
-                    singleLine = true
-                )
-                ExposedDropdownMenu(expanded = ingredientExpanded, onDismissRequest = { ingredientExpanded = false }) {
-                    if (ingredients.isEmpty()) {
-                        DropdownMenuItem(
-                            text = { Text("Sin ingredientes registrados") },
-                            onClick = { ingredientExpanded = false },
-                            contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
-                        )
-                    } else {
-                        ingredients.forEach { ing ->
-                            DropdownMenuItem(
-                                text = {
-                                    Column {
-                                        Text(ing.name, fontWeight = FontWeight.Medium)
-                                        Text(ing.allowedUnits.joinToString(" / "), style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                },
-                                onClick = {
-                                    onUpdate(comp.copy(
-                                        ingredientId = ing.id,
-                                        ingredientName = ing.name,
-                                        ingredientUnit = ing.allowedUnits.firstOrNull() ?: ""
-                                    ))
-                                    ingredientExpanded = false
-                                },
-                                contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
-                            )
-                        }
-                    }
-                }
-            }
+            )
 
             OutlinedTextField(
                 value = comp.rawInput,
                 onValueChange = { onUpdate(comp.copy(rawInput = it)) },
                 label = { Text(inputLabel) },
-                modifier = Modifier.width(72.dp),
+                colors = recipeFieldColors(),
+                modifier = Modifier.width(96.dp),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 singleLine = true
             )
 
-            if (comp.ingredientUnit.isNotEmpty()) {
+            if (inputMode == "WEIGHT" && comp.ingredientUnit.isNotEmpty()) {
                 var unitExpanded by remember { mutableStateOf(false) }
                 val unitOptions = ingredients.find { it.id == comp.ingredientId }?.allowedUnits
                     ?.takeIf { it.isNotEmpty() }
@@ -1028,28 +668,29 @@ private fun ComponentRow(
                 ExposedDropdownMenuBox(
                     expanded = unitExpanded,
                     onExpandedChange = { unitExpanded = it },
-                    modifier = Modifier.width(60.dp)
+                    modifier = Modifier.width(84.dp)
                 ) {
                     Surface(
-                        color = MaterialTheme.colorScheme.secondaryContainer,
-                        shape = RoundedCornerShape(6.dp),
-                        modifier = Modifier.width(60.dp).menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.width(84.dp).height(56.dp).menuAnchor(MenuAnchorType.PrimaryNotEditable)
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                            modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
                         ) {
                             Text(
                                 comp.ingredientUnit,
-                                style = MaterialTheme.typography.labelSmall,
+                                style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
                             )
                             if (unitOptions.size > 1)
                                 Icon(
                                     Icons.Default.ArrowDropDown, null,
-                                    modifier = Modifier.size(14.dp),
-                                    tint = MaterialTheme.colorScheme.onSecondaryContainer
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer
                                 )
                         }
                     }
@@ -1093,7 +734,7 @@ private fun ComponentRow(
                 )
                 Spacer(Modifier.width(4.dp))
                 Text(
-                    text = if (comp.isBase) "Base (100%)" else "Marcar como base",
+                    text = if (comp.isBase) "Harina base" else "Marcar como base",
                     style = MaterialTheme.typography.labelSmall,
                     color = if (comp.isBase) MaterialTheme.colorScheme.onPrimaryContainer
                             else MaterialTheme.colorScheme.onSurfaceVariant
@@ -1107,35 +748,200 @@ private fun ComponentRow(
     }
 }
 
-// ── Diálogo de producto con búsqueda ─────────────────────────────────────────
+// ── Campo selector de ingrediente (con look activo, no deshabilitado) ─────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun IngredientPickerField(
+    value: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val isEmpty = value.isBlank()
+    Surface(
+        onClick = onClick,
+        modifier = modifier.height(56.dp),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(
+            width = 1.dp,
+            color = MaterialTheme.colorScheme.outline
+        )
+    ) {
+        Row(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Ingrediente",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = if (isEmpty) "Seleccionar…" else value,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (isEmpty) MaterialTheme.colorScheme.onSurfaceVariant
+                            else MaterialTheme.colorScheme.onSurface,
+                    fontWeight = if (isEmpty) FontWeight.Normal else FontWeight.Medium,
+                    maxLines = 1
+                )
+            }
+            Icon(
+                Icons.Default.Search,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
+// ── Colores de campos ────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun recipeFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedPlaceholderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+    unfocusedPlaceholderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+    disabledPlaceholderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+)
+
+// ── Diálogo de ingrediente ───────────────────────────────────────────────────
 
 @Composable
-private fun YieldDialog(
-    existingYieldIds: Set<String>,
-    products: List<Product>,
-    onConfirm: (YieldEntry) -> Unit,
+private fun IngredientPickerDialog(
+    ingredients: List<Ingredient>,
+    alreadyAddedIds: Set<String> = emptySet(),
+    onPick: (Ingredient) -> Unit,
     onDismiss: () -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
-    var selectedProductId by remember { mutableStateOf("") }
-    var selectedProductName by remember { mutableStateOf("") }
-
-    val filteredProducts = remember(searchQuery, products) {
-        products.filter { it.name.contains(searchQuery, ignoreCase = true) }
+    val sorted = remember(ingredients) { ingredients.sortedBy { it.name.lowercase() } }
+    val filtered = remember(searchQuery, sorted) {
+        if (searchQuery.isBlank()) sorted
+        else sorted.filter { it.name.contains(searchQuery, ignoreCase = true) }
     }
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(16.dp),
             color = MaterialTheme.colorScheme.surface,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth().widthIn(max = 480.dp)
         ) {
             Column(
                 modifier = Modifier.padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    text = "Agregar producto",
+                    text = "Seleccionar ingrediente",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+
+                if (ingredients.isEmpty()) {
+                    Text(
+                        text = "No hay insumos registrados. Agrégalos primero en el módulo de Insumos.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        label = { Text("Buscar ingrediente") },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                        colors = recipeFieldColors(),
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+
+                    LazyColumn(modifier = Modifier.height(300.dp)) {
+                        if (filtered.isEmpty()) {
+                            item {
+                                Text(
+                                    text = "Sin resultados para \"$searchQuery\"",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.outline,
+                                    modifier = Modifier.padding(vertical = 12.dp)
+                                )
+                            }
+                        } else {
+                            items(filtered, key = { it.id }) { ing ->
+                                val isAdded = alreadyAddedIds.contains(ing.id)
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable(enabled = !isAdded) { onPick(ing) }
+                                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                                ) {
+                                    Text(
+                                        text = ing.name,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        color = if (isAdded) MaterialTheme.colorScheme.outline
+                                                else MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = when {
+                                            isAdded && ing.allowedUnits.isNotEmpty() ->
+                                                "${ing.allowedUnits.joinToString(" / ")} • ya agregado"
+                                            isAdded -> "ya agregado"
+                                            ing.allowedUnits.isNotEmpty() -> ing.allowedUnits.joinToString(" / ")
+                                            else -> ""
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                            }
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onDismiss) { Text("Cerrar") }
+                }
+            }
+        }
+    }
+}
+
+// ── Diálogo de productos ─────────────────────────────────────────────────────
+
+@Composable
+private fun YieldDialog(
+    existingYieldIds: Set<String>,
+    products: List<Product>,
+    onConfirm: (List<YieldEntry>) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedIds by remember { mutableStateOf(emptySet<String>()) }
+
+    val sorted = remember(products) { products.sortedBy { it.name.lowercase() } }
+    val filteredProducts = remember(searchQuery, sorted) {
+        if (searchQuery.isBlank()) sorted
+        else sorted.filter { it.name.contains(searchQuery, ignoreCase = true) }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            modifier = Modifier.fillMaxWidth().widthIn(max = 480.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "Agregar productos",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold
                 )
@@ -1156,7 +962,7 @@ private fun YieldDialog(
                         singleLine = true
                     )
 
-                    LazyColumn(modifier = Modifier.height(260.dp)) {
+                    LazyColumn(modifier = Modifier.height(300.dp)) {
                         if (filteredProducts.isEmpty()) {
                             item {
                                 Text(
@@ -1169,29 +975,32 @@ private fun YieldDialog(
                         } else {
                             items(filteredProducts, key = { it.id }) { product ->
                                 val alreadyAdded = existingYieldIds.contains(product.id)
-                                val isSelected = selectedProductId == product.id
+                                val checked = alreadyAdded || selectedIds.contains(product.id)
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable(enabled = !alreadyAdded) {
-                                            selectedProductId = product.id
-                                            selectedProductName = product.name
+                                            selectedIds = if (selectedIds.contains(product.id))
+                                                selectedIds - product.id
+                                            else selectedIds + product.id
                                         }
-                                        .background(
-                                            when {
-                                                isSelected -> MaterialTheme.colorScheme.primaryContainer
-                                                alreadyAdded -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                                                else -> MaterialTheme.colorScheme.surface
-                                            }
-                                        )
-                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                        .padding(horizontal = 8.dp, vertical = 6.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
+                                    Checkbox(
+                                        checked = checked,
+                                        onCheckedChange = if (alreadyAdded) null else { _ ->
+                                            selectedIds = if (selectedIds.contains(product.id))
+                                                selectedIds - product.id
+                                            else selectedIds + product.id
+                                        },
+                                        enabled = !alreadyAdded
+                                    )
+                                    Spacer(Modifier.width(8.dp))
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
                                             text = product.name,
                                             style = MaterialTheme.typography.bodyMedium,
-                                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
                                             color = if (alreadyAdded) MaterialTheme.colorScheme.outline
                                                     else MaterialTheme.colorScheme.onSurface
                                         )
@@ -1203,10 +1012,6 @@ private fun YieldDialog(
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
-                                    }
-                                    if (isSelected) {
-                                        Text("✓", color = MaterialTheme.colorScheme.primary,
-                                            fontWeight = FontWeight.Bold)
                                     }
                                 }
                                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
@@ -1224,15 +1029,13 @@ private fun YieldDialog(
                     Spacer(Modifier.width(8.dp))
                     Button(
                         onClick = {
-                            if (selectedProductId.isEmpty()) return@Button
-                            onConfirm(YieldEntry(
-                                id = generateEntryId(),
-                                productId = selectedProductId,
-                                productName = selectedProductName
-                            ))
+                            val nuevos = sorted
+                                .filter { selectedIds.contains(it.id) }
+                                .map { YieldEntry(generateEntryId(), it.id, it.name) }
+                            onConfirm(nuevos)
                         },
-                        enabled = selectedProductId.isNotEmpty()
-                    ) { Text("Agregar") }
+                        enabled = selectedIds.isNotEmpty()
+                    ) { Text("Agregar (${selectedIds.size})") }
                 }
             }
         }
@@ -1243,8 +1046,8 @@ private fun YieldDialog(
 
 @Composable
 private fun StepListEditor(
-    steps: List<String>,
-    onStepsChange: (List<String>) -> Unit
+    steps: List<StepEntry>,
+    onStepsChange: (List<StepEntry>) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(
@@ -1256,57 +1059,79 @@ private fun StepListEditor(
 
         if (steps.isEmpty()) {
             Text(
-                text = "Sin pasos. Agrégalos uno a uno para guiar la preparación.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.outline
+                text = "Sin pasos. Agrégalos uno a uno; cada paso admite una foto opcional.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         } else {
             steps.forEachIndexed { idx, step ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.Top,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            MaterialTheme.colorScheme.surfaceVariant,
+                            RoundedCornerShape(10.dp)
+                        )
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(28.dp)
-                            .background(MaterialTheme.colorScheme.primary, CircleShape),
-                        contentAlignment = Alignment.Center
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text(
-                            text = "${idx + 1}",
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold
+                        Box(
+                            modifier = Modifier
+                                .size(28.dp)
+                                .background(MaterialTheme.colorScheme.primary, CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "${idx + 1}",
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        OutlinedTextField(
+                            value = step.text,
+                            onValueChange = { newVal ->
+                                onStepsChange(steps.toMutableList().apply { set(idx, step.copy(text = newVal)) })
+                            },
+                            placeholder = { Text("Descripción del paso…") },
+                            colors = recipeFieldColors(),
+                            modifier = Modifier.weight(1f),
+                            minLines = 1,
+                            maxLines = 3
                         )
+                        IconButton(
+                            onClick = { onStepsChange(steps.filterIndexed { i, _ -> i != idx }) },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = "Eliminar paso",
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
-                    OutlinedTextField(
-                        value = step,
-                        onValueChange = { newVal ->
-                            onStepsChange(steps.toMutableList().apply { set(idx, newVal) })
+                    ImagePickerButton(
+                        currentImageUrl = step.photoUrl,
+                        selectedBytes = step.newBytes,
+                        onImageSelected = { bytes ->
+                            onStepsChange(
+                                steps.toMutableList().apply { set(idx, step.copy(newBytes = bytes)) }
+                            )
                         },
-                        placeholder = { Text("Descripción del paso…") },
-                        modifier = Modifier.weight(1f),
-                        minLines = 1,
-                        maxLines = 3
+                        modifier = Modifier.fillMaxWidth()
                     )
-                    IconButton(
-                        onClick = { onStepsChange(steps.filterIndexed { i, _ -> i != idx }) },
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Delete,
-                            contentDescription = "Eliminar paso",
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
                 }
             }
         }
 
         OutlinedButton(
-            onClick = { onStepsChange(steps + "") },
+            onClick = { onStepsChange(steps + StepEntry(id = generateEntryId())) },
             modifier = Modifier.fillMaxWidth()
         ) {
             Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -1324,18 +1149,6 @@ private fun InputModeButton(label: String, selected: Boolean, onClick: () -> Uni
         Button(onClick = onClick, modifier = modifier) { Text(label, style = MaterialTheme.typography.labelMedium) }
     } else {
         OutlinedButton(onClick = onClick, modifier = modifier) { Text(label, style = MaterialTheme.typography.labelMedium) }
-    }
-}
-
-@Composable
-private fun SmallBadge(text: String) {
-    Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(50)) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSecondaryContainer,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-        )
     }
 }
 

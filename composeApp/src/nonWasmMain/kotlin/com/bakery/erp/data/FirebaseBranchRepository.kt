@@ -1,4 +1,4 @@
-package com.bakery.erp.data
+﻿package com.bakery.erp.data
 
 import com.bakery.erp.domain.BranchRepository
 import com.bakery.erp.model.Branch
@@ -7,6 +7,7 @@ import dev.gitlive.firebase.firestore.DocumentSnapshot
 import dev.gitlive.firebase.firestore.FirebaseFirestore
 import dev.gitlive.firebase.firestore.Timestamp
 import dev.gitlive.firebase.firestore.toMilliseconds
+import kotlin.time.Clock
 
 class FirebaseBranchRepository(
     private val firestore: FirebaseFirestore
@@ -37,7 +38,7 @@ class FirebaseBranchRepository(
 
     // ── Serialization ────────────────────────────────────────────────────────
 
-    private fun Branch.toMap(): Map<String, Any?> = mapOf(
+    private fun Branch.toMap(): Map<String, Any?> = firestoreSafeOf(
         "id" to id,
         "orgId" to orgId,
         "name" to name,
@@ -47,9 +48,10 @@ class FirebaseBranchRepository(
         "notes" to notes,
         "capabilities" to capabilities.map { it.name },
         "assignedProductIds" to assignedProductIds,
+        "defaultPriceListId" to defaultPriceListId,
         "active" to active,
-        "createdAt" to if (createdAt == 0L) System.currentTimeMillis() else createdAt,
-        "updatedAt" to System.currentTimeMillis()
+        "createdAt" to if (createdAt == 0L) Clock.System.now().toEpochMilliseconds() else createdAt,
+        "updatedAt" to Clock.System.now().toEpochMilliseconds()
     )
 
     private fun DocumentSnapshot.toBranch() = Branch(
@@ -68,6 +70,7 @@ class FirebaseBranchRepository(
         assignedProductIds = runCatching {
             get<List<String>?>("assignedProductIds") ?: emptyList()
         }.getOrElse { emptyList() },
+        defaultPriceListId = get<String?>("defaultPriceListId") ?: "",
         active = get<Boolean?>("active") ?: true,
         createdAt = readTimestampAsMillis("createdAt"),
         updatedAt = readTimestampAsMillis("updatedAt")

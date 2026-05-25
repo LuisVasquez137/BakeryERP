@@ -37,12 +37,19 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.bakery.erp.presentation.assets.AssetHistoryEntryFormScreen
+import com.bakery.erp.presentation.assets.FixedAssetDetailScreen
+import com.bakery.erp.presentation.assets.FixedAssetFormScreen
+import com.bakery.erp.presentation.assets.FixedAssetListScreen
 import com.bakery.erp.presentation.auth.AuthChoiceScreen
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.presentation.auth.JoinOrgScreen
 import com.bakery.erp.presentation.auth.LoginScreen
 import com.bakery.erp.presentation.auth.PendingApprovalScreen
 import com.bakery.erp.presentation.auth.RegisterScreen
+import com.bakery.erp.presentation.reports.financial.FinancialReportScreen
+import com.bakery.erp.presentation.reports.production.ProductionReportScreen
+import com.bakery.erp.presentation.reports.sales.SalesReportScreen
 import com.bakery.erp.presentation.users.UserListScreen
 import com.bakery.erp.presentation.users.UserPermissionsScreen
 import com.bakery.erp.presentation.users.UserViewModel
@@ -55,6 +62,43 @@ import com.bakery.erp.presentation.products.ProductDetailScreen
 import com.bakery.erp.presentation.products.ProductFormScreen
 import com.bakery.erp.presentation.products.ProductListScreen
 import com.bakery.erp.presentation.products.ProductViewModel
+import com.bakery.erp.presentation.preparationbatches.PreparationBatchFormScreen
+import com.bakery.erp.presentation.preparationbatches.PreparationBatchListScreen
+import com.bakery.erp.presentation.preparations.PreparationDetailScreen
+import com.bakery.erp.presentation.preparations.PreparationFormScreen
+import com.bakery.erp.presentation.preparations.PreparationListScreen
+import com.bakery.erp.presentation.pricing.PriceListAdminScreen
+import com.bakery.erp.presentation.pricing.PriceListViewModel
+import com.bakery.erp.presentation.dispatch.DispatchNoteDetailScreen
+import com.bakery.erp.presentation.dispatch.DispatchNoteListScreen
+import com.bakery.erp.presentation.dispatch.DispatchNotePackScreen
+import com.bakery.erp.presentation.dispatch.DispatchNoteReceiveScreen
+import com.bakery.erp.presentation.dispatch.DispatchViewModel
+import com.bakery.erp.presentation.delivery.DeliveryRunFormScreen
+import com.bakery.erp.presentation.delivery.DeliveryRunListScreen
+import com.bakery.erp.presentation.delivery.DeliveryRunScreen
+import com.bakery.erp.presentation.delivery.DeliveryViewModel
+import com.bakery.erp.presentation.finishedStock.BreadCountFormScreen
+import com.bakery.erp.presentation.finishedStock.BreadCountListScreen
+import com.bakery.erp.presentation.finishedStock.FinishedProductStockListScreen
+import com.bakery.erp.presentation.finishedStock.FinishedStockAdjustScreen
+import com.bakery.erp.presentation.finishedStock.FinishedStockMovementListScreen
+import com.bakery.erp.presentation.finishedStock.FinishedStockViewModel
+import com.bakery.erp.presentation.pos.CashSessionCloseScreen
+import com.bakery.erp.presentation.pos.CashSessionDetailScreen
+import com.bakery.erp.presentation.pos.CashSessionOpenScreen
+import com.bakery.erp.presentation.pos.DailyCashCloseListScreen
+import com.bakery.erp.presentation.pos.DailyCashCloseScreen
+import com.bakery.erp.presentation.pos.POSHomeScreen
+import com.bakery.erp.presentation.pos.POSScreen
+import com.bakery.erp.presentation.pos.SaleDetailScreen
+import com.bakery.erp.presentation.pos.SaleHistoryListScreen
+import com.bakery.erp.presentation.pos.SpotCashCheckListScreen
+import com.bakery.erp.presentation.pos.SpotCashCheckScreen
+import com.bakery.erp.presentation.pos.admin.CashRegisterAdminScreen
+import com.bakery.erp.presentation.pos.admin.CashRegisterFormScreen
+import com.bakery.erp.presentation.pos.admin.POSCategoryAdminScreen
+import com.bakery.erp.presentation.pos.admin.POSCategoryFormScreen
 import com.bakery.erp.presentation.recipes.RecipeDetailScreen
 import com.bakery.erp.presentation.recipes.RecipeFormScreen
 import com.bakery.erp.presentation.recipes.RecipeListScreen
@@ -81,6 +125,12 @@ import com.bakery.erp.presentation.employees.EmployeeDetailScreen
 import com.bakery.erp.presentation.employees.EmployeeFormScreen
 import com.bakery.erp.presentation.employees.EmployeeListScreen
 import com.bakery.erp.presentation.employees.EmployeeViewModel
+import com.bakery.erp.presentation.employees.JobPositionDetailScreen
+import com.bakery.erp.presentation.employees.JobPositionFormScreen
+import com.bakery.erp.presentation.employees.JobPositionListScreen
+import com.bakery.erp.presentation.employees.JobPositionViewModel
+import com.bakery.erp.presentation.employees.PayrollFormScreen
+import com.bakery.erp.presentation.employees.ShiftClockInScreen
 import com.bakery.erp.presentation.production.ProductionShiftFormScreen
 import com.bakery.erp.presentation.production.ProductionShiftListScreen
 import com.bakery.erp.presentation.production.ProductionViewModel
@@ -92,7 +142,13 @@ import com.bakery.erp.presentation.suppliers.SupplierDetailScreen
 import com.bakery.erp.presentation.suppliers.SupplierFormScreen
 import com.bakery.erp.presentation.suppliers.SupplierListScreen
 import com.bakery.erp.presentation.suppliers.SupplierViewModel
-import org.koin.compose.viewmodel.koinViewModel
+import androidx.compose.runtime.remember
+import androidx.navigation.NavBackStackEntry
+import com.bakery.erp.di.AppViewModels
+import com.bakery.erp.di.createAppViewModels
+
+private fun NavBackStackEntry.stringArg(key: String): String? =
+    savedStateHandle.get<String>(key)
 
 sealed class Screen(val route: String) {
     object Login : Screen("login")
@@ -173,15 +229,42 @@ sealed class Screen(val route: String) {
         fun route(employeeId: String? = null) =
             if (employeeId != null) "employees/form?employeeId=$employeeId" else "employees/form"
     }
+    object JobPositionList : Screen("employees/positions")
+    object JobPositionDetail : Screen("employees/positions/detail/{positionId}") {
+        fun route(positionId: String) = "employees/positions/detail/$positionId"
+    }
+    object JobPositionForm : Screen("employees/positions/form?positionId={positionId}") {
+        fun route(positionId: String? = null) =
+            if (positionId != null) "employees/positions/form?positionId=$positionId" else "employees/positions/form"
+    }
+    object PayrollForm : Screen("employees/payroll/form?employeeId={employeeId}&payrollId={payrollId}") {
+        fun route(employeeId: String, payrollId: String? = null) =
+            if (payrollId != null) "employees/payroll/form?employeeId=$employeeId&payrollId=$payrollId"
+            else "employees/payroll/form?employeeId=$employeeId"
+    }
+    object ShiftClockIn : Screen("shift_clock_in")
 
     // Producción
     object ProductionOrderList : Screen("production/orders")
-    object ProductionOrderForm : Screen("production/orders/form")
+    object ProductionOrderForm : Screen("production/orders/form?orderId={orderId}") {
+        fun route(orderId: String? = null) =
+            if (orderId != null) "production/orders/form?orderId=$orderId" else "production/orders/form"
+    }
     object ProductionOrderDetail : Screen("production/orders/detail/{orderId}") {
         fun route(orderId: String) = "production/orders/detail/$orderId"
     }
     object ProductionLotList : Screen("production/lots")
-    object ProductionLotForm : Screen("production/lots/form")
+    object ProductionLotForm : Screen("production/lots/form?branchId={branchId}&shiftId={shiftId}&date={date}") {
+        fun route(branchId: String? = null, shiftId: String? = null, date: Long? = null): String {
+            val params = buildList {
+                if (!branchId.isNullOrEmpty()) add("branchId=$branchId")
+                if (!shiftId.isNullOrEmpty()) add("shiftId=$shiftId")
+                if (date != null) add("date=$date")
+            }
+            return if (params.isEmpty()) "production/lots/form"
+                   else "production/lots/form?${params.joinToString("&")}"
+        }
+    }
     object ProductionLotDetail : Screen("production/lots/detail/{lotId}") {
         fun route(lotId: String) = "production/lots/detail/$lotId"
     }
@@ -199,24 +282,167 @@ sealed class Screen(val route: String) {
                    else "production/shifts/form?${params.joinToString("&")}"
         }
     }
+
+    // Activos Fijos
+    object AssetList : Screen("assets")
+    object AssetDetail : Screen("assets/detail/{assetId}") {
+        fun route(assetId: String) = "assets/detail/$assetId"
+    }
+    object AssetForm : Screen("assets/form?assetId={assetId}") {
+        fun route(assetId: String? = null) =
+            if (assetId != null) "assets/form?assetId=$assetId" else "assets/form"
+    }
+    object AssetHistoryEntryForm : Screen("assets/{assetId}/history/form?entryId={entryId}") {
+        fun route(assetId: String, entryId: String? = null) =
+            if (entryId != null) "assets/$assetId/history/form?entryId=$entryId"
+            else "assets/$assetId/history/form"
+    }
+
+    // Preparaciones
+    object PreparationList : Screen("preparations")
+    object PreparationDetail : Screen("preparations/detail/{preparationId}") {
+        fun route(preparationId: String) = "preparations/detail/$preparationId"
+    }
+    object PreparationForm : Screen("preparations/form?preparationId={preparationId}") {
+        fun route(preparationId: String? = null) =
+            if (preparationId != null) "preparations/form?preparationId=$preparationId" else "preparations/form"
+    }
+    object PreparationBatchList : Screen("preparations/batches")
+    object PreparationBatchForm : Screen("preparations/batches/form")
+
+    // Precios
+    object PriceListAdmin : Screen("prices/lists")
+
+    // Distribución
+    object DispatchList : Screen("dispatch")
+    object DispatchPack : Screen("dispatch/pack/{noteId}") {
+        fun route(noteId: String) = "dispatch/pack/$noteId"
+    }
+    object DispatchReceive : Screen("dispatch/receive/{noteId}") {
+        fun route(noteId: String) = "dispatch/receive/$noteId"
+    }
+    object DispatchDetail : Screen("dispatch/detail/{noteId}") {
+        fun route(noteId: String) = "dispatch/detail/$noteId"
+    }
+    object DeliveryList : Screen("delivery")
+    object DeliveryForm : Screen("delivery/form?runId={runId}") {
+        fun route(runId: String? = null) =
+            if (runId != null) "delivery/form?runId=$runId" else "delivery/form"
+    }
+    object DeliveryRunDetail : Screen("delivery/run/{runId}") {
+        fun route(runId: String) = "delivery/run/$runId"
+    }
+
+    // Punto de venta (POS)
+    object POSHome : Screen("pos")
+    object POSScreen : Screen("pos/session/{sessionId}") {
+        fun route(sessionId: String) = "pos/session/$sessionId"
+    }
+    object CashSessionOpen : Screen("pos/open/{registerId}") {
+        fun route(registerId: String) = "pos/open/$registerId"
+    }
+    object CashSessionClose : Screen("pos/close/{sessionId}") {
+        fun route(sessionId: String) = "pos/close/$sessionId"
+    }
+    object CashSessionDetail : Screen("pos/session/{sessionId}/detail") {
+        fun route(sessionId: String) = "pos/session/$sessionId/detail"
+    }
+    object SaleHistoryList : Screen("sales")
+    object SaleDetail : Screen("sales/{saleId}") {
+        fun route(saleId: String) = "sales/$saleId"
+    }
+    object POSCategoryAdminList : Screen("admin/posCategories")
+    object POSCategoryForm : Screen("admin/posCategories/form?id={id}") {
+        fun route(id: String? = null) =
+            if (id != null) "admin/posCategories/form?id=$id" else "admin/posCategories/form"
+    }
+    object CashRegisterAdminList : Screen("admin/cashRegisters")
+    object CashRegisterForm : Screen("admin/cashRegisters/form?id={id}") {
+        fun route(id: String? = null) =
+            if (id != null) "admin/cashRegisters/form?id=$id" else "admin/cashRegisters/form"
+    }
+
+    // Inventario de tienda
+    object FinishedStockList : Screen("finishedStock")
+    object FinishedStockMovements : Screen("finishedStock/movements/{branchId}/{productId}") {
+        fun route(branchId: String, productId: String) = "finishedStock/movements/$branchId/$productId"
+    }
+    object FinishedStockAdjust : Screen("finishedStock/adjust/{branchId}?productId={productId}") {
+        fun route(branchId: String, productId: String? = null) =
+            if (productId != null) "finishedStock/adjust/$branchId?productId=$productId"
+            else "finishedStock/adjust/$branchId"
+    }
+
+    // Conteo de pan (cierre del día)
+    object BreadCountList : Screen("breadCount")
+    object BreadCountForm : Screen("breadCount/form/{countId}") {
+        fun route(countId: String) = "breadCount/form/$countId"
+    }
+
+    // Cierre del día por sucursal
+    object DailyCashCloseList : Screen("dailyCashClose")
+    object DailyCashClose : Screen("dailyCashClose/form?branchId={branchId}&date={date}") {
+        fun route(branchId: String? = null, date: String? = null): String {
+            val params = buildList {
+                if (!branchId.isNullOrEmpty()) add("branchId=$branchId")
+                if (!date.isNullOrEmpty()) add("date=$date")
+            }
+            return if (params.isEmpty()) "dailyCashClose/form"
+                   else "dailyCashClose/form?${params.joinToString("&")}"
+        }
+    }
+
+    // Cuadre sorpresa
+    object SpotCashCheckList : Screen("spotCheck")
+    object SpotCashCheck : Screen("spotCheck/session/{sessionId}") {
+        fun route(sessionId: String) = "spotCheck/session/$sessionId"
+    }
+
+    // Reportes
+    object SalesReport      : Screen("reports/sales")
+    object ProductionReport : Screen("reports/production")
+    object FinancialReport  : Screen("reports/financial")
 }
 
 @Composable
 fun AppNavigation(
     navController: NavHostController = rememberNavController(),
-    viewModel: AuthViewModel = koinViewModel(),
-    productViewModel: ProductViewModel = koinViewModel(),
-    ingredientViewModel: IngredientViewModel = koinViewModel(),
-    supplierViewModel: SupplierViewModel = koinViewModel(),
-    recipeViewModel: RecipeViewModel = koinViewModel(),
-    branchViewModel: BranchViewModel = koinViewModel(),
-    expenseViewModel: ExpenseViewModel = koinViewModel(),
-    fixedBudgetViewModel: FixedBudgetViewModel = koinViewModel(),
-    userViewModel: UserViewModel = koinViewModel(),
-    purchaseViewModel: PurchaseViewModel = koinViewModel(),
-    productionViewModel: ProductionViewModel = koinViewModel(),
-    employeeViewModel: EmployeeViewModel = koinViewModel()
+    vms: AppViewModels = remember { createAppViewModels() }
 ) {
+    val viewModel = vms.auth
+    val productViewModel = vms.product
+    val ingredientViewModel = vms.ingredient
+    val supplierViewModel = vms.supplier
+    val recipeViewModel = vms.recipe
+    val branchViewModel = vms.branch
+    val expenseViewModel = vms.expense
+    val fixedBudgetViewModel = vms.fixedBudget
+    val userViewModel = vms.user
+    val purchaseViewModel = vms.purchase
+    val productionViewModel = vms.production
+    val employeeViewModel = vms.employee
+    val jobPositionViewModel = vms.jobPosition
+    val preparationViewModel = vms.preparation
+    val preparationBatchViewModel = vms.preparationBatch
+    val fixedAssetViewModel = vms.fixedAsset
+    val priceListViewModel = vms.priceList
+    val dispatchViewModel = vms.dispatch
+    val deliveryViewModel = vms.delivery
+    val finishedStockViewModel = vms.finishedStock
+    val posViewModel = vms.pos
+    val cashSessionViewModel = vms.cashSession
+    val saleHistoryViewModel = vms.saleHistory
+    val cashRegisterAdminViewModel = vms.cashRegisterAdmin
+    val posCategoryAdminViewModel = vms.posCategoryAdmin
+    val breadCountViewModel = vms.breadCount
+    val dailyCashCloseViewModel = vms.dailyCashClose
+    val spotCashCheckViewModel = vms.spotCashCheck
+    val homeViewModel = vms.home
+    val salesReportViewModel = vms.salesReport
+    val productionReportViewModel = vms.productionReport
+    val financialReportViewModel = vms.financialReport
+    val bluetoothPrinterManager = vms.bluetoothPrinterManager
+
     val state by viewModel.uiState.collectAsState()
     val purchaseState by purchaseViewModel.uiState.collectAsState()
 
@@ -294,7 +520,27 @@ fun AppNavigation(
                 onNavigateToProductionLots = { navController.navigate(Screen.ProductionLotList.route) },
                 onNavigateToProductionShifts = { navController.navigate(Screen.ProductionShiftList.route) },
                 onNavigateToEmployees = { navController.navigate(Screen.EmployeeList.route) },
-                viewModel = viewModel
+                onNavigateToShiftClockIn = { navController.navigate(Screen.ShiftClockIn.route) },
+                onNavigateToJobPositions = { navController.navigate(Screen.JobPositionList.route) },
+                onNavigateToPreparations = { navController.navigate(Screen.PreparationList.route) },
+                onNavigateToPreparationBatches = { navController.navigate(Screen.PreparationBatchList.route) },
+                onNavigateToAssets = { navController.navigate(Screen.AssetList.route) },
+                onNavigateToPriceLists = { navController.navigate(Screen.PriceListAdmin.route) },
+                onNavigateToDispatch = { navController.navigate(Screen.DispatchList.route) },
+                onNavigateToDelivery = { navController.navigate(Screen.DeliveryList.route) },
+                onNavigateToFinishedStock = { navController.navigate(Screen.FinishedStockList.route) },
+                onNavigateToPOS = { navController.navigate(Screen.POSHome.route) },
+                onNavigateToSalesHistory = { navController.navigate(Screen.SaleHistoryList.route) },
+                onNavigateToCashRegisterAdmin = { navController.navigate(Screen.CashRegisterAdminList.route) },
+                onNavigateToQuickGroupAdmin = { navController.navigate(Screen.POSCategoryAdminList.route) },
+                onNavigateToBreadCount = { navController.navigate(Screen.BreadCountList.route) },
+                onNavigateToDailyCashClose = { navController.navigate(Screen.DailyCashCloseList.route) },
+                onNavigateToSpotCashCheck = { navController.navigate(Screen.SpotCashCheckList.route) },
+                onNavigateToSalesReport = { navController.navigate(Screen.SalesReport.route) },
+                onNavigateToProductionReport = { navController.navigate(Screen.ProductionReport.route) },
+                onNavigateToFinancialReport = { navController.navigate(Screen.FinancialReport.route) },
+                viewModel = viewModel,
+                homeViewModel = homeViewModel
             )
         }
 
@@ -314,7 +560,7 @@ fun AppNavigation(
             route = Screen.ProductDetail.route,
             arguments = listOf(navArgument("productId") { type = NavType.StringType })
         ) { backStackEntry ->
-            val productId = backStackEntry.arguments?.getString("productId") ?: return@composable
+            val productId = backStackEntry.stringArg("productId") ?: return@composable
             ProductDetailScreen(
                 productId = productId,
                 onNavigateBack = { navController.popBackStack() },
@@ -327,13 +573,15 @@ fun AppNavigation(
             route = Screen.ProductForm.route,
             arguments = listOf(navArgument("productId") { type = NavType.StringType; nullable = true; defaultValue = null })
         ) { backStackEntry ->
-            val productId = backStackEntry.arguments?.getString("productId")
+            val productId = backStackEntry.stringArg("productId")
             RequirePermission(state.user, Permission.EDIT_PRODUCTS, onBack = { navController.popBackStack() }) {
                 ProductFormScreen(
                     productId = productId,
                     onNavigateBack = { navController.popBackStack() },
                     authViewModel = viewModel,
-                    viewModel = productViewModel
+                    viewModel = productViewModel,
+                    preparationViewModel = preparationViewModel,
+                    priceListViewModel = priceListViewModel
                 )
             }
         }
@@ -354,7 +602,7 @@ fun AppNavigation(
             route = Screen.IngredientDetail.route,
             arguments = listOf(navArgument("ingredientId") { type = NavType.StringType })
         ) { backStackEntry ->
-            val ingredientId = backStackEntry.arguments?.getString("ingredientId") ?: return@composable
+            val ingredientId = backStackEntry.stringArg("ingredientId") ?: return@composable
             IngredientDetailScreen(
                 ingredientId = ingredientId,
                 onNavigateBack = { navController.popBackStack() },
@@ -367,7 +615,7 @@ fun AppNavigation(
             route = Screen.IngredientForm.route,
             arguments = listOf(navArgument("ingredientId") { type = NavType.StringType; nullable = true; defaultValue = null })
         ) { backStackEntry ->
-            val ingredientId = backStackEntry.arguments?.getString("ingredientId")
+            val ingredientId = backStackEntry.stringArg("ingredientId")
             RequirePermission(state.user, Permission.EDIT_INGREDIENTS, onBack = { navController.popBackStack() }) {
                 IngredientFormScreen(
                     ingredientId = ingredientId,
@@ -396,20 +644,21 @@ fun AppNavigation(
             route = Screen.RecipeDetail.route,
             arguments = listOf(navArgument("recipeId") { type = NavType.StringType })
         ) { backStackEntry ->
-            val recipeId = backStackEntry.arguments?.getString("recipeId") ?: return@composable
+            val recipeId = backStackEntry.stringArg("recipeId") ?: return@composable
             RecipeDetailScreen(
                 recipeId = recipeId,
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToEdit = { id -> navController.navigate(Screen.RecipeForm.route(id)) },
                 authViewModel = viewModel,
-                viewModel = recipeViewModel
+                viewModel = recipeViewModel,
+                productViewModel = productViewModel
             )
         }
         composable(
             route = Screen.RecipeForm.route,
             arguments = listOf(navArgument("recipeId") { type = NavType.StringType; nullable = true; defaultValue = null })
         ) { backStackEntry ->
-            val recipeId = backStackEntry.arguments?.getString("recipeId")
+            val recipeId = backStackEntry.stringArg("recipeId")
             RequirePermission(state.user, Permission.EDIT_RECIPES, onBack = { navController.popBackStack() }) {
                 RecipeFormScreen(
                     recipeId = recipeId,
@@ -418,6 +667,459 @@ fun AppNavigation(
                     viewModel = recipeViewModel,
                     ingredientViewModel = ingredientViewModel,
                     productViewModel = productViewModel
+                )
+            }
+        }
+
+        // ── Preparaciones ────────────────────────────────────────────────────
+        composable(Screen.PreparationList.route) {
+            RequirePermission(state.user, Permission.VIEW_PREPARATIONS, onBack = { navController.popBackStack() }) {
+                PreparationListScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToDetail = { id -> navController.navigate(Screen.PreparationDetail.route(id)) },
+                    onNavigateToForm = { navController.navigate(Screen.PreparationForm.route()) },
+                    authViewModel = viewModel,
+                    viewModel = preparationViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.PreparationDetail.route,
+            arguments = listOf(navArgument("preparationId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val preparationId = backStackEntry.stringArg("preparationId") ?: return@composable
+            PreparationDetailScreen(
+                preparationId = preparationId,
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToEdit = { id -> navController.navigate(Screen.PreparationForm.route(id)) },
+                authViewModel = viewModel,
+                viewModel = preparationViewModel
+            )
+        }
+        composable(
+            route = Screen.PreparationForm.route,
+            arguments = listOf(navArgument("preparationId") { type = NavType.StringType; nullable = true; defaultValue = null })
+        ) { backStackEntry ->
+            val preparationId = backStackEntry.stringArg("preparationId")
+            RequirePermission(state.user, Permission.EDIT_PREPARATIONS, onBack = { navController.popBackStack() }) {
+                PreparationFormScreen(
+                    preparationId = preparationId,
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = preparationViewModel,
+                    ingredientViewModel = ingredientViewModel
+                )
+            }
+        }
+        composable(Screen.PreparationBatchList.route) {
+            RequirePermission(state.user, Permission.MANAGE_PREPARATION_BATCHES, onBack = { navController.popBackStack() }) {
+                PreparationBatchListScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToForm = { navController.navigate(Screen.PreparationBatchForm.route) },
+                    authViewModel = viewModel,
+                    viewModel = preparationBatchViewModel
+                )
+            }
+        }
+        composable(Screen.PreparationBatchForm.route) {
+            RequirePermission(state.user, Permission.MANAGE_PREPARATION_BATCHES, onBack = { navController.popBackStack() }) {
+                PreparationBatchFormScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = preparationBatchViewModel
+                )
+            }
+        }
+
+        // ── Listas de Precios ────────────────────────────────────────────────
+        composable(Screen.PriceListAdmin.route) {
+            RequirePermission(state.user, Permission.MANAGE_PRICE_LISTS, onBack = { navController.popBackStack() }) {
+                PriceListAdminScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = priceListViewModel
+                )
+            }
+        }
+
+        // ── Despacho ─────────────────────────────────────────────────────────
+        composable(Screen.DispatchList.route) {
+            RequirePermission(state.user, Permission.VIEW_PRODUCTION, onBack = { navController.popBackStack() }) {
+                DispatchNoteListScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToPack = { noteId -> navController.navigate(Screen.DispatchPack.route(noteId)) },
+                    onNavigateToReceive = { noteId -> navController.navigate(Screen.DispatchReceive.route(noteId)) },
+                    onNavigateToDetail = { noteId -> navController.navigate(Screen.DispatchDetail.route(noteId)) },
+                    authViewModel = viewModel,
+                    viewModel = dispatchViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.DispatchPack.route,
+            arguments = listOf(navArgument("noteId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val noteId = backStackEntry.stringArg("noteId") ?: return@composable
+            RequirePermission(state.user, Permission.DISPATCH_PACK, onBack = { navController.popBackStack() }) {
+                DispatchNotePackScreen(
+                    noteId = noteId,
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = dispatchViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.DispatchReceive.route,
+            arguments = listOf(navArgument("noteId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val noteId = backStackEntry.stringArg("noteId") ?: return@composable
+            RequirePermission(state.user, Permission.RECEIVE_DISPATCH, onBack = { navController.popBackStack() }) {
+                DispatchNoteReceiveScreen(
+                    noteId = noteId,
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = dispatchViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.DispatchDetail.route,
+            arguments = listOf(navArgument("noteId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val noteId = backStackEntry.stringArg("noteId") ?: return@composable
+            DispatchNoteDetailScreen(
+                noteId = noteId,
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToPack = { id -> navController.navigate(Screen.DispatchPack.route(id)) },
+                onNavigateToReceive = { id -> navController.navigate(Screen.DispatchReceive.route(id)) },
+                authViewModel = viewModel,
+                viewModel = dispatchViewModel
+            )
+        }
+
+        // ── Hojas de Reparto ─────────────────────────────────────────────────
+        composable(Screen.DeliveryList.route) {
+            RequirePermission(
+                state.user, Permission.MANAGE_DELIVERY_RUNS, Permission.DRIVE_DELIVERY,
+                onBack = { navController.popBackStack() }
+            ) {
+                DeliveryRunListScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToForm = { runId -> navController.navigate(Screen.DeliveryForm.route(runId)) },
+                    onNavigateToRun = { runId -> navController.navigate(Screen.DeliveryRunDetail.route(runId)) },
+                    authViewModel = viewModel,
+                    viewModel = deliveryViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.DeliveryForm.route,
+            arguments = listOf(navArgument("runId") { type = NavType.StringType; nullable = true; defaultValue = null })
+        ) { backStackEntry ->
+            val runId = backStackEntry.stringArg("runId")
+            RequirePermission(state.user, Permission.MANAGE_DELIVERY_RUNS, onBack = { navController.popBackStack() }) {
+                DeliveryRunFormScreen(
+                    runId = runId,
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = deliveryViewModel,
+                    branchViewModel = branchViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.DeliveryRunDetail.route,
+            arguments = listOf(navArgument("runId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val runId = backStackEntry.stringArg("runId") ?: return@composable
+            DeliveryRunScreen(
+                runId = runId,
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToEdit = { id -> navController.navigate(Screen.DeliveryForm.route(id)) },
+                onNavigateToNote = { id -> navController.navigate(Screen.DispatchDetail.route(id)) },
+                authViewModel = viewModel,
+                viewModel = deliveryViewModel
+            )
+        }
+
+        // ── Inventario de tienda ─────────────────────────────────────────────
+        composable(Screen.FinishedStockList.route) {
+            RequirePermission(state.user, Permission.VIEW_PRODUCTS, onBack = { navController.popBackStack() }) {
+                FinishedProductStockListScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToMovements = { bId, pId ->
+                        navController.navigate(Screen.FinishedStockMovements.route(bId, pId))
+                    },
+                    onNavigateToAdjust = { bId, pId ->
+                        navController.navigate(Screen.FinishedStockAdjust.route(bId, pId))
+                    },
+                    authViewModel = viewModel,
+                    viewModel = finishedStockViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.FinishedStockMovements.route,
+            arguments = listOf(
+                navArgument("branchId") { type = NavType.StringType },
+                navArgument("productId") { type = NavType.StringType }
+            )
+        ) { backStackEntry ->
+            val bId = backStackEntry.stringArg("branchId") ?: return@composable
+            val pId = backStackEntry.stringArg("productId") ?: return@composable
+            FinishedStockMovementListScreen(
+                branchId = bId,
+                productId = pId,
+                onNavigateBack = { navController.popBackStack() },
+                authViewModel = viewModel,
+                viewModel = finishedStockViewModel
+            )
+        }
+        composable(
+            route = Screen.FinishedStockAdjust.route,
+            arguments = listOf(
+                navArgument("branchId") { type = NavType.StringType },
+                navArgument("productId") { type = NavType.StringType; nullable = true; defaultValue = null }
+            )
+        ) { backStackEntry ->
+            val bId = backStackEntry.stringArg("branchId") ?: return@composable
+            val pId = backStackEntry.stringArg("productId")
+            RequirePermission(state.user, Permission.MANAGE_FINISHED_STOCK, onBack = { navController.popBackStack() }) {
+                FinishedStockAdjustScreen(
+                    branchId = bId,
+                    productId = pId,
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = finishedStockViewModel
+                )
+            }
+        }
+
+        // ── Punto de Venta (POS) ─────────────────────────────────────────────
+        composable(Screen.POSHome.route) {
+            RequirePermission(state.user, Permission.OPERATE_POS, onBack = { navController.popBackStack() }) {
+                POSHomeScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onOpenSession = { regId -> navController.navigate(Screen.CashSessionOpen.route(regId)) },
+                    onContinueSession = { sessionId ->
+                        navController.navigate(Screen.POSScreen.route(sessionId)) {
+                            popUpTo(Screen.POSHome.route) { inclusive = false }
+                        }
+                    },
+                    authViewModel = viewModel,
+                    viewModel = cashSessionViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.CashSessionOpen.route,
+            arguments = listOf(navArgument("registerId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val registerId = backStackEntry.stringArg("registerId") ?: return@composable
+            RequirePermission(state.user, Permission.OPERATE_POS, onBack = { navController.popBackStack() }) {
+                CashSessionOpenScreen(
+                    registerId = registerId,
+                    onNavigateBack = { navController.popBackStack() },
+                    onSessionOpened = { sessionId ->
+                        navController.navigate(Screen.POSScreen.route(sessionId)) {
+                            popUpTo(Screen.POSHome.route) { inclusive = false }
+                        }
+                    },
+                    authViewModel = viewModel,
+                    viewModel = cashSessionViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.POSScreen.route,
+            arguments = listOf(navArgument("sessionId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val sessionId = backStackEntry.stringArg("sessionId") ?: return@composable
+            RequirePermission(state.user, Permission.OPERATE_POS, onBack = { navController.popBackStack() }) {
+                POSScreen(
+                    sessionId = sessionId,
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToClose = { sid -> navController.navigate(Screen.CashSessionClose.route(sid)) },
+                    authViewModel = viewModel,
+                    viewModel = posViewModel,
+                    cashSessionViewModel = cashSessionViewModel,
+                    bluetoothPrinterManager = bluetoothPrinterManager
+                )
+            }
+        }
+        composable(
+            route = Screen.CashSessionClose.route,
+            arguments = listOf(navArgument("sessionId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val sessionId = backStackEntry.stringArg("sessionId") ?: return@composable
+            RequirePermission(state.user, Permission.OPERATE_POS, onBack = { navController.popBackStack() }) {
+                CashSessionCloseScreen(
+                    sessionId = sessionId,
+                    onNavigateBack = { navController.popBackStack() },
+                    onClosed = { sid ->
+                        navController.navigate(Screen.CashSessionDetail.route(sid)) {
+                            popUpTo(Screen.POSHome.route) { inclusive = false }
+                        }
+                    },
+                    authViewModel = viewModel,
+                    viewModel = cashSessionViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.CashSessionDetail.route,
+            arguments = listOf(navArgument("sessionId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val sessionId = backStackEntry.stringArg("sessionId") ?: return@composable
+            CashSessionDetailScreen(
+                sessionId = sessionId,
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToClose = { sid -> navController.navigate(Screen.CashSessionClose.route(sid)) },
+                authViewModel = viewModel,
+                viewModel = cashSessionViewModel
+            )
+        }
+
+        // ── Historial de ventas ──────────────────────────────────────────────
+        composable(Screen.SaleHistoryList.route) {
+            RequirePermission(state.user, Permission.VIEW_SALES, onBack = { navController.popBackStack() }) {
+                SaleHistoryListScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToDetail = { id -> navController.navigate(Screen.SaleDetail.route(id)) },
+                    authViewModel = viewModel,
+                    viewModel = saleHistoryViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.SaleDetail.route,
+            arguments = listOf(navArgument("saleId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val saleId = backStackEntry.stringArg("saleId") ?: return@composable
+            RequirePermission(state.user, Permission.VIEW_SALES, onBack = { navController.popBackStack() }) {
+                SaleDetailScreen(
+                    saleId = saleId,
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = saleHistoryViewModel
+                )
+            }
+        }
+
+        // ── Admin POS: cajas registradoras ───────────────────────────────────
+        composable(Screen.CashRegisterAdminList.route) {
+            RequirePermission(state.user, Permission.MANAGE_POS_CONFIG, onBack = { navController.popBackStack() }) {
+                CashRegisterAdminScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToForm = { id -> navController.navigate(Screen.CashRegisterForm.route(id)) },
+                    authViewModel = viewModel,
+                    viewModel = cashRegisterAdminViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.CashRegisterForm.route,
+            arguments = listOf(navArgument("id") { type = NavType.StringType; nullable = true; defaultValue = null })
+        ) { backStackEntry ->
+            val id = backStackEntry.stringArg("id")
+            RequirePermission(state.user, Permission.MANAGE_POS_CONFIG, onBack = { navController.popBackStack() }) {
+                CashRegisterFormScreen(
+                    registerId = id,
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = cashRegisterAdminViewModel
+                )
+            }
+        }
+
+        // ── Admin POS: categorías ────────────────────────────────────────────
+        composable(Screen.POSCategoryAdminList.route) {
+            RequirePermission(state.user, Permission.MANAGE_POS_CONFIG, onBack = { navController.popBackStack() }) {
+                POSCategoryAdminScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToForm = { id -> navController.navigate(Screen.POSCategoryForm.route(id)) },
+                    authViewModel = viewModel,
+                    viewModel = posCategoryAdminViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.POSCategoryForm.route,
+            arguments = listOf(navArgument("id") { type = NavType.StringType; nullable = true; defaultValue = null })
+        ) { backStackEntry ->
+            val id = backStackEntry.stringArg("id")
+            RequirePermission(state.user, Permission.MANAGE_POS_CONFIG, onBack = { navController.popBackStack() }) {
+                POSCategoryFormScreen(
+                    categoryId = id,
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = posCategoryAdminViewModel
+                )
+            }
+        }
+
+        // ── Activos Fijos ────────────────────────────────────────────────────
+        composable(Screen.AssetList.route) {
+            RequirePermission(state.user, Permission.VIEW_ASSETS, Permission.EDIT_ASSETS, Permission.MANAGE_ASSETS, onBack = { navController.popBackStack() }) {
+                FixedAssetListScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToDetail = { id -> navController.navigate(Screen.AssetDetail.route(id)) },
+                    onNavigateToForm = { navController.navigate(Screen.AssetForm.route()) },
+                    authViewModel = viewModel,
+                    branchViewModel = branchViewModel,
+                    viewModel = fixedAssetViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.AssetDetail.route,
+            arguments = listOf(navArgument("assetId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val assetId = backStackEntry.stringArg("assetId") ?: return@composable
+            RequirePermission(state.user, Permission.VIEW_ASSETS, Permission.EDIT_ASSETS, Permission.MANAGE_ASSETS, onBack = { navController.popBackStack() }) {
+                FixedAssetDetailScreen(
+                    assetId = assetId,
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToEdit = { id -> navController.navigate(Screen.AssetForm.route(id)) },
+                    onNavigateToHistoryForm = { aid, eid -> navController.navigate(Screen.AssetHistoryEntryForm.route(aid, eid)) },
+                    authViewModel = viewModel,
+                    viewModel = fixedAssetViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.AssetForm.route,
+            arguments = listOf(navArgument("assetId") { type = NavType.StringType; nullable = true; defaultValue = null })
+        ) { backStackEntry ->
+            val assetId = backStackEntry.stringArg("assetId")
+            RequirePermission(state.user, Permission.EDIT_ASSETS, onBack = { navController.popBackStack() }) {
+                FixedAssetFormScreen(
+                    assetId = assetId,
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    branchViewModel = branchViewModel,
+                    viewModel = fixedAssetViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.AssetHistoryEntryForm.route,
+            arguments = listOf(
+                navArgument("assetId") { type = NavType.StringType },
+                navArgument("entryId") { type = NavType.StringType; nullable = true; defaultValue = null }
+            )
+        ) { backStackEntry ->
+            val assetId = backStackEntry.stringArg("assetId") ?: return@composable
+            val entryId = backStackEntry.stringArg("entryId")
+            RequirePermission(state.user, Permission.ADD_ASSET_HISTORY, Permission.EDIT_ASSETS, onBack = { navController.popBackStack() }) {
+                AssetHistoryEntryFormScreen(
+                    assetId = assetId,
+                    entryId = entryId,
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    branchViewModel = branchViewModel,
+                    viewModel = fixedAssetViewModel
                 )
             }
         }
@@ -438,7 +1140,7 @@ fun AppNavigation(
             route = Screen.SupplierDetail.route,
             arguments = listOf(navArgument("supplierId") { type = NavType.StringType })
         ) { backStackEntry ->
-            val supplierId = backStackEntry.arguments?.getString("supplierId") ?: return@composable
+            val supplierId = backStackEntry.stringArg("supplierId") ?: return@composable
             SupplierDetailScreen(
                 supplierId = supplierId,
                 onNavigateBack = { navController.popBackStack() },
@@ -451,7 +1153,7 @@ fun AppNavigation(
             route = Screen.SupplierForm.route,
             arguments = listOf(navArgument("supplierId") { type = NavType.StringType; nullable = true; defaultValue = null })
         ) { backStackEntry ->
-            val supplierId = backStackEntry.arguments?.getString("supplierId")
+            val supplierId = backStackEntry.stringArg("supplierId")
             RequirePermission(state.user, Permission.EDIT_SUPPLIERS, onBack = { navController.popBackStack() }) {
                 SupplierFormScreen(
                     supplierId = supplierId,
@@ -478,7 +1180,7 @@ fun AppNavigation(
             route = Screen.BranchDetail.route,
             arguments = listOf(navArgument("branchId") { type = NavType.StringType })
         ) { backStackEntry ->
-            val branchId = backStackEntry.arguments?.getString("branchId") ?: return@composable
+            val branchId = backStackEntry.stringArg("branchId") ?: return@composable
             BranchDetailScreen(
                 branchId = branchId,
                 onNavigateBack = { navController.popBackStack() },
@@ -492,14 +1194,15 @@ fun AppNavigation(
             route = Screen.BranchForm.route,
             arguments = listOf(navArgument("branchId") { type = NavType.StringType; nullable = true; defaultValue = null })
         ) { backStackEntry ->
-            val branchId = backStackEntry.arguments?.getString("branchId")
+            val branchId = backStackEntry.stringArg("branchId")
             RequirePermission(state.user, Permission.MANAGE_BRANCHES, onBack = { navController.popBackStack() }) {
                 BranchFormScreen(
                     branchId = branchId,
                     onNavigateBack = { navController.popBackStack() },
                     authViewModel = viewModel,
                     viewModel = branchViewModel,
-                    productViewModel = productViewModel
+                    productViewModel = productViewModel,
+                    priceListViewModel = priceListViewModel
                 )
             }
         }
@@ -523,7 +1226,7 @@ fun AppNavigation(
             route = Screen.ExpenseDetail.route,
             arguments = listOf(navArgument("expenseId") { type = NavType.StringType })
         ) { backStackEntry ->
-            val expenseId = backStackEntry.arguments?.getString("expenseId") ?: return@composable
+            val expenseId = backStackEntry.stringArg("expenseId") ?: return@composable
             ExpenseDetailScreen(
                 expenseId = expenseId,
                 onNavigateBack = { navController.popBackStack() },
@@ -536,7 +1239,7 @@ fun AppNavigation(
             route = Screen.ExpenseForm.route,
             arguments = listOf(navArgument("expenseId") { type = NavType.StringType; nullable = true; defaultValue = null })
         ) { backStackEntry ->
-            val expenseId = backStackEntry.arguments?.getString("expenseId")
+            val expenseId = backStackEntry.stringArg("expenseId")
             RequirePermission(state.user, Permission.ADD_VARIABLE_EXPENSE, onBack = { navController.popBackStack() }) {
                 ExpenseFormScreen(
                     expenseId = expenseId,
@@ -564,7 +1267,7 @@ fun AppNavigation(
             route = Screen.FixedBudgetForm.route,
             arguments = listOf(navArgument("itemId") { type = NavType.StringType; nullable = true; defaultValue = null })
         ) { backStackEntry ->
-            val itemId = backStackEntry.arguments?.getString("itemId")
+            val itemId = backStackEntry.stringArg("itemId")
             RequirePermission(state.user, Permission.MANAGE_FIXED_BUDGET, onBack = { navController.popBackStack() }) {
                 FixedBudgetFormScreen(
                     itemId = itemId,
@@ -602,7 +1305,7 @@ fun AppNavigation(
             route = Screen.PurchaseDetail.route,
             arguments = listOf(navArgument("purchaseId") { type = NavType.StringType })
         ) { backStackEntry ->
-            val purchaseId = backStackEntry.arguments?.getString("purchaseId") ?: return@composable
+            val purchaseId = backStackEntry.stringArg("purchaseId") ?: return@composable
             RequirePermission(state.user, Permission.RECEIVE_STOCK, onBack = { navController.popBackStack() }) {
                 PurchaseDetailScreen(
                     purchaseId = purchaseId,
@@ -619,17 +1322,33 @@ fun AppNavigation(
                 ProductionOrderListScreen(
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToDetail = { id -> navController.navigate(Screen.ProductionOrderDetail.route(id)) },
-                    onNavigateToForm = { navController.navigate(Screen.ProductionOrderForm.route) },
-                    onNavigateToLotForm = { navController.navigate(Screen.ProductionLotForm.route) },
+                    onNavigateToForm = { navController.navigate(Screen.ProductionOrderForm.route()) },
+                    onNavigateToEditOrder = { id -> navController.navigate(Screen.ProductionOrderForm.route(id)) },
+                    onNavigateToLotForm = { branchId, shiftId, date ->
+                        navController.navigate(Screen.ProductionLotForm.route(branchId, shiftId, date))
+                    },
+                    onNavigateToLotDetail = { id -> navController.navigate(Screen.ProductionLotDetail.route(id)) },
                     authViewModel = viewModel,
                     viewModel = productionViewModel
                 )
             }
         }
-        composable(Screen.ProductionOrderForm.route) {
+        composable(
+            route = Screen.ProductionOrderForm.route,
+            arguments = listOf(navArgument("orderId") { type = NavType.StringType; nullable = true; defaultValue = null })
+        ) { backStackEntry ->
+            val orderId = backStackEntry.stringArg("orderId")
             RequirePermission(state.user, Permission.SEND_PRODUCTION_ORDER, onBack = { navController.popBackStack() }) {
                 ProductionOrderFormScreen(
+                    orderId = orderId,
                     onNavigateBack = { navController.popBackStack() },
+                    onNavigateToEditOrder = { id ->
+                        // Reemplaza la instancia actual de form para que el botón "Volver"
+                        // regrese a la lista, no al form de creación.
+                        navController.navigate(Screen.ProductionOrderForm.route(id)) {
+                            popUpTo(Screen.ProductionOrderForm.route) { inclusive = true }
+                        }
+                    },
                     authViewModel = viewModel,
                     viewModel = productionViewModel,
                     productViewModel = productViewModel
@@ -640,11 +1359,14 @@ fun AppNavigation(
             route = Screen.ProductionOrderDetail.route,
             arguments = listOf(navArgument("orderId") { type = NavType.StringType })
         ) { backStackEntry ->
-            val orderId = backStackEntry.arguments?.getString("orderId") ?: return@composable
+            val orderId = backStackEntry.stringArg("orderId") ?: return@composable
             RequirePermission(state.user, Permission.VIEW_PRODUCTION, Permission.SEND_PRODUCTION_ORDER, Permission.MANAGE_PRODUCTION_LOTS, onBack = { navController.popBackStack() }) {
                 ProductionOrderDetailScreen(
                     orderId = orderId,
                     onNavigateBack = { navController.popBackStack() },
+                    onNavigateToEdit = { id ->
+                        navController.navigate(Screen.ProductionOrderForm.route(id))
+                    },
                     authViewModel = viewModel,
                     viewModel = productionViewModel
                 )
@@ -657,15 +1379,28 @@ fun AppNavigation(
                 ProductionLotListScreen(
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToDetail = { id -> navController.navigate(Screen.ProductionLotDetail.route(id)) },
-                    onNavigateToForm = { navController.navigate(Screen.ProductionLotForm.route) },
+                    onNavigateToForm = { navController.navigate(Screen.ProductionLotForm.route()) },
                     authViewModel = viewModel,
                     viewModel = productionViewModel
                 )
             }
         }
-        composable(Screen.ProductionLotForm.route) {
+        composable(
+            route = Screen.ProductionLotForm.route,
+            arguments = listOf(
+                navArgument("branchId") { type = NavType.StringType; nullable = true; defaultValue = null },
+                navArgument("shiftId") { type = NavType.StringType; nullable = true; defaultValue = null },
+                navArgument("date") { type = NavType.StringType; nullable = true; defaultValue = null }
+            )
+        ) { backStackEntry ->
+            val branchId = backStackEntry.stringArg("branchId")
+            val shiftId = backStackEntry.stringArg("shiftId")
+            val date = backStackEntry.stringArg("date")?.toLongOrNull()
             RequirePermission(state.user, Permission.MANAGE_PRODUCTION_LOTS, onBack = { navController.popBackStack() }) {
                 ProductionLotFormScreen(
+                    presetBranchId = branchId,
+                    presetShiftId = shiftId,
+                    presetDate = date,
                     onNavigateBack = { navController.popBackStack() },
                     authViewModel = viewModel,
                     viewModel = productionViewModel,
@@ -677,14 +1412,15 @@ fun AppNavigation(
             route = Screen.ProductionLotDetail.route,
             arguments = listOf(navArgument("lotId") { type = NavType.StringType })
         ) { backStackEntry ->
-            val lotId = backStackEntry.arguments?.getString("lotId") ?: return@composable
+            val lotId = backStackEntry.stringArg("lotId") ?: return@composable
             RequirePermission(state.user, Permission.MANAGE_PRODUCTION_LOTS, Permission.VIEW_PRODUCTION, onBack = { navController.popBackStack() }) {
                 ProductionLotDetailScreen(
                     lotId = lotId,
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToComplete = { id -> navController.navigate(Screen.ProductionLotComplete.route(id)) },
                     authViewModel = viewModel,
-                    viewModel = productionViewModel
+                    viewModel = productionViewModel,
+                    productViewModel = productViewModel
                 )
             }
         }
@@ -692,13 +1428,14 @@ fun AppNavigation(
             route = Screen.ProductionLotComplete.route,
             arguments = listOf(navArgument("lotId") { type = NavType.StringType })
         ) { backStackEntry ->
-            val lotId = backStackEntry.arguments?.getString("lotId") ?: return@composable
+            val lotId = backStackEntry.stringArg("lotId") ?: return@composable
             RequirePermission(state.user, Permission.MANAGE_PRODUCTION_LOTS, onBack = { navController.popBackStack() }) {
                 ProductionLotCompleteScreen(
                     lotId = lotId,
                     onNavigateBack = { navController.popBackStack() },
                     authViewModel = viewModel,
-                    viewModel = productionViewModel
+                    viewModel = productionViewModel,
+                    productViewModel = productViewModel
                 )
             }
         }
@@ -710,6 +1447,7 @@ fun AppNavigation(
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToDetail = { id -> navController.navigate(Screen.EmployeeDetail.route(id)) },
                     onNavigateToForm = { id -> navController.navigate(Screen.EmployeeForm.route(id)) },
+                    onNavigateToJobPositions = { navController.navigate(Screen.JobPositionList.route) },
                     authViewModel = viewModel,
                     viewModel = employeeViewModel
                 )
@@ -719,12 +1457,15 @@ fun AppNavigation(
             route = Screen.EmployeeDetail.route,
             arguments = listOf(navArgument("employeeId") { type = NavType.StringType })
         ) { backStackEntry ->
-            val employeeId = backStackEntry.arguments?.getString("employeeId") ?: return@composable
+            val employeeId = backStackEntry.stringArg("employeeId") ?: return@composable
             RequirePermission(state.user, Permission.MANAGE_EMPLOYEES, onBack = { navController.popBackStack() }) {
                 EmployeeDetailScreen(
                     employeeId = employeeId,
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToForm = { id -> navController.navigate(Screen.EmployeeForm.route(id)) },
+                    onNavigateToPayrollForm = { empId, payrollId ->
+                        navController.navigate(Screen.PayrollForm.route(empId, payrollId))
+                    },
                     authViewModel = viewModel,
                     viewModel = employeeViewModel
                 )
@@ -736,10 +1477,81 @@ fun AppNavigation(
                 navArgument("employeeId") { type = NavType.StringType; nullable = true; defaultValue = null }
             )
         ) { backStackEntry ->
-            val employeeId = backStackEntry.arguments?.getString("employeeId")
+            val employeeId = backStackEntry.stringArg("employeeId")
             RequirePermission(state.user, Permission.MANAGE_EMPLOYEES, onBack = { navController.popBackStack() }) {
                 EmployeeFormScreen(
                     employeeId = employeeId,
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = employeeViewModel
+                )
+            }
+        }
+        composable(Screen.JobPositionList.route) {
+            RequirePermission(state.user, Permission.MANAGE_EMPLOYEES, onBack = { navController.popBackStack() }) {
+                JobPositionListScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToDetail = { id -> navController.navigate(Screen.JobPositionDetail.route(id)) },
+                    onNavigateToForm = { id -> navController.navigate(Screen.JobPositionForm.route(id)) },
+                    authViewModel = viewModel,
+                    viewModel = jobPositionViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.JobPositionDetail.route,
+            arguments = listOf(navArgument("positionId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val positionId = backStackEntry.stringArg("positionId") ?: return@composable
+            RequirePermission(state.user, Permission.MANAGE_EMPLOYEES, onBack = { navController.popBackStack() }) {
+                JobPositionDetailScreen(
+                    positionId = positionId,
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToForm = { id -> navController.navigate(Screen.JobPositionForm.route(id)) },
+                    authViewModel = viewModel,
+                    jobPositionViewModel = jobPositionViewModel,
+                    employeeViewModel = employeeViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.JobPositionForm.route,
+            arguments = listOf(navArgument("positionId") { type = NavType.StringType; nullable = true; defaultValue = null })
+        ) { backStackEntry ->
+            val positionId = backStackEntry.stringArg("positionId")
+            RequirePermission(state.user, Permission.MANAGE_EMPLOYEES, onBack = { navController.popBackStack() }) {
+                JobPositionFormScreen(
+                    positionId = positionId,
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = jobPositionViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.PayrollForm.route,
+            arguments = listOf(
+                navArgument("employeeId") { type = NavType.StringType; nullable = true; defaultValue = null },
+                navArgument("payrollId") { type = NavType.StringType; nullable = true; defaultValue = null }
+            )
+        ) { backStackEntry ->
+            val employeeId = backStackEntry.stringArg("employeeId") ?: return@composable
+            val payrollId = backStackEntry.stringArg("payrollId")
+            RequirePermission(state.user, Permission.MANAGE_EMPLOYEES, onBack = { navController.popBackStack() }) {
+                PayrollFormScreen(
+                    employeeId = employeeId,
+                    payrollId = payrollId,
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = employeeViewModel
+                )
+            }
+        }
+
+        // ── Ingreso a Turno ───────────────────────────────────────────────────
+        composable(Screen.ShiftClockIn.route) {
+            RequirePermission(state.user, Permission.MANAGE_EMPLOYEES, onBack = { navController.popBackStack() }) {
+                ShiftClockInScreen(
                     onNavigateBack = { navController.popBackStack() },
                     authViewModel = viewModel,
                     viewModel = employeeViewModel
@@ -767,8 +1579,8 @@ fun AppNavigation(
                 navArgument("shiftId") { type = NavType.StringType; nullable = true; defaultValue = null }
             )
         ) { backStackEntry ->
-            val branchId = backStackEntry.arguments?.getString("branchId")
-            val shiftId = backStackEntry.arguments?.getString("shiftId")
+            val branchId = backStackEntry.stringArg("branchId")
+            val shiftId = backStackEntry.stringArg("shiftId")
             RequirePermission(state.user, Permission.MANAGE_PRODUCTION_SHIFTS, onBack = { navController.popBackStack() }) {
                 ProductionShiftFormScreen(
                     branchId = branchId,
@@ -795,7 +1607,7 @@ fun AppNavigation(
             route = Screen.UserPermissions.route,
             arguments = listOf(navArgument("userId") { type = NavType.StringType })
         ) { backStackEntry ->
-            val userId = backStackEntry.arguments?.getString("userId") ?: return@composable
+            val userId = backStackEntry.stringArg("userId") ?: return@composable
             UserPermissionsScreen(
                 userId = userId,
                 onNavigateBack = { navController.popBackStack() },
@@ -803,6 +1615,155 @@ fun AppNavigation(
                 viewModel = userViewModel,
                 branchViewModel = branchViewModel
             )
+        }
+
+        // ── Conteo de pan (cierre del día) ────────────────────────────────────
+        composable(Screen.BreadCountList.route) {
+            RequirePermission(state.user, Permission.VIEW_BREAD_COUNTS, Permission.COUNT_FINISHED_STOCK,
+                onBack = { navController.popBackStack() }) {
+                BreadCountListScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToCount = { id ->
+                        navController.navigate(Screen.BreadCountForm.route(id))
+                    },
+                    onOpenNewForBranch = {
+                        val s = breadCountViewModel.uiState.value
+                        val branch = s.branches.firstOrNull { it.id == s.selectedBranchId }
+                        val user = state.user
+                        if (branch != null && user != null) {
+                            breadCountViewModel.openOrResumeToday(user.orgId, branch, user)
+                        }
+                    },
+                    authViewModel = viewModel,
+                    viewModel = breadCountViewModel
+                )
+            }
+            // Navega cuando ya hay un id creado/reanudado.
+            val s by breadCountViewModel.uiState.collectAsState()
+            LaunchedEffect(s.createdOrResumedId) {
+                s.createdOrResumedId?.let { id ->
+                    breadCountViewModel.clearCreatedId()
+                    navController.navigate(Screen.BreadCountForm.route(id))
+                }
+            }
+        }
+        composable(
+            route = Screen.BreadCountForm.route,
+            arguments = listOf(navArgument("countId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val countId = backStackEntry.stringArg("countId") ?: return@composable
+            RequirePermission(state.user, Permission.COUNT_FINISHED_STOCK,
+                onBack = { navController.popBackStack() }) {
+                BreadCountFormScreen(
+                    countId = countId,
+                    onNavigateBack = { navController.popBackStack() },
+                    onClosed = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = breadCountViewModel
+                )
+            }
+        }
+
+        // ── Cierre del día por sucursal ───────────────────────────────────────
+        composable(Screen.DailyCashCloseList.route) {
+            RequirePermission(state.user, Permission.MANAGE_DAILY_CASH_CLOSE,
+                onBack = { navController.popBackStack() }) {
+                DailyCashCloseListScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onOpenClose = { bId, date ->
+                        navController.navigate(Screen.DailyCashClose.route(bId, date))
+                    },
+                    onOpenToday = { bId ->
+                        navController.navigate(Screen.DailyCashClose.route(bId))
+                    },
+                    authViewModel = viewModel,
+                    viewModel = dailyCashCloseViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.DailyCashClose.route,
+            arguments = listOf(
+                navArgument("branchId") { type = NavType.StringType; nullable = true; defaultValue = null },
+                navArgument("date") { type = NavType.StringType; nullable = true; defaultValue = null }
+            )
+        ) { backStackEntry ->
+            val bId = backStackEntry.stringArg("branchId")
+            val date = backStackEntry.stringArg("date")
+            RequirePermission(state.user, Permission.MANAGE_DAILY_CASH_CLOSE,
+                onBack = { navController.popBackStack() }) {
+                DailyCashCloseScreen(
+                    branchIdArg = bId,
+                    closeDateArg = date,
+                    onNavigateBack = { navController.popBackStack() },
+                    onClosed = { /* permanece en pantalla mostrando reporte */ },
+                    authViewModel = viewModel,
+                    viewModel = dailyCashCloseViewModel
+                )
+            }
+        }
+
+        // ── Cuadre sorpresa (owner) ──────────────────────────────────────────
+        composable(Screen.SpotCashCheckList.route) {
+            RequirePermission(state.user, Permission.SPOT_CHECK_CASH,
+                onBack = { navController.popBackStack() }) {
+                SpotCashCheckListScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onStartCheckForSession = { sid ->
+                        navController.navigate(Screen.SpotCashCheck.route(sid))
+                    },
+                    authViewModel = viewModel,
+                    viewModel = spotCashCheckViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.SpotCashCheck.route,
+            arguments = listOf(navArgument("sessionId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val sessionId = backStackEntry.stringArg("sessionId") ?: return@composable
+            RequirePermission(state.user, Permission.SPOT_CHECK_CASH,
+                onBack = { navController.popBackStack() }) {
+                SpotCashCheckScreen(
+                    sessionId = sessionId,
+                    onNavigateBack = { navController.popBackStack() },
+                    onSaved = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = spotCashCheckViewModel
+                )
+            }
+        }
+
+        // ── Reportes ─────────────────────────────────────────────────────────
+        composable(Screen.SalesReport.route) {
+            RequirePermission(state.user, Permission.VIEW_SALES_REPORT,
+                onBack = { navController.popBackStack() }) {
+                SalesReportScreen(
+                    user = state.user,
+                    onNavigateBack = { navController.popBackStack() },
+                    viewModel = salesReportViewModel
+                )
+            }
+        }
+        composable(Screen.ProductionReport.route) {
+            RequirePermission(state.user, Permission.VIEW_PRODUCTION_REPORT,
+                onBack = { navController.popBackStack() }) {
+                ProductionReportScreen(
+                    user = state.user,
+                    onNavigateBack = { navController.popBackStack() },
+                    viewModel = productionReportViewModel
+                )
+            }
+        }
+        composable(Screen.FinancialReport.route) {
+            RequirePermission(state.user, Permission.VIEW_FINANCIAL_REPORT,
+                onBack = { navController.popBackStack() }) {
+                FinancialReportScreen(
+                    user = state.user,
+                    onNavigateBack = { navController.popBackStack() },
+                    viewModel = financialReportViewModel
+                )
+            }
         }
     }
 }

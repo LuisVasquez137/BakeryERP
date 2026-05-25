@@ -18,14 +18,15 @@ import coil.compose.AsyncImage
 actual fun ProductImage(
     imageUrl: String?,
     contentDescription: String?,
-    modifier: Modifier
+    modifier: Modifier,
+    contentScale: ContentScale
 ) {
     if (!imageUrl.isNullOrEmpty()) {
         AsyncImage(
             model = imageUrl,
             contentDescription = contentDescription,
             modifier = modifier,
-            contentScale = ContentScale.Crop
+            contentScale = contentScale
         )
     } else {
         Box(

@@ -16,5 +16,6 @@ data class RecipeStage(
     val instructions: String? = null,
     val restTimeMinutes: Int? = null,
     val notes: String? = null,
-    val components: List<RecipeComponent> = emptyList()
+    val components: List<RecipeComponent> = emptyList(),
+    val steps: List<RecipeStep> = emptyList()
 )

@@ -1,5 +1,8 @@
 package com.bakery.erp.presentation.production
 
+import com.bakery.erp.util.fmt
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -13,9 +16,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -27,12 +32,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.BranchCapability
 import com.bakery.erp.model.Permission
+import com.bakery.erp.model.ProductionLotStatus
 import com.bakery.erp.model.ProductionOrder
 import com.bakery.erp.model.ProductionOrderLine
 import com.bakery.erp.model.ProductionOrderStatus
 import com.bakery.erp.model.canAccessBranch
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.presentation.auth.AuthViewModel
+import kotlin.time.Clock
 import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
@@ -50,7 +57,9 @@ fun ProductionOrderListScreen(
     onNavigateBack: () -> Unit,
     onNavigateToDetail: (orderId: String) -> Unit,
     onNavigateToForm: () -> Unit,
-    onNavigateToLotForm: () -> Unit,
+    onNavigateToEditOrder: (orderId: String) -> Unit = {},
+    onNavigateToLotForm: (branchId: String?, shiftId: String?, date: Long?) -> Unit,
+    onNavigateToLotDetail: (lotId: String) -> Unit = {},
     authViewModel: AuthViewModel,
     viewModel: ProductionViewModel
 ) {
@@ -64,9 +73,22 @@ fun ProductionOrderListScreen(
 
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
 
+    // Mes seleccionado para los tabs "Mis pedidos" y "Recibidos". Default = mes actual.
+    val now = remember { Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()) }
+    var selectedYear by rememberSaveable { mutableIntStateOf(now.year) }
+    var selectedMonth by rememberSaveable { mutableIntStateOf(now.monthNumber) }
+    var showMonthPicker by remember { mutableStateOf(false) }
+
+    LaunchedEffect(companyId, selectedYear, selectedMonth) {
+        if (companyId.isNotEmpty() && user != null) {
+            viewModel.observeOrdersForMonth(companyId, user, selectedYear, selectedMonth)
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { viewModel.stopObservingOrders() }
+    }
     LaunchedEffect(companyId) {
         if (companyId.isNotEmpty() && user != null) {
-            viewModel.loadOrders(companyId, user)
             viewModel.loadOrderFormData(companyId, user)
         }
     }
@@ -74,15 +96,43 @@ fun ProductionOrderListScreen(
         state.error?.let { snackbarHostState.showSnackbar(it); viewModel.clearError() }
     }
 
+    if (showMonthPicker) {
+        MonthPickerDialog(
+            currentYear = selectedYear,
+            currentMonth = selectedMonth,
+            onDismiss = { showMonthPicker = false },
+            onSelect = { y, m ->
+                selectedYear = y
+                selectedMonth = m
+                showMonthPicker = false
+            }
+        )
+    }
+
     val myOrders = remember(state.orders, user) {
         state.orders.filter { it.sellingBranchId.let { id -> user?.canAccessBranch(id) ?: false } }
     }
-    val receivedOrders = remember(state.orders, user) {
+    val receivedOrdersAll = remember(state.orders, user) {
         state.orders.filter { it.producingBranchId.let { id -> user?.canAccessBranch(id) ?: false } }
     }
 
     val canSeeProducingTabs = remember(state.producingBranches, user) {
         state.producingBranches.any { user?.canAccessBranch(it.id) == true }
+    }
+
+    // Conjunto de turnos disponibles en los pedidos recibidos (para los chips de filtro).
+    val receivedShiftOptions = remember(receivedOrdersAll) {
+        receivedOrdersAll
+            .filter { it.shiftId.isNotBlank() }
+            .map { it.shiftId to it.shiftName }
+            .distinct()
+            .sortedBy { it.second }
+    }
+    // "" = todos los turnos. Si solo hay un turno, no se muestra el filtro pero el valor es ese.
+    var receivedShiftFilter by rememberSaveable { mutableStateOf("") }
+    val receivedOrders = remember(receivedOrdersAll, receivedShiftFilter) {
+        if (receivedShiftFilter.isEmpty()) receivedOrdersAll
+        else receivedOrdersAll.filter { it.shiftId == receivedShiftFilter }
     }
 
     Scaffold(
@@ -112,50 +162,111 @@ fun ProductionOrderListScreen(
         },
         containerColor = Color(0xFFFDFBF7)
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
+        BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(padding)) {
+            val isWide = maxWidth >= 1000.dp
+            // En pantallas anchas el detalle aparece en panel derecho; en pequeñas se navega
+            // a la screen completa.
+            var sidePanelOrderId by rememberSaveable { mutableStateOf<String?>(null) }
 
-            if (canSeeProducingTabs) {
-                TabRow(selectedTabIndex = selectedTab, containerColor = Color.White) {
-                    Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }) {
-                        Text("Mis pedidos", modifier = Modifier.padding(vertical = 12.dp))
-                    }
-                    Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }) {
-                        Text("Recibidos", modifier = Modifier.padding(vertical = 12.dp))
-                    }
-                    Tab(selected = selectedTab == 2, onClick = { selectedTab = 2 }) {
-                        Text("Consolidado", modifier = Modifier.padding(vertical = 12.dp))
-                    }
-                }
-            } else {
-                if (selectedTab != 0) selectedTab = 0
+            val onOrderClick: (String) -> Unit = { id ->
+                if (isWide) sidePanelOrderId = id else onNavigateToDetail(id)
             }
 
-            when (selectedTab) {
-                0 -> OrdersTab(
-                    orders = myOrders,
-                    isLoading = state.isLoading,
-                    emptyMessage = "Aún no has enviado pedidos",
-                    infoText = "Pedidos que has enviado a las plantas productoras. Aquí puedes hacer seguimiento del estado de cada solicitud.",
-                    showSellingBranch = false,
-                    onOrderClick = onNavigateToDetail
-                )
-                1 -> OrdersTab(
-                    orders = receivedOrders,
-                    isLoading = state.isLoading,
-                    emptyMessage = "No hay pedidos recibidos",
-                    infoText = "Pedidos que han llegado a tu planta productora desde otras sucursales. Usa la pestaña Consolidado para ver la demanda agrupada por fecha.",
-                    showSellingBranch = true,
-                    onOrderClick = onNavigateToDetail
-                )
-                2 -> ConsolidatedTab(
-                    state = state,
-                    user = user,
-                    canManageLots = canManageLots,
-                    onLoadConsolidated = { branchId, date ->
-                        viewModel.loadConsolidatedView(companyId, branchId, date)
-                    },
-                    onNavigateToLotForm = onNavigateToLotForm
-                )
+            Row(modifier = Modifier.fillMaxSize()) {
+                Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                    if (canSeeProducingTabs) {
+                        TabRow(selectedTabIndex = selectedTab, containerColor = Color.White) {
+                            Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }) {
+                                Text("Mis pedidos", modifier = Modifier.padding(vertical = 12.dp))
+                            }
+                            Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }) {
+                                Text("Recibidos", modifier = Modifier.padding(vertical = 12.dp))
+                            }
+                            Tab(selected = selectedTab == 2, onClick = { selectedTab = 2 }) {
+                                Text("Consolidado", modifier = Modifier.padding(vertical = 12.dp))
+                            }
+                        }
+                    } else {
+                        if (selectedTab != 0) selectedTab = 0
+                    }
+
+                    when (selectedTab) {
+                        0 -> OrdersTab(
+                            orders = myOrders,
+                            lotStatusByOrderId = state.lotStatusByOrderId,
+                            isLoading = state.isLoading,
+                            emptyMessage = "Aún no has enviado pedidos en este mes",
+                            infoText = "Pedidos que has enviado a las plantas productoras. Aquí puedes hacer seguimiento del estado de cada solicitud.",
+                            onOrderClick = onOrderClick,
+                            selectedOrderId = sidePanelOrderId,
+                            selectedYear = selectedYear,
+                            selectedMonth = selectedMonth,
+                            onPrevMonth = {
+                                if (selectedMonth == 1) { selectedYear -= 1; selectedMonth = 12 }
+                                else selectedMonth -= 1
+                            },
+                            onNextMonth = {
+                                if (selectedMonth == 12) { selectedYear += 1; selectedMonth = 1 }
+                                else selectedMonth += 1
+                            },
+                            onPickMonth = { showMonthPicker = true }
+                        )
+                        1 -> OrdersTab(
+                            orders = receivedOrders,
+                            lotStatusByOrderId = state.lotStatusByOrderId,
+                            isLoading = state.isLoading,
+                            emptyMessage = "No hay pedidos recibidos en este mes",
+                            infoText = "Pedidos que han llegado a tu planta productora desde otras sucursales. Usa la pestaña Consolidado para ver la demanda agrupada por fecha.",
+                            onOrderClick = onOrderClick,
+                            selectedOrderId = sidePanelOrderId,
+                            selectedYear = selectedYear,
+                            selectedMonth = selectedMonth,
+                            onPrevMonth = {
+                                if (selectedMonth == 1) { selectedYear -= 1; selectedMonth = 12 }
+                                else selectedMonth -= 1
+                            },
+                            onNextMonth = {
+                                if (selectedMonth == 12) { selectedYear += 1; selectedMonth = 1 }
+                                else selectedMonth += 1
+                            },
+                            onPickMonth = { showMonthPicker = true },
+                            shiftFilterOptions = receivedShiftOptions,
+                            selectedShiftFilter = receivedShiftFilter,
+                            onShiftFilterChange = { receivedShiftFilter = it }
+                        )
+                        2 -> ConsolidatedTab(
+                            state = state,
+                            user = user,
+                            canManageLots = canManageLots,
+                            onLoadShifts = { branchId ->
+                                viewModel.loadShiftsForProducingBranch(companyId, branchId)
+                            },
+                            onLoadConsolidated = { branchId, date, shiftId ->
+                                viewModel.loadConsolidatedView(companyId, branchId, date, shiftId)
+                            },
+                            onNavigateToLotForm = onNavigateToLotForm,
+                            onNavigateToLotDetail = onNavigateToLotDetail
+                        )
+                    }
+                }
+                if (isWide && sidePanelOrderId != null && selectedTab != 2) {
+                    VerticalDivider(color = Color(0xFFE0E0E0))
+                    Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                        ProductionOrderDetailContent(
+                            orderId = sidePanelOrderId!!,
+                            authViewModel = authViewModel,
+                            viewModel = viewModel,
+                            onNavigateToEdit = { id ->
+                                sidePanelOrderId = null
+                                onNavigateToEditOrder(id)
+                            },
+                            onAfterCancel = { sidePanelOrderId = null },
+                            snackbarHostState = snackbarHostState,
+                            modifier = Modifier.fillMaxSize(),
+                            onClosePanel = { sidePanelOrderId = null }
+                        )
+                    }
+                }
             }
         }
     }
@@ -164,19 +275,23 @@ fun ProductionOrderListScreen(
 @Composable
 private fun OrdersTab(
     orders: List<ProductionOrder>,
+    lotStatusByOrderId: Map<String, String>,
     isLoading: Boolean,
     emptyMessage: String,
     infoText: String,
-    showSellingBranch: Boolean,
-    onOrderClick: (String) -> Unit
+    onOrderClick: (String) -> Unit,
+    selectedOrderId: String? = null,
+    selectedYear: Int,
+    selectedMonth: Int,
+    onPrevMonth: () -> Unit,
+    onNextMonth: () -> Unit,
+    onPickMonth: () -> Unit,
+    /** Pares (shiftId, shiftName) presentes en el listado actual. */
+    shiftFilterOptions: List<Pair<String, String>> = emptyList(),
+    /** "" = todos los turnos. */
+    selectedShiftFilter: String = "",
+    onShiftFilterChange: (String) -> Unit = {}
 ) {
-    if (isLoading) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
-        }
-        return
-    }
-
     Column(Modifier.fillMaxSize()) {
         // Banner informativo
         Surface(color = MaterialTheme.colorScheme.secondaryContainer) {
@@ -199,6 +314,54 @@ private fun OrdersTab(
             }
         }
 
+        // Header de mes
+        MonthHeader(
+            year = selectedYear,
+            month = selectedMonth,
+            onPrev = onPrevMonth,
+            onNext = onNextMonth,
+            onTap = onPickMonth
+        )
+
+        // Filtros de turno (Recibidos): solo si hay más de un turno en los pedidos.
+        if (shiftFilterOptions.size > 1) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = selectedShiftFilter.isEmpty(),
+                    onClick = { onShiftFilterChange("") },
+                    label = { Text("Todos los turnos") },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = Color(0xFF123456),
+                        selectedLabelColor = Color.White
+                    )
+                )
+                shiftFilterOptions.forEach { (id, name) ->
+                    FilterChip(
+                        selected = selectedShiftFilter == id,
+                        onClick = { onShiftFilterChange(id) },
+                        label = { Text(name) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFF123456),
+                            selectedLabelColor = Color.White
+                        )
+                    )
+                }
+            }
+        }
+
+        if (isLoading) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+            return
+        }
+
         if (orders.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -207,20 +370,331 @@ private fun OrdersTab(
                     Text(emptyMessage, color = Color.Gray)
                 }
             }
-        } else {
-            LazyColumn(
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                items(orders) { order ->
-                    ProductionOrderCard(
-                        order = order,
-                        showBranch = showSellingBranch,
-                        onClick = { onOrderClick(order.id) }
-                    )
+            return
+        }
+
+        // Layout responsive: tabla en ≥720dp, cards en pantallas pequeñas.
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            if (maxWidth >= 720.dp) {
+                ProductionOrderTable(
+                    orders = orders,
+                    lotStatusByOrderId = lotStatusByOrderId,
+                    selectedOrderId = selectedOrderId,
+                    onOrderClick = onOrderClick
+                )
+            } else {
+                LazyColumn(
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    items(orders) { order ->
+                        ProductionOrderCard(
+                            order = order,
+                            lotStatus = lotStatusByOrderId[order.id],
+                            isSelected = order.id == selectedOrderId,
+                            onClick = { onOrderClick(order.id) }
+                        )
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun MonthHeader(
+    year: Int,
+    month: Int,
+    onPrev: () -> Unit,
+    onNext: () -> Unit,
+    onTap: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = Color.White,
+        tonalElevation = 0.dp,
+        shadowElevation = 1.dp
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onPrev) {
+                Icon(Icons.Default.ChevronLeft, "Mes anterior", tint = Color(0xFF123456))
+            }
+            Row(
+                modifier = Modifier.weight(1f).clickable(onClick = onTap),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.CalendarMonth,
+                    contentDescription = null,
+                    tint = Color(0xFF123456),
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "${monthName(month)} $year",
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF123456),
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+            IconButton(onClick = onNext) {
+                Icon(Icons.Default.ChevronRight, "Mes siguiente", tint = Color(0xFF123456))
+            }
+        }
+    }
+}
+
+@Composable
+private fun MonthPickerDialog(
+    currentYear: Int,
+    currentMonth: Int,
+    onDismiss: () -> Unit,
+    onSelect: (year: Int, month: Int) -> Unit
+) {
+    var year by remember { mutableIntStateOf(currentYear) }
+    var month by remember { mutableIntStateOf(currentMonth) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Seleccionar mes") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                // Stepper de año.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = { year -= 1 }) {
+                        Icon(Icons.Default.ChevronLeft, "Año anterior", tint = Color(0xFF123456))
+                    }
+                    Text(
+                        "$year",
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleLarge,
+                        color = Color(0xFF123456),
+                        modifier = Modifier.padding(horizontal = 24.dp)
+                    )
+                    IconButton(onClick = { year += 1 }) {
+                        Icon(Icons.Default.ChevronRight, "Año siguiente", tint = Color(0xFF123456))
+                    }
+                }
+                // Grid 4x3 de meses.
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (rowStart in listOf(1, 5, 9)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            for (m in rowStart..(rowStart + 3)) {
+                                val selected = m == month
+                                Surface(
+                                    modifier = Modifier.weight(1f).clickable { month = m },
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (selected) Color(0xFF123456) else Color.Transparent,
+                                    border = if (selected) null
+                                             else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                                ) {
+                                    Text(
+                                        monthShort(m),
+                                        modifier = Modifier.padding(vertical = 10.dp),
+                                        textAlign = TextAlign.Center,
+                                        color = if (selected) Color.White else Color(0xFF123456),
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSelect(year, month) }) { Text("Aceptar") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancelar") }
+        }
+    )
+}
+
+@Composable
+private fun ProductionOrderTable(
+    orders: List<ProductionOrder>,
+    lotStatusByOrderId: Map<String, String>,
+    selectedOrderId: String? = null,
+    onOrderClick: (String) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Header
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f))
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TableHeaderCell("Estado", Modifier.weight(0.9f))
+                TableHeaderCell("Sucursal solicitante", Modifier.weight(1.2f))
+                TableHeaderCell("Planta productora", Modifier.weight(1.2f))
+                TableHeaderCell("Turno", Modifier.weight(0.9f))
+                TableHeaderCell("Para el día", Modifier.weight(1f))
+                TableHeaderCell("Productos", Modifier.weight(0.7f), TextAlign.End)
+                TableHeaderCell("Creado por", Modifier.weight(1.2f))
+                TableHeaderCell("Hora envío", Modifier.weight(0.9f), TextAlign.End)
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+            LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                items(orders) { order ->
+                    val isSelected = order.id == selectedOrderId
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                if (isSelected) Color(0xFFE3F2FD) else Color.Transparent
+                            )
+                            .clickable { onOrderClick(order.id) }
+                            .padding(horizontal = 12.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(modifier = Modifier.weight(0.9f)) {
+                            StatusChip(order.status, lotStatusByOrderId[order.id], order.isLateOrder)
+                        }
+                        // Sucursal solicitante resaltada con chip azul del tema (letras
+                        // blancas) — la encargada de planta identifica rápido el origen.
+                        Box(modifier = Modifier.weight(1.2f).padding(horizontal = 4.dp)) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = Color(0xFF123456)
+                            ) {
+                                Text(
+                                    order.sellingBranchName.ifBlank { "—" },
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color.White
+                                )
+                            }
+                        }
+                        TableCell(order.producingBranchName, Modifier.weight(1.2f))
+                        TableCell(
+                            order.shiftName.ifBlank { "—" },
+                            Modifier.weight(0.9f),
+                            color = if (order.shiftName.isBlank())
+                                MaterialTheme.colorScheme.outline
+                            else MaterialTheme.colorScheme.onSurface
+                        )
+                        TableCell(formatProductionDate(order.requestedDate), Modifier.weight(1f))
+                        TableCell(
+                            "${order.lineCount}",
+                            Modifier.weight(0.7f),
+                            textAlign = TextAlign.End,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        TableCell(order.createdByUserName.ifBlank { "—" }, Modifier.weight(1.2f))
+                        TableCell(
+                            formatHourMinute(order.createdAt),
+                            Modifier.weight(0.9f),
+                            textAlign = TextAlign.End
+                        )
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TableHeaderCell(
+    text: String,
+    modifier: Modifier = Modifier,
+    textAlign: TextAlign = TextAlign.Start
+) {
+    Text(
+        text,
+        modifier = modifier.padding(horizontal = 4.dp),
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.Bold,
+        color = Color(0xFF123456),
+        textAlign = textAlign
+    )
+}
+
+@Composable
+private fun TableCell(
+    text: String,
+    modifier: Modifier = Modifier,
+    textAlign: TextAlign = TextAlign.Start,
+    fontWeight: FontWeight = FontWeight.Normal,
+    color: Color = MaterialTheme.colorScheme.onSurface
+) {
+    Text(
+        text,
+        modifier = modifier.padding(horizontal = 4.dp),
+        style = MaterialTheme.typography.bodyMedium,
+        fontWeight = fontWeight,
+        color = color,
+        textAlign = textAlign
+    )
+}
+
+/**
+ * Etiqueta y colores del estado efectivo de un pedido: combina su propio status con el
+ * status del lote que lo contiene (si existe). Permite mostrar "Lote abierto" o
+ * "En producción" en vez de "Pendiente" cuando el flujo avanzó del lado de la planta.
+ *
+ * Cuando un pedido es "tardío" ([isLateOrder] = true) y aún no está en un lote, el chip
+ * cambia a "Pedido tardío · pend. aprobar" para que la encargada de la planta sepa que
+ * tiene que decidir si lo incorpora al lote en curso.
+ */
+internal fun effectiveOrderDisplay(
+    orderStatus: String,
+    lotStatus: String?,
+    isLateOrder: Boolean = false
+): Triple<String, Color, Color> {
+    if (orderStatus == ProductionOrderStatus.CANCELLED) {
+        return Triple("Cancelado", Color.Gray, Color(0xFFF5F5F5))
+    }
+    if (orderStatus == ProductionOrderStatus.CONFIRMED) {
+        return Triple("Confirmado", Color(0xFF2E7D32), Color(0xFFE8F5E9))
+    }
+    // PENDING. Si es tardío y aún no fue incorporado a un lote, marcar explícitamente.
+    if (isLateOrder && lotStatus == null) {
+        return Triple("Pedido tardío · pend. aprobar", Color(0xFFC62828), Color(0xFFFFEBEE))
+    }
+    return when (lotStatus) {
+        ProductionLotStatus.OPEN ->
+            Triple("Lote abierto", Color(0xFF1565C0), Color(0xFFE3F2FD))
+        ProductionLotStatus.IN_PROGRESS ->
+            Triple("En producción", Color(0xFF6A1B9A), Color(0xFFF3E5F5))
+        ProductionLotStatus.COMPLETED ->
+            Triple("Producción terminada", Color(0xFF2E7D32), Color(0xFFE8F5E9))
+        else ->
+            Triple("Pendiente", Color(0xFFF57C00), Color(0xFFFFF3E0))
+    }
+}
+
+@Composable
+private fun StatusChip(status: String, lotStatus: String? = null, isLateOrder: Boolean = false) {
+    val (label, color, bg) = effectiveOrderDisplay(status, lotStatus, isLateOrder)
+    Surface(shape = RoundedCornerShape(20.dp), color = bg) {
+        Text(
+            label,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = color,
+            fontWeight = FontWeight.SemiBold
+        )
     }
 }
 
@@ -230,8 +704,10 @@ private fun ConsolidatedTab(
     state: ProductionUiState,
     user: com.bakery.erp.model.User?,
     canManageLots: Boolean,
-    onLoadConsolidated: (branchId: String, date: Long) -> Unit,
-    onNavigateToLotForm: () -> Unit
+    onLoadShifts: (branchId: String) -> Unit,
+    onLoadConsolidated: (branchId: String, date: Long, shiftId: String) -> Unit,
+    onNavigateToLotForm: (branchId: String?, shiftId: String?, date: Long?) -> Unit,
+    onNavigateToLotDetail: (lotId: String) -> Unit
 ) {
     val producingBranches = remember(state.producingBranches, user) {
         state.producingBranches.filter {
@@ -245,10 +721,28 @@ private fun ConsolidatedTab(
     }
     var selectedDate by remember { mutableStateOf(startOfNextDay()) }
     var branchDropdownExpanded by remember { mutableStateOf(false) }
+    var selectedShiftId by rememberSaveable { mutableStateOf("") }
 
-    LaunchedEffect(selectedBranch, selectedDate) {
+    // Al cambiar de planta: cargar sus turnos.
+    LaunchedEffect(selectedBranch?.id) {
         val branchId = selectedBranch?.id ?: return@LaunchedEffect
-        onLoadConsolidated(branchId, selectedDate)
+        onLoadShifts(branchId)
+    }
+
+    // Resolver el turno por defecto al cargar los turnos: el primero activo. Si la planta
+    // no tiene turnos configurados, dejamos shiftId = "" (pedidos sin turno).
+    LaunchedEffect(state.shiftsForSelectedProducingBranch) {
+        val shifts = state.shiftsForSelectedProducingBranch
+        if (shifts.isEmpty()) {
+            selectedShiftId = ""
+        } else if (shifts.none { it.id == selectedShiftId }) {
+            selectedShiftId = shifts.first().id
+        }
+    }
+
+    LaunchedEffect(selectedBranch, selectedDate, selectedShiftId) {
+        val branchId = selectedBranch?.id ?: return@LaunchedEffect
+        onLoadConsolidated(branchId, selectedDate, selectedShiftId)
     }
 
     Column(
@@ -303,6 +797,54 @@ private fun ConsolidatedTab(
                         producingBranches.first().name,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        }
+
+        // ── Selector de turno ─────────────────────────────────────────────
+        val shifts = state.shiftsForSelectedProducingBranch
+        if (shifts.size > 1) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    "Turno de producción",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    shifts.forEach { shift ->
+                        val selected = shift.id == selectedShiftId
+                        FilterChip(
+                            selected = selected,
+                            onClick = { selectedShiftId = shift.id },
+                            label = { Text(shift.name, fontWeight = FontWeight.SemiBold) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = Color(0xFF123456),
+                                selectedLabelColor = Color.White
+                            )
+                        )
+                    }
+                }
+            }
+        } else if (shifts.size == 1) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Turno",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        shifts.first().name,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF123456)
                     )
                 }
             }
@@ -461,7 +1003,7 @@ private fun ConsolidatedTab(
                         )
                     }
                     Text(
-                        formatQty(grandTotal) + " uds",
+                        formatQty(grandTotal) + " unidades",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
@@ -469,10 +1011,53 @@ private fun ConsolidatedTab(
                 }
             }
 
-            // Botón crear lote
-            if (canManageLots) {
+            // Botón crear lote, o banner verde si ya existe lote para esta combinación.
+            val existingLot = state.lotForConsolidatedView
+            if (existingLot != null) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9))
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(14.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Lock,
+                            contentDescription = null,
+                            tint = Color(0xFF2E7D32)
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Ya se creó un lote de producción para esta fecha y turno",
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF2E7D32),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Text(
+                                "Estado: ${ProductionLotStatus.label(existingLot.status)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFF1B5E20)
+                            )
+                        }
+                        TextButton(onClick = { onNavigateToLotDetail(existingLot.id) }) {
+                            Text(
+                                "Ver lote",
+                                color = Color(0xFF2E7D32),
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            } else if (canManageLots) {
                 Button(
-                    onClick = onNavigateToLotForm,
+                    onClick = {
+                        onNavigateToLotForm(
+                            selectedBranch?.id,
+                            selectedShiftId.takeIf { it.isNotBlank() },
+                            selectedDate
+                        )
+                    },
                     modifier = Modifier.fillMaxWidth().height(52.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF123456))
                 ) {
@@ -508,7 +1093,7 @@ private fun ConsolidatedProductRow(
                 color = MaterialTheme.colorScheme.primaryContainer
             ) {
                 Text(
-                    "${formatQty(row.total)} uds total",
+                    "${formatQty(row.total)} unidades",
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -535,7 +1120,7 @@ private fun ConsolidatedProductRow(
                         modifier = Modifier.weight(1f)
                     )
                     Text(
-                        formatQty(qty) + " uds",
+                        formatQty(qty) + " unidades",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurface
@@ -583,51 +1168,59 @@ private fun ConsolidatedTable(
 
             Spacer(Modifier.height(12.dp))
 
+            val lineColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)
+            val headerBg = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+            val altRowBg = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+
             Row(modifier = Modifier.horizontalScroll(rememberScrollState())) {
                 Column {
-                    // Header
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    // Header con fondo y línea superior/inferior.
+                    HorizontalDivider(color = lineColor, thickness = 1.dp)
                     Row(
-                        modifier = Modifier.padding(vertical = 8.dp),
+                        modifier = Modifier
+                            .background(headerBg)
+                            .padding(vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
                             "Producto",
-                            modifier = Modifier.width(productColWidth),
+                            modifier = Modifier.width(productColWidth).padding(horizontal = 6.dp),
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = Color(0xFF123456)
                         )
                         branches.forEach { (_, branchName) ->
                             Text(
                                 branchName,
-                                modifier = Modifier.width(qtyColWidth),
+                                modifier = Modifier.width(qtyColWidth).padding(horizontal = 6.dp),
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = Color(0xFF123456),
                                 textAlign = TextAlign.End
                             )
                         }
                         Text(
                             "Total",
-                            modifier = Modifier.width(qtyColWidth),
+                            modifier = Modifier.width(qtyColWidth).padding(horizontal = 6.dp),
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary,
+                            color = Color(0xFF123456),
                             textAlign = TextAlign.End
                         )
                     }
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    HorizontalDivider(color = lineColor, thickness = 1.dp)
 
-                    // Data rows
+                    // Data rows (alternating bg + dividers entre filas).
                     rows.forEachIndexed { index, row ->
                         Row(
-                            modifier = Modifier.padding(vertical = 10.dp),
+                            modifier = Modifier
+                                .background(if (index % 2 == 1) altRowBg else Color.Transparent)
+                                .padding(vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
                                 row.productName,
-                                modifier = Modifier.width(productColWidth),
+                                modifier = Modifier.width(productColWidth).padding(horizontal = 6.dp),
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Medium
                             )
@@ -635,7 +1228,7 @@ private fun ConsolidatedTable(
                                 val qty = row.quantitiesByBranch[branchId] ?: 0.0
                                 Text(
                                     if (qty > 0.0) formatQty(qty) else "—",
-                                    modifier = Modifier.width(qtyColWidth),
+                                    modifier = Modifier.width(qtyColWidth).padding(horizontal = 6.dp),
                                     style = MaterialTheme.typography.bodyMedium,
                                     textAlign = TextAlign.End,
                                     color = if (qty > 0.0) MaterialTheme.colorScheme.onSurface
@@ -644,51 +1237,51 @@ private fun ConsolidatedTable(
                             }
                             Text(
                                 formatQty(row.total),
-                                modifier = Modifier.width(qtyColWidth),
+                                modifier = Modifier.width(qtyColWidth).padding(horizontal = 6.dp),
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary,
                                 textAlign = TextAlign.End
                             )
                         }
-                        if (index < rows.lastIndex) {
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                        }
+                        HorizontalDivider(color = lineColor, thickness = 0.6.dp)
                     }
 
-                    // Totals row
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 1.5.dp)
+                    // Totals row.
                     Row(
-                        modifier = Modifier.padding(vertical = 10.dp),
+                        modifier = Modifier
+                            .background(headerBg)
+                            .padding(vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
                             "TOTAL",
-                            modifier = Modifier.width(productColWidth),
+                            modifier = Modifier.width(productColWidth).padding(horizontal = 6.dp),
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
+                            color = Color(0xFF123456)
                         )
                         branches.forEach { (branchId, _) ->
                             val branchTotal = rows.sumOf { it.quantitiesByBranch[branchId] ?: 0.0 }
                             Text(
                                 formatQty(branchTotal),
-                                modifier = Modifier.width(qtyColWidth),
+                                modifier = Modifier.width(qtyColWidth).padding(horizontal = 6.dp),
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary,
+                                color = Color(0xFF123456),
                                 textAlign = TextAlign.End
                             )
                         }
                         Text(
                             formatQty(rows.sumOf { it.total }),
-                            modifier = Modifier.width(qtyColWidth),
+                            modifier = Modifier.width(qtyColWidth).padding(horizontal = 6.dp),
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary,
+                            color = Color(0xFF123456),
                             textAlign = TextAlign.End
                         )
                     }
+                    HorizontalDivider(color = lineColor, thickness = 1.dp)
                 }
             }
         }
@@ -698,62 +1291,96 @@ private fun ConsolidatedTable(
 @Composable
 private fun ProductionOrderCard(
     order: ProductionOrder,
-    showBranch: Boolean,
+    lotStatus: String?,
+    isSelected: Boolean = false,
     onClick: () -> Unit
 ) {
-    val statusColor = when (order.status) {
-        ProductionOrderStatus.PENDING   -> Color(0xFFF57C00)
-        ProductionOrderStatus.CONFIRMED -> Color(0xFF2E7D32)
-        ProductionOrderStatus.CANCELLED -> Color.Gray
-        else                            -> Color.Gray
-    }
-
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) Color(0xFFE3F2FD) else Color.White
+        ),
         shape = RoundedCornerShape(12.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        border = if (isSelected) BorderStroke(1.5.dp, Color(0xFF123456)) else null
     ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    if (showBranch) order.sellingBranchName else order.producingBranchName,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    "Para: ${formatProductionDate(order.requestedDate)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    "${order.lineCount} producto(s)",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = statusColor.copy(alpha = 0.12f)
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            // Fila superior: estado + #productos
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    ProductionOrderStatus.label(order.status),
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = statusColor,
-                    fontWeight = FontWeight.SemiBold
-                )
+                StatusChip(order.status, lotStatus, order.isLateOrder)
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                ) {
+                    Text(
+                        "${order.lineCount} productos",
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF123456)
+                    )
+                }
             }
+
+            CardInfoRow("Sucursal solicitante", order.sellingBranchName.ifBlank { "—" })
+            CardInfoRow("Sucursal productora", order.producingBranchName.ifBlank { "—" })
+            CardInfoRow("Turno", order.shiftName.ifBlank { "—" })
+            CardInfoRow("Para el día", formatProductionDate(order.requestedDate))
+            CardInfoRow(
+                "Creado por",
+                "${order.createdByUserName.ifBlank { "—" }} · ${formatHourMinute(order.createdAt)}"
+            )
         }
     }
 }
 
+@Composable
+private fun CardInfoRow(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+            color = Color(0xFF123456),
+            textAlign = TextAlign.End,
+            modifier = Modifier.padding(start = 12.dp)
+        )
+    }
+}
+
+private fun monthName(month: Int): String = when (month) {
+    1 -> "Enero"; 2 -> "Febrero"; 3 -> "Marzo"; 4 -> "Abril"
+    5 -> "Mayo"; 6 -> "Junio"; 7 -> "Julio"; 8 -> "Agosto"
+    9 -> "Septiembre"; 10 -> "Octubre"; 11 -> "Noviembre"; 12 -> "Diciembre"
+    else -> "—"
+}
+
+private fun monthShort(month: Int): String = when (month) {
+    1 -> "Ene"; 2 -> "Feb"; 3 -> "Mar"; 4 -> "Abr"
+    5 -> "May"; 6 -> "Jun"; 7 -> "Jul"; 8 -> "Ago"
+    9 -> "Sep"; 10 -> "Oct"; 11 -> "Nov"; 12 -> "Dic"
+    else -> "—"
+}
+
+internal fun formatHourMinute(millis: Long): String {
+    if (millis == 0L) return "—"
+    return runCatching {
+        val ldt = Instant.fromEpochMilliseconds(millis).toLocalDateTime(TimeZone.currentSystemDefault())
+        "${ldt.hour.toString().padStart(2,'0')}:${ldt.minute.toString().padStart(2,'0')}"
+    }.getOrElse { "—" }
+}
+
 private fun formatQty(qty: Double): String =
-    if (qty == qty.toLong().toDouble()) qty.toLong().toString() else "%.1f".format(qty)
+    if (qty == qty.toLong().toDouble()) qty.toLong().toString() else qty.fmt(1)
 
 internal fun formatProductionDate(millis: Long): String {
     if (millis == 0L) return "—"

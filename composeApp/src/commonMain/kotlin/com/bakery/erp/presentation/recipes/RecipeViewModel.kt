@@ -2,6 +2,7 @@ package com.bakery.erp.presentation.recipes
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.bakery.erp.domain.RecipeImageUploader
 import com.bakery.erp.domain.RecipeRepository
 import com.bakery.erp.model.Recipe
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,7 +22,8 @@ data class RecipeUiState(
 )
 
 class RecipeViewModel(
-    private val repository: RecipeRepository
+    private val repository: RecipeRepository,
+    private val imageUploader: RecipeImageUploader
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(RecipeUiState())
@@ -45,12 +47,32 @@ class RecipeViewModel(
         }
     }
 
-    fun saveRecipe(companyId: String, recipe: Recipe) {
+    /**
+     * @param stepPhotos bytes nuevos por id de paso (id estable generado en el form).
+     *   Se suben a Storage antes de persistir y se fija [RecipeStep.photoUrl].
+     */
+    fun saveRecipe(
+        companyId: String,
+        recipe: Recipe,
+        stepPhotos: Map<String, ByteArray> = emptyMap()
+    ) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
             runCatching {
                 val isNew = recipe.id.isEmpty()
-                val finalRecipe = if (isNew) recipe.copy(id = generateId()) else recipe
+                val recipeId = if (isNew) generateId() else recipe.id
+                val withId = recipe.copy(id = recipeId)
+                val finalRecipe = if (stepPhotos.isEmpty()) withId else withId.copy(
+                    steps = withId.steps.map { step ->
+                        val bytes = stepPhotos[step.id]
+                        if (bytes == null) step
+                        else step.copy(
+                            photoUrl = imageUploader.uploadStepImage(
+                                bytes, recipeId, step.stageId, step.id
+                            )
+                        )
+                    }
+                )
                 if (isNew) repository.addRecipe(companyId, finalRecipe)
                 else repository.updateRecipe(companyId, finalRecipe)
             }.onSuccess {

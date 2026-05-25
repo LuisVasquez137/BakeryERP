@@ -1,5 +1,6 @@
 package com.bakery.erp.presentation.purchases
 
+import com.bakery.erp.util.fmt
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -265,7 +266,7 @@ internal fun PurchaseDetailContent(
                 ) {
                     Text("TOTAL", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                     Text(
-                        text = "Q ${"%.2f".format(total)}",
+                        text = "Q ${total.fmt(2)}",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
@@ -314,12 +315,12 @@ private fun PurchaseLineRow(line: PurchaseLine) {
                 val lineTotal = line.packageCost * line.packagesReceived.coerceAtLeast(1.0)
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
-                        text = "Q ${"%.2f".format(line.packageCost)} / u.",
+                        text = "Q ${line.packageCost.fmt(2)} / u.",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.outline
                     )
                     Text(
-                        text = "Q ${"%.2f".format(lineTotal)}",
+                        text = "Q ${lineTotal.fmt(2)}",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.primary
@@ -331,4 +332,4 @@ private fun PurchaseLineRow(line: PurchaseLine) {
 }
 
 internal fun formatPurchaseQty(value: Double): String =
-    if (value == value.toLong().toDouble()) "${value.toLong()}" else "%.2f".format(value)
+    if (value == value.toLong().toDouble()) "${value.toLong()}" else value.fmt(2)

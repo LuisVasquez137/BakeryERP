@@ -1,5 +1,6 @@
 package com.bakery.erp.presentation.expenses
 
+import com.bakery.erp.util.fmt
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -83,7 +84,7 @@ fun ExpenseFormScreen(
 
     var name by rememberSaveable { mutableStateOf(existing?.name ?: "") }
     var notes by rememberSaveable { mutableStateOf(existing?.notes ?: "") }
-    var amountText by rememberSaveable { mutableStateOf(if (existing != null && existing.amount > 0) "%.2f".format(existing.amount) else "") }
+    var amountText by rememberSaveable { mutableStateOf(if (existing != null && existing.amount > 0) existing.amount.fmt(2) else "") }
     var period by rememberSaveable { mutableStateOf(existing?.period ?: state.selectedPeriod) }
     var selectedCategory by remember { mutableStateOf(existing?.category ?: ExpenseCategory.OTROS) }
     var selectedBranch by remember {

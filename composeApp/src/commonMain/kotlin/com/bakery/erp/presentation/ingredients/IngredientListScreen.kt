@@ -1,5 +1,6 @@
 ﻿package com.bakery.erp.presentation.ingredients
 
+import com.bakery.erp.util.fmt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -348,7 +349,7 @@ private fun IngredientListCard(ingredient: Ingredient, branchStock: Double?, onC
 
     val packageLabel = if (defaultFormat != null && defaultFormat.packageCost > 0) {
         val word = defaultFormat.description.split(" ").firstOrNull()?.take(10) ?: ""
-        if (word.isNotEmpty()) "$word  Q${"%.0f".format(defaultFormat.packageCost)}" else ""
+        if (word.isNotEmpty()) "$word  Q${defaultFormat.packageCost.fmt(0)}" else ""
     } else ""
 
     Card(
@@ -396,7 +397,7 @@ private fun IngredientListCard(ingredient: Ingredient, branchStock: Double?, onC
                 Column(horizontalAlignment = Alignment.End) {
                     if (ingredient.defaultUnitCost > 0) {
                         Text(
-                            text = "Q ${"%.2f".format(ingredient.defaultUnitCost)}",
+                            text = "Q ${ingredient.defaultUnitCost.fmt(2)}",
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
@@ -501,7 +502,7 @@ private fun IngredientTableRow(ingredient: Ingredient, branchStock: Double?, onC
 
     val packageLabel = if (defaultFormat != null && defaultFormat.packageCost > 0) {
         val word = defaultFormat.description.split(" ").firstOrNull()?.take(10) ?: ""
-        if (word.isNotEmpty()) "$word  Q${"%.0f".format(defaultFormat.packageCost)}" else "—"
+        if (word.isNotEmpty()) "$word  Q${defaultFormat.packageCost.fmt(0)}" else "—"
     } else "—"
 
     Row(
@@ -546,7 +547,7 @@ private fun IngredientTableRow(ingredient: Ingredient, branchStock: Double?, onC
         Column(modifier = Modifier.weight(1.2f)) {
             if (ingredient.defaultUnitCost > 0) {
                 Text(
-                    "Q ${"%.2f".format(ingredient.defaultUnitCost)}",
+                    "Q ${ingredient.defaultUnitCost.fmt(2)}",
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary

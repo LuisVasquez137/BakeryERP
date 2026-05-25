@@ -2,6 +2,7 @@ package com.bakery.erp.data
 
 import com.bakery.erp.domain.AuthRepository
 import com.bakery.erp.domain.AuthState
+import com.bakery.erp.model.Organization
 import com.bakery.erp.model.User
 import com.bakery.erp.model.UserRole
 import dev.gitlive.firebase.auth.FirebaseAuth
@@ -218,6 +219,19 @@ class FirebaseAuthRepository(
         orgDoc.get<String>("inviteCode")
     }
 
+    override suspend fun getOrganization(orgId: String): Result<Organization> = runCatching {
+        val doc = orgsCol().document(orgId).get()
+        if (!doc.exists) error("Organización no encontrada: $orgId")
+        Organization(
+            id = doc.id,
+            name = runCatching { doc.get<String>("name") }.getOrNull() ?: "",
+            ownerEmail = runCatching { doc.get<String>("ownerEmail") }.getOrNull() ?: "",
+            subscriptionPlan = runCatching { doc.get<String>("subscriptionPlan") }.getOrNull() ?: "",
+            createdAt = runCatching { doc.get<Long>("createdAt") }.getOrNull() ?: 0L,
+            inviteCode = runCatching { doc.get<String>("inviteCode") }.getOrNull() ?: ""
+        )
+    }
+
     override suspend fun getCurrentUser(): User? {
         val current = auth.currentUser ?: return null
         return runCatching {
@@ -255,7 +269,7 @@ class FirebaseAuthRepository(
         isApproved = get<Boolean?>("isApproved") ?: true  // default true → usuarios existentes no se bloquean
     )
 
-    private fun User.toMap(): Map<String, Any?> = mapOf(
+    private fun User.toMap(): Map<String, Any?> = firestoreSafeOf(
         "orgId" to orgId, "email" to email, "displayName" to displayName,
         "role" to role.name, "branchIds" to ArrayList(branchIds),
         "permissions" to ArrayList(permissions),

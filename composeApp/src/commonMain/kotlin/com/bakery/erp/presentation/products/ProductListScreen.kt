@@ -1,5 +1,6 @@
 package com.bakery.erp.presentation.products
 
+import com.bakery.erp.util.fmt
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -172,7 +173,7 @@ private fun ProductGridCard(product: Product, onClick: () -> Unit) {
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = "Q ${"%.2f".format(product.salePrice)}",
+                    text = "Q ${product.salePrice.fmt(2)}",
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary

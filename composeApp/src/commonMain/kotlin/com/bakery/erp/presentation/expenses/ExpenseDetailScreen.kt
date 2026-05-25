@@ -1,5 +1,6 @@
 package com.bakery.erp.presentation.expenses
 
+import com.bakery.erp.util.fmt
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -149,7 +150,7 @@ private fun ExpenseDetailContent(expense: Expense) {
         DetailRow("Sucursal", expense.branchName.ifEmpty { "—" })
         DetailRow("Período", formatPeriodLabel(expense.period))
         DetailRow("Categoría", expense.category.label)
-        DetailRow("Monto", "Q ${"%.2f".format(expense.amount)}")
+        DetailRow("Monto", "Q ${expense.amount.fmt(2)}")
 
         if (!expense.notes.isNullOrEmpty()) {
             Spacer(Modifier.height(4.dp))

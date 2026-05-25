@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.production
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -8,9 +10,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AccessTime
+import androidx.compose.material.icons.filled.NightsStay
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -43,6 +48,10 @@ import com.bakery.erp.model.ProductionShift
 import com.bakery.erp.model.canAccessBranch
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.ui.AdaptiveContainer
+import com.bakery.erp.ui.TimePickerDialog
+import com.bakery.erp.ui.formatHHmm
+import com.bakery.erp.ui.isOvernightShift
+import com.bakery.erp.ui.parseHHmm
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -93,6 +102,35 @@ fun ProductionShiftFormScreen(
     var name by rememberSaveable { mutableStateOf(existing?.name ?: "") }
     var startTime by rememberSaveable { mutableStateOf(existing?.startTime ?: "") }
     var endTime by rememberSaveable { mutableStateOf(existing?.endTime ?: "") }
+    var showStartPicker by remember { mutableStateOf(false) }
+    var showEndPicker by remember { mutableStateOf(false) }
+
+    if (showStartPicker) {
+        val (h, m) = parseHHmm(startTime) ?: (6 to 0)
+        TimePickerDialog(
+            initialHour = h,
+            initialMinute = m,
+            title = "Hora de inicio",
+            onDismiss = { showStartPicker = false },
+            onConfirm = { hh, mm ->
+                startTime = formatHHmm(hh, mm)
+                showStartPicker = false
+            }
+        )
+    }
+    if (showEndPicker) {
+        val (h, m) = parseHHmm(endTime) ?: (14 to 0)
+        TimePickerDialog(
+            initialHour = h,
+            initialMinute = m,
+            title = "Hora de fin",
+            onDismiss = { showEndPicker = false },
+            onConfirm = { hh, mm ->
+                endTime = formatHHmm(hh, mm)
+                showEndPicker = false
+            }
+        )
+    }
 
     LaunchedEffect(state.isSaved) {
         if (state.isSaved) { viewModel.clearSaved(); onNavigateBack() }
@@ -208,19 +246,86 @@ fun ProductionShiftFormScreen(
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedTextField(
                         value = startTime,
-                        onValueChange = { startTime = it },
+                        onValueChange = {},
+                        readOnly = true,
                         label = { Text("Hora inicio") },
                         placeholder = { Text("22:00") },
-                        modifier = Modifier.weight(1f),
+                        trailingIcon = {
+                            IconButton(onClick = { showStartPicker = true }) {
+                                Icon(
+                                    Icons.Default.AccessTime,
+                                    contentDescription = "Elegir hora de inicio",
+                                    tint = Color(0xFF123456),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { showStartPicker = true },
                         singleLine = true
                     )
                     OutlinedTextField(
                         value = endTime,
-                        onValueChange = { endTime = it },
+                        onValueChange = {},
+                        readOnly = true,
                         label = { Text("Hora fin") },
                         placeholder = { Text("06:00") },
-                        modifier = Modifier.weight(1f),
+                        trailingIcon = {
+                            IconButton(onClick = { showEndPicker = true }) {
+                                Icon(
+                                    Icons.Default.AccessTime,
+                                    contentDescription = "Elegir hora de fin",
+                                    tint = Color(0xFF123456),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { showEndPicker = true },
                         singleLine = true
+                    )
+                }
+
+                // ── Indicador de turno nocturno ──────────────────────────────
+                val overnight = remember(startTime, endTime) {
+                    isOvernightShift(startTime, endTime)
+                }
+                if (overnight) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFFEFE7FF), RoundedCornerShape(10.dp))
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.NightsStay,
+                            contentDescription = null,
+                            tint = Color(0xFF5B3DBF),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "Turno nocturno (+1 día)",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF3A1D9E)
+                            )
+                            Text(
+                                "Inicia $startTime hoy y termina $endTime del día siguiente.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF3A1D9E)
+                            )
+                        }
+                    }
+                } else if (startTime.isNotEmpty() && endTime.isNotEmpty() && startTime == endTime) {
+                    Text(
+                        "La hora de inicio y fin no pueden ser iguales.",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
                     )
                 }
 

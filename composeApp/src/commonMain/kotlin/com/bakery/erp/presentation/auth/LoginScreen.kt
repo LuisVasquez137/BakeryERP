@@ -1,6 +1,7 @@
 package com.bakery.erp.presentation.auth
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -10,6 +11,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -34,20 +38,26 @@ import androidx.compose.ui.unit.dp
 import bakeryerp.composeapp.generated.resources.Res
 import bakeryerp.composeapp.generated.resources.ic_google
 import org.jetbrains.compose.resources.painterResource
-import org.koin.compose.viewmodel.koinViewModel
+import androidx.compose.runtime.remember
 
 @Composable
 fun LoginScreen(
     onNavigateToAuthChoice: () -> Unit,
-    viewModel: AuthViewModel = koinViewModel()
+    viewModel: AuthViewModel
 ) {
     val state by viewModel.uiState.collectAsState()
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
 
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
     Column(
         modifier = Modifier
-            .fillMaxSize()
+            .widthIn(max = 440.dp)
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
             .padding(24.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
@@ -103,28 +113,31 @@ fun LoginScreen(
                 Text("Iniciar sesión")
             }
         }
-        Spacer(Modifier.height(16.dp))
-        HorizontalDivider()
-        Spacer(Modifier.height(16.dp))
-        OutlinedButton(
-            onClick = { viewModel.signInWithGoogle() },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !state.isLoading
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    painter = painterResource(Res.drawable.ic_google),
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                    tint = androidx.compose.ui.graphics.Color.Unspecified
-                )
-                Spacer(Modifier.width(8.dp))
-                Text("Continuar con Google")
+        if (viewModel.isGoogleAvailable) {
+            Spacer(Modifier.height(16.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+            OutlinedButton(
+                onClick = { viewModel.signInWithGoogle() },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !state.isLoading
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        painter = painterResource(Res.drawable.ic_google),
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = androidx.compose.ui.graphics.Color.Unspecified
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("Continuar con Google")
+                }
             }
         }
         Spacer(Modifier.height(12.dp))
         TextButton(onClick = onNavigateToAuthChoice) {
             Text("¿No tienes cuenta? Regístrate")
         }
+    }
     }
 }

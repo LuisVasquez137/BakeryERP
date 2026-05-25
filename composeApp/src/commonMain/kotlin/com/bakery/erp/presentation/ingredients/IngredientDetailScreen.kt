@@ -1,5 +1,6 @@
 ﻿package com.bakery.erp.presentation.ingredients
 
+import com.bakery.erp.util.fmt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -268,7 +269,7 @@ private fun IngredientHeader(ingredient: Ingredient) {
         ?: ingredient.purchaseFormats.firstOrNull()
     val packageLabel = if (defaultFormat != null && defaultFormat.packageCost > 0) {
         val word = defaultFormat.description.split(" ").firstOrNull()?.take(10) ?: ""
-        if (word.isNotEmpty()) "$word  Q${"%.0f".format(defaultFormat.packageCost)}" else ""
+        if (word.isNotEmpty()) "$word  Q${defaultFormat.packageCost.fmt(0)}" else ""
     } else ""
 
     Column {
@@ -306,7 +307,7 @@ private fun IngredientHeader(ingredient: Ingredient) {
                     ) {
                         if (ingredient.defaultUnitCost > 0) {
                             Text(
-                                text = "Q ${"%.2f".format(ingredient.defaultUnitCost)} / ${ingredient.effectiveBaseUnit}",
+                                text = "Q ${ingredient.defaultUnitCost.fmt(2)} / ${ingredient.effectiveBaseUnit}",
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary
@@ -386,7 +387,7 @@ private fun InventarioTab(
                         else largestUnit(ingredient.allowedUnits)
         DetailInfoRow(
             label = "Nivel de alerta",
-            value = "${"%.2f".format(ingredient.stockAlert).trimEnd('0').trimEnd('.')} $alertUnit"
+            value = "${ingredient.stockAlert.fmt(2).trimEnd('0').trimEnd('.')} $alertUnit"
         )
     }
 }
@@ -507,7 +508,7 @@ private fun RecipeUsageCard(usage: IngredientUsage) {
             Column(horizontalAlignment = Alignment.End) {
                 if (usage.percentage > 0) {
                     Text(
-                        text = "${"%.1f".format(usage.percentage)}%",
+                        text = "${usage.percentage.fmt(1)}%",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
@@ -601,7 +602,7 @@ private fun KardexRow(mov: StockMovement, ingredient: Ingredient) {
         Text(mov.branchName, style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1.2f), maxLines = 1)
         Text(mov.type, style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(0.8f), maxLines = 1)
         Text(
-            text = "${if (mov.quantity > 0) "+" else ""}${"%.1f".format(mov.quantity)} ${ingredient.effectiveBaseUnit}",
+            text = "${if (mov.quantity > 0) "+" else ""}${mov.quantity.fmt(1)} ${ingredient.effectiveBaseUnit}",
             style = MaterialTheme.typography.labelSmall,
             color = qtyColor,
             fontWeight = FontWeight.SemiBold,
@@ -679,14 +680,14 @@ private fun PurchaseFormatCard(format: PurchaseFormat) {
                     val unitsLabel = if (format.unitsPerPackage == format.unitsPerPackage.toLong().toDouble())
                         "${format.unitsPerPackage.toLong()} ${format.unit}"
                     else
-                        "${"%.2f".format(format.unitsPerPackage)} ${format.unit}"
+                        "${format.unitsPerPackage.fmt(2)} ${format.unit}"
                     Text(
                         "Paquete: $unitsLabel",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        "Q ${"%.2f".format(format.packageCost)} / paquete",
+                        "Q ${format.packageCost.fmt(2)} / paquete",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -694,7 +695,7 @@ private fun PurchaseFormatCard(format: PurchaseFormat) {
                 }
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
-                        "Q ${"%.2f".format(format.costPerUnit)}",
+                        "Q ${format.costPerUnit.fmt(2)}",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary

@@ -2,8 +2,10 @@ package com.bakery.erp.presentation.products
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.bakery.erp.domain.PriceListRepository
 import com.bakery.erp.domain.ProductRepository
 import com.bakery.erp.model.Product
+import com.bakery.erp.model.ProductPrice
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -20,7 +22,8 @@ data class ProductUiState(
 )
 
 class ProductViewModel(
-    private val repository: ProductRepository
+    private val repository: ProductRepository,
+    private val priceListRepository: PriceListRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ProductUiState())
@@ -35,7 +38,21 @@ class ProductViewModel(
         }
     }
 
-    fun saveProduct(companyId: String, product: Product, imageBytes: ByteArray?) {
+    /**
+     * Guarda el producto y, opcionalmente, los precios por lista.
+     * - `pricesByListId`: priceListId → unitPrice (>0). Inserta/actualiza el override.
+     * - `priceListIdsToReset`: listas donde el usuario vació el campo. Se borra el
+     *   override (si existía) para que vuelva a aplicar el factor de la lista.
+     * - `listNamesById`: nombres denormalizados para guardar junto al ProductPrice.
+     */
+    fun saveProduct(
+        companyId: String,
+        product: Product,
+        imageBytes: ByteArray?,
+        pricesByListId: Map<String, Double> = emptyMap(),
+        listNamesById: Map<String, String> = emptyMap(),
+        priceListIdsToReset: Set<String> = emptySet()
+    ) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
             runCatching {
@@ -50,6 +67,25 @@ class ProductViewModel(
 
                 if (isNew) repository.addProduct(companyId, finalProduct)
                 else repository.updateProduct(companyId, finalProduct)
+
+                pricesByListId.forEach { (listId, unitPrice) ->
+                    if (listId.isNotEmpty()) {
+                        priceListRepository.upsertPrice(
+                            companyId,
+                            ProductPrice(
+                                productId = productId,
+                                priceListId = listId,
+                                priceListName = listNamesById[listId] ?: "",
+                                unitPrice = unitPrice
+                            )
+                        )
+                    }
+                }
+                priceListIdsToReset.forEach { listId ->
+                    if (listId.isNotEmpty()) {
+                        priceListRepository.deletePrice(companyId, productId, listId)
+                    }
+                }
             }.onSuccess {
                 _uiState.value = _uiState.value.copy(isLoading = false, isSaved = true)
                 loadProducts(companyId)

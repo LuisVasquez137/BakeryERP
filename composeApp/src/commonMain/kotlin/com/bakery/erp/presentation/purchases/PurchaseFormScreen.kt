@@ -1,5 +1,6 @@
-package com.bakery.erp.presentation.purchases
+﻿package com.bakery.erp.presentation.purchases
 
+import com.bakery.erp.util.fmt
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -73,6 +74,7 @@ import com.bakery.erp.model.convertUnits
 import com.bakery.erp.model.largestUnit
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.ui.AdaptiveContainer
+import kotlin.time.Clock
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -116,7 +118,7 @@ fun PurchaseFormScreen(
                 currentUser = currentUser,
                 invoiceNumber = invoiceNumber.trim().ifEmpty { null },
                 notes = notes.trim().ifEmpty { null },
-                date = System.currentTimeMillis(),
+                date = Clock.System.now().toEpochMilliseconds(),
                 status = purchaseStatus
             )
         }
@@ -454,7 +456,7 @@ private fun IngredientTableRow(
 
     var editingPrice by remember(ingredient.id) { mutableStateOf(false) }
     var packageCostStr by rememberSaveable(ingredient.id) {
-        mutableStateOf(if (originalPackageCost > 0) "%.2f".format(originalPackageCost) else "")
+        mutableStateOf(if (originalPackageCost > 0) originalPackageCost.fmt(2) else "")
     }
     var showQtyDialog by remember { mutableStateOf(false) }
 
@@ -536,7 +538,7 @@ private fun IngredientTableRow(
                     horizontalArrangement = Arrangement.End
                 ) {
                     Text(
-                        text = if (currentPackageCost > 0) "Q ${"%.2f".format(currentPackageCost)}" else "—",
+                        text = if (currentPackageCost > 0) "Q ${currentPackageCost.fmt(2)}" else "—",
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.weight(1f),
                         textAlign = TextAlign.End
@@ -593,7 +595,7 @@ private fun IngredientTableRow(
 
             // Subtotal
             Text(
-                text = if (lineTotal > 0) "Q ${"%.2f".format(lineTotal)}" else "—",
+                text = if (lineTotal > 0) "Q ${lineTotal.fmt(2)}" else "—",
                 modifier = Modifier.weight(1.2f),
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = if (lineTotal > 0) FontWeight.SemiBold else FontWeight.Normal,
@@ -754,7 +756,7 @@ private fun PurchaseReviewContent(
                         )
                         val lineTotal = if (line.packageCost > 0) line.packageCost * line.packagesReceived.coerceAtLeast(1.0) else 0.0
                         Text(
-                            if (lineTotal > 0) "Q ${"%.2f".format(lineTotal)}" else "—",
+                            if (lineTotal > 0) "Q ${lineTotal.fmt(2)}" else "—",
                             modifier = Modifier.weight(1f),
                             style = MaterialTheme.typography.bodySmall,
                             fontWeight = if (lineTotal > 0) FontWeight.SemiBold else FontWeight.Normal,
@@ -784,7 +786,7 @@ private fun PurchaseReviewContent(
                 ) {
                     Text("TOTAL", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                     Text(
-                        "Q ${"%.2f".format(grandTotal)}",
+                        "Q ${grandTotal.fmt(2)}",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
@@ -978,14 +980,14 @@ private fun IngredientPurchaseRow(
                 val displayed = if (it.packagesReceived > 0) it.packagesReceived
                                else if (toBaseUnitFactor > 0) it.quantityReceived / toBaseUnitFactor
                                else it.quantityReceived
-                if (displayed > 0) "%.2f".format(displayed).trimEnd('0').trimEnd('.') else ""
+                if (displayed > 0) displayed.fmt(2).trimEnd('0').trimEnd('.') else ""
             } ?: ""
         )
     }
 
     var editingPrice by remember(ingredient.id) { mutableStateOf(false) }
     var packageCostStr by rememberSaveable(ingredient.id) {
-        mutableStateOf(if (originalPackageCost > 0) "%.2f".format(originalPackageCost) else "")
+        mutableStateOf(if (originalPackageCost > 0) originalPackageCost.fmt(2) else "")
     }
 
     val currentPackageCost = packageCostStr.toDoubleOrNull() ?: originalPackageCost
@@ -1076,7 +1078,7 @@ private fun IngredientPurchaseRow(
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = if (currentPackageCost > 0)
-                                    "Q ${"%.2f".format(currentPackageCost)} / ${defaultFormat?.description ?: "paquete"}"
+                                    "Q ${currentPackageCost.fmt(2)} / ${defaultFormat?.description ?: "paquete"}"
                                 else "Sin precio",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = if (priceChanged) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
@@ -1084,7 +1086,7 @@ private fun IngredientPurchaseRow(
                             )
                             if (priceChanged) {
                                 Text(
-                                    text = "Antes: Q ${"%.2f".format(originalPackageCost)}",
+                                    text = "Antes: Q ${originalPackageCost.fmt(2)}",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.outline
                                 )
@@ -1092,7 +1094,7 @@ private fun IngredientPurchaseRow(
                         }
                         if (currentQty > 0 && currentPackageCost > 0) {
                             Text(
-                                text = "Q ${"%.2f".format(lineTotal)}",
+                                text = "Q ${lineTotal.fmt(2)}",
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary

@@ -9,6 +9,17 @@ data class ProductCharacteristics(
     val flavorProfile: String? = null
 )
 
+/** Ficha técnica de producción — parámetros para mantener estándar de calidad. */
+data class BakingTechnicalSheet(
+    val bakingTemperatureCelsius: Int? = null,
+    val bakingTimeMinutes: Int? = null,
+    val fermentationTimeHours: Double? = null,
+    val fermentationTemperatureCelsius: Int? = null,
+    val hydrationPercentage: Double? = null, // % de agua sobre harina
+    val shapingNotes: String? = null,
+    val bakingNotes: String? = null
+)
+
 data class Product(
     val id: String = "",
     val name: String = "",
@@ -17,15 +28,20 @@ data class Product(
     val imageUrl: String? = null,
     val active: Boolean = true,
     // Datos comerciales
-    val salePrice: Double = 0.0,        // Precio por unidad mínima, en Q
-    val unit: String = "",              // Descripción de unidad mínima (ej: "unidad", "tira de 6")
+    val salePrice: Double = 0.0,        // Precio por presentación, en Q
+    val unit: String = "",              // Presentación de venta (ej: "unidad", "tira de 6")
     // Datos físicos del ítem terminado
     val weightPerUnit: Double? = null,  // Peso por unidad en onzas
-    val rawWeightGrams: Double? = null, // Peso en crudo sin relleno (gramos)
+    val rawWeightGrams: Double? = null, // Peso en crudo (siempre en gramos)
+    val rawWeightUnit: String? = null,  // Preferencia de visualización: "g" o "oz"
     val shelfLife: Int? = null,         // Vida útil en días
     val storageType: String? = null,    // Tipo de almacenamiento
     // Organoléptico
     val characteristics: ProductCharacteristics = ProductCharacteristics(),
+    // Producción
+    val technicalSheet: BakingTechnicalSheet = BakingTechnicalSheet(),
+    // Adornos (preparaciones tipo DECORATION que se consumen al producir N unidades)
+    val decorations: List<ProductDecoration> = emptyList(),
     val notes: String? = null,
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L

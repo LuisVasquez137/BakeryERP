@@ -1,5 +1,6 @@
 package com.bakery.erp.presentation.expenses
 
+import com.bakery.erp.util.fmt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -252,17 +253,17 @@ fun ExpenseListScreen(
                     ) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Fijos:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("Q ${"%.2f".format(fixedTotal)}", style = MaterialTheme.typography.bodySmall)
+                            Text("Q ${fixedTotal.fmt(2)}", style = MaterialTheme.typography.bodySmall)
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Variables:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("Q ${"%.2f".format(variableTotal)}", style = MaterialTheme.typography.bodySmall)
+                            Text("Q ${variableTotal.fmt(2)}", style = MaterialTheme.typography.bodySmall)
                         }
                         HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Total:", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                             Text(
-                                "Q ${"%.2f".format(grandTotal)}",
+                                "Q ${grandTotal.fmt(2)}",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary
@@ -295,7 +296,7 @@ private fun ExpenseSectionHeader(title: String, total: Double, onManage: (() -> 
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (total > 0) {
                 Text(
-                    text = "Q ${"%.2f".format(total)}",
+                    text = "Q ${total.fmt(2)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -331,7 +332,7 @@ private fun FixedBudgetRow(item: FixedBudgetItem) {
             Text(item.category.label.take(20), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
         }
         Text(
-            text = "Q ${"%.2f".format(item.amount)}",
+            text = "Q ${item.amount.fmt(2)}",
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.error
@@ -424,7 +425,7 @@ private fun ExpenseListCard(expense: Expense, onClick: () -> Unit) {
 
             Spacer(Modifier.width(8.dp))
             Text(
-                text = "Q ${"%.2f".format(expense.amount)}",
+                text = "Q ${expense.amount.fmt(2)}",
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.error

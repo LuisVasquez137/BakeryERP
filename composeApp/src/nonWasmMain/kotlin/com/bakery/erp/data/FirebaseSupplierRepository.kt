@@ -1,4 +1,4 @@
-package com.bakery.erp.data
+﻿package com.bakery.erp.data
 
 import com.bakery.erp.domain.SupplierRepository
 import com.bakery.erp.model.Supplier
@@ -6,6 +6,7 @@ import dev.gitlive.firebase.firestore.DocumentSnapshot
 import dev.gitlive.firebase.firestore.FirebaseFirestore
 import dev.gitlive.firebase.firestore.Timestamp
 import dev.gitlive.firebase.firestore.toMilliseconds
+import kotlin.time.Clock
 
 class FirebaseSupplierRepository(
     private val firestore: FirebaseFirestore
@@ -33,7 +34,7 @@ class FirebaseSupplierRepository(
 
     // ── Serialization ────────────────────────────────────────────────────────
 
-    private fun Supplier.toMap(): Map<String, Any?> = mapOf(
+    private fun Supplier.toMap(): Map<String, Any?> = firestoreSafeOf(
         "id" to id,
         "company" to company,
         "salesperson" to salesperson,
@@ -41,8 +42,8 @@ class FirebaseSupplierRepository(
         "address" to address,
         "notes" to notes,
         "active" to active,
-        "createdAt" to if (createdAt == 0L) System.currentTimeMillis() else createdAt,
-        "updatedAt" to System.currentTimeMillis()
+        "createdAt" to if (createdAt == 0L) Clock.System.now().toEpochMilliseconds() else createdAt,
+        "updatedAt" to Clock.System.now().toEpochMilliseconds()
     )
 
     private fun DocumentSnapshot.toSupplier() = Supplier(

@@ -1,8 +1,11 @@
 package com.bakery.erp.presentation.products
 
+import com.bakery.erp.util.fmt
+import com.bakery.erp.util.gramsToOz
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -152,109 +155,186 @@ fun ProductDetailScreen(
 
 @Composable
 private fun ProductDetailContent(product: Product) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-    ) {
-        // Imagen grande en la parte superior
-        ProductImage(
-            imageUrl = product.imageUrl,
-            contentDescription = product.name,
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(16f / 9f)
-        )
-
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            // Nombre + badges
-            Text(
-                text = product.name,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold
-            )
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (product.category.isNotEmpty()) {
-                    CategoryBadge(product.category)
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val isWide = maxWidth >= 700.dp
+        if (isWide) {
+            Row(modifier = Modifier.fillMaxSize()) {
+                // Info izquierda (scrollable)
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(start = 24.dp, end = 16.dp, top = 24.dp, bottom = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    ProductInfoSection(product)
                 }
-                StatusBadge(product.active)
+                // Imagen derecha (fija)
+                Box(
+                    modifier = Modifier
+                        .width(400.dp)
+                        .fillMaxSize()
+                        .padding(start = 8.dp, end = 24.dp, top = 24.dp),
+                    contentAlignment = Alignment.TopCenter
+                ) {
+                    ProductImage(
+                        imageUrl = product.imageUrl,
+                        contentDescription = product.name,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(1f)
+                            .clip(RoundedCornerShape(16.dp))
+                    )
+                }
             }
-
-            Spacer(Modifier.height(8.dp))
-
-            if (product.description.isNotEmpty()) {
-                Text(
-                    text = product.description,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+            ) {
+                ProductImage(
+                    imageUrl = product.imageUrl,
+                    contentDescription = product.name,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(16f / 9f)
                 )
-                Spacer(Modifier.height(8.dp))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    ProductInfoSection(product)
+                }
             }
-
-            // ── Comercial ────────────────────────────────────────────────────
-            DetailSection("Datos Comerciales")
-
-            DetailRow(label = "Precio venta", value = "Q ${"%.2f".format(product.salePrice)}")
-            if (product.unit.isNotEmpty()) {
-                DetailRow(label = "Unidad mínima", value = product.unit)
-            }
-            DetailRow(
-                label = "Costo unitario",
-                value = "Calculado por el sistema",
-                valueColor = MaterialTheme.colorScheme.outline
-            )
-
-            // ── Datos del producto ───────────────────────────────────────────
-            val hasPhysicalData = product.weightPerUnit != null || product.rawWeightGrams != null || product.shelfLife != null || !product.storageType.isNullOrEmpty()
-            if (hasPhysicalData) {
-                Spacer(Modifier.height(4.dp))
-                DetailSection("Datos del Producto")
-                product.weightPerUnit?.let { DetailRow("Peso por unidad", "$it oz") }
-                product.rawWeightGrams?.let { DetailRow("Peso en crudo", "$it gr") }
-                product.shelfLife?.let { DetailRow("Vida útil", "$it días") }
-                product.storageType?.let { if (it.isNotEmpty()) DetailRow("Almacenamiento", it) }
-            }
-
-            // ── Características organolépticas ───────────────────────────────
-            val ch = product.characteristics
-            val hasCharacteristics = listOfNotNull(
-                ch.crustColor, ch.crumbColor, ch.texture, ch.shape, ch.aroma, ch.flavorProfile
-            ).any { it.isNotEmpty() }
-
-            if (hasCharacteristics) {
-                Spacer(Modifier.height(4.dp))
-                DetailSection("Características Organolépticas")
-                if (!ch.crustColor.isNullOrEmpty()) DetailRow("Color corteza", ch.crustColor)
-                if (!ch.crumbColor.isNullOrEmpty()) DetailRow("Color miga", ch.crumbColor)
-                if (!ch.texture.isNullOrEmpty()) DetailRow("Textura", ch.texture)
-                if (!ch.shape.isNullOrEmpty()) DetailRow("Forma", ch.shape)
-                if (!ch.aroma.isNullOrEmpty()) DetailRow("Aroma", ch.aroma)
-                if (!ch.flavorProfile.isNullOrEmpty()) DetailRow("Perfil de sabor", ch.flavorProfile)
-            }
-
-            // ── Notas ────────────────────────────────────────────────────────
-            if (!product.notes.isNullOrEmpty()) {
-                Spacer(Modifier.height(4.dp))
-                DetailSection("Notas")
-                Text(
-                    text = product.notes,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            Spacer(Modifier.height(24.dp))
         }
     }
+}
+
+@Composable
+private fun ProductInfoSection(product: Product) {
+    // Nombre + badges
+    Text(
+        text = product.name,
+        style = MaterialTheme.typography.headlineSmall,
+        fontWeight = FontWeight.Bold
+    )
+
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (product.category.isNotEmpty()) {
+            CategoryBadge(product.category)
+        }
+        StatusBadge(product.active)
+    }
+
+    Spacer(Modifier.height(8.dp))
+
+    if (product.description.isNotEmpty()) {
+        Text(
+            text = product.description,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(8.dp))
+    }
+
+    // ── Comercial ────────────────────────────────────────────────────
+    DetailSection("Datos Comerciales")
+
+    DetailRow(label = "Precio venta", value = "Q ${product.salePrice.fmt(2)}")
+    if (product.unit.isNotEmpty()) {
+        DetailRow(label = "Presentación", value = product.unit)
+    }
+    DetailRow(
+        label = "Costo unitario",
+        value = "Calculado por el sistema",
+        valueColor = MaterialTheme.colorScheme.outline
+    )
+
+    // ── Datos del producto ───────────────────────────────────────────
+    val hasPhysicalData = product.weightPerUnit != null || product.rawWeightGrams != null || product.shelfLife != null || !product.storageType.isNullOrEmpty()
+    if (hasPhysicalData) {
+        Spacer(Modifier.height(4.dp))
+        DetailSection("Datos del Producto")
+        product.weightPerUnit?.let { DetailRow("Peso por unidad", "${it.fmt(2)} oz") }
+        product.rawWeightGrams?.let { grams ->
+            val displayUnit = product.rawWeightUnit ?: "g"
+            val displayValue =
+                if (displayUnit == "oz") "${grams.gramsToOz().fmt(2)} oz"
+                else "${grams.fmt(0)} g"
+            DetailRow("Peso en crudo", displayValue)
+        }
+        product.shelfLife?.let { DetailRow("Vida útil", "$it días") }
+        product.storageType?.let { if (it.isNotEmpty()) DetailRow("Almacenamiento", it) }
+    }
+
+    // ── Adornos ──────────────────────────────────────────────────────
+    if (product.decorations.isNotEmpty()) {
+        Spacer(Modifier.height(4.dp))
+        DetailSection("Adornos")
+        product.decorations.forEach { deco ->
+            DetailRow(
+                label = deco.preparationName,
+                value = "${deco.gramsPerUnit.fmt(1)} g / unidad"
+            )
+        }
+    }
+
+    // ── Características organolépticas ───────────────────────────────
+    val ch = product.characteristics
+    val hasCharacteristics = listOfNotNull(
+        ch.crustColor, ch.crumbColor, ch.texture, ch.shape, ch.aroma, ch.flavorProfile
+    ).any { it.isNotEmpty() }
+
+    if (hasCharacteristics) {
+        Spacer(Modifier.height(4.dp))
+        DetailSection("Características Organolépticas")
+        if (!ch.crustColor.isNullOrEmpty()) DetailRow("Color corteza", ch.crustColor)
+        if (!ch.crumbColor.isNullOrEmpty()) DetailRow("Color miga", ch.crumbColor)
+        if (!ch.texture.isNullOrEmpty()) DetailRow("Textura", ch.texture)
+        if (!ch.shape.isNullOrEmpty()) DetailRow("Forma", ch.shape)
+        if (!ch.aroma.isNullOrEmpty()) DetailRow("Aroma", ch.aroma)
+        if (!ch.flavorProfile.isNullOrEmpty()) DetailRow("Perfil de sabor", ch.flavorProfile)
+    }
+
+    // ── Ficha técnica de producción ──────────────────────────────────
+    val ts = product.technicalSheet
+    val hasTechnicalSheet = listOfNotNull(
+        ts.bakingTemperatureCelsius, ts.bakingTimeMinutes,
+        ts.fermentationTimeHours, ts.fermentationTemperatureCelsius,
+        ts.hydrationPercentage
+    ).isNotEmpty() || !ts.shapingNotes.isNullOrEmpty() || !ts.bakingNotes.isNullOrEmpty()
+
+    if (hasTechnicalSheet) {
+        Spacer(Modifier.height(4.dp))
+        DetailSection("Ficha Técnica de Producción")
+        ts.bakingTemperatureCelsius?.let { DetailRow("Temperatura horneado", "$it °C") }
+        ts.bakingTimeMinutes?.let { DetailRow("Tiempo horneado", "$it min") }
+        ts.fermentationTimeHours?.let { DetailRow("Tiempo fermentación", "${it.fmt(1)} h") }
+        ts.fermentationTemperatureCelsius?.let { DetailRow("Temperatura fermentación", "$it °C") }
+        ts.hydrationPercentage?.let { DetailRow("Hidratación", "${it.fmt(1)} %") }
+        if (!ts.shapingNotes.isNullOrEmpty()) DetailRow("Formado", ts.shapingNotes)
+        if (!ts.bakingNotes.isNullOrEmpty()) DetailRow("Notas técnicas", ts.bakingNotes)
+    }
+
+    // ── Notas ────────────────────────────────────────────────────────
+    if (!product.notes.isNullOrEmpty()) {
+        Spacer(Modifier.height(4.dp))
+        DetailSection("Notas")
+        Text(
+            text = product.notes,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+
+    Spacer(Modifier.height(24.dp))
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

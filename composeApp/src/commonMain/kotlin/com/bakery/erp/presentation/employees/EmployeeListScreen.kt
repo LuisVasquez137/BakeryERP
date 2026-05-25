@@ -20,10 +20,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Clear
@@ -36,6 +38,8 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Store
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -62,6 +66,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -71,6 +76,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.Employee
 import com.bakery.erp.presentation.auth.AuthViewModel
+import com.bakery.erp.ui.ProductImage
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -78,6 +84,7 @@ fun EmployeeListScreen(
     onNavigateBack: () -> Unit,
     onNavigateToDetail: (String) -> Unit,
     onNavigateToForm: (String?) -> Unit,
+    onNavigateToJobPositions: () -> Unit = {},
     authViewModel: AuthViewModel,
     viewModel: EmployeeViewModel
 ) {
@@ -101,7 +108,7 @@ fun EmployeeListScreen(
             .filter {
                 q.isBlank() ||
                 it.name.contains(q, ignoreCase = true) ||
-                it.position.contains(q, ignoreCase = true) ||
+                it.positionTitle.contains(q, ignoreCase = true) ||
                 it.phone.contains(q, ignoreCase = true) ||
                 it.branchName.contains(q, ignoreCase = true)
             }
@@ -118,8 +125,13 @@ fun EmployeeListScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Volver")
                     }
                 },
+                actions = {
+                    TextButton(onClick = onNavigateToJobPositions) {
+                        Text("Puestos", color = Color.White)
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF123456),
+                    containerColor = Color(0xFF004F7C),
                     titleContentColor = Color.White,
                     navigationIconContentColor = Color.White
                 )
@@ -128,7 +140,7 @@ fun EmployeeListScreen(
         floatingActionButton = {
             FloatingActionButton(
                 onClick = { onNavigateToForm(null) },
-                containerColor = Color(0xFF123456)
+                containerColor = Color(0xFF004F7C)
             ) { Icon(Icons.Default.Add, "Nuevo colaborador", tint = Color.White) }
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -255,7 +267,8 @@ fun EmployeeListScreen(
                                     )
                                     state.selectedEmployee != null -> EmployeeDetailContent(
                                         employee = state.selectedEmployee!!,
-                                        onEdit = { onNavigateToForm(state.selectedEmployee!!.id) }
+                                        onEdit = { onNavigateToForm(state.selectedEmployee!!.id) },
+                                        onFullDetail = { onNavigateToDetail(state.selectedEmployee!!.id) }
                                     )
                                     else -> Text(
                                         "Selecciona un colaborador para ver el detalle",
@@ -336,6 +349,7 @@ fun EmployeeListScreen(
 internal fun EmployeeDetailContent(
     employee: Employee,
     onEdit: () -> Unit,
+    onFullDetail: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -355,20 +369,25 @@ internal fun EmployeeDetailContent(
                     employee.name,
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFF123456)
+                    color = Color(0xFF004F7C)
                 )
-                if (employee.position.isNotEmpty()) {
+                if (employee.positionTitle.isNotEmpty()) {
                     Text(
-                        employee.position,
+                        employee.positionTitle,
                         style = MaterialTheme.typography.titleSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
-            Button(
-                onClick = onEdit,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF123456))
-            ) { Text("Editar") }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (onFullDetail != null) {
+                    OutlinedButton(onClick = onFullDetail) { Text("Ver detalle") }
+                }
+                Button(
+                    onClick = onEdit,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF004F7C))
+                ) { Text("Editar") }
+            }
         }
 
         HorizontalDivider()
@@ -403,7 +422,7 @@ private fun EmployeeDetailRow(icon: ImageVector, label: String, value: String) {
         verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Icon(icon, null, modifier = Modifier.size(20.dp).padding(top = 2.dp), tint = Color(0xFF123456))
+        Icon(icon, null, modifier = Modifier.size(20.dp).padding(top = 2.dp), tint = Color(0xFF004F7C))
         Column {
             Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
             Text(value, style = MaterialTheme.typography.bodyMedium)
@@ -421,62 +440,83 @@ private fun EmployeeCard(employee: Employee, onClick: () -> Unit) {
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
         shape = RoundedCornerShape(12.dp)
     ) {
-        Column(modifier = Modifier.padding(14.dp).fillMaxWidth()) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        employee.name,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+        Row(
+            modifier = Modifier.padding(12.dp).fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Foto circular
+            if (employee.photoUrl.isNotBlank()) {
+                Box(modifier = Modifier.size(48.dp).clip(CircleShape)) {
+                    ProductImage(
+                        imageUrl = employee.photoUrl,
+                        contentDescription = employee.name,
+                        modifier = Modifier.size(48.dp)
                     )
-                    if (employee.position.isNotEmpty()) {
-                        Text(
-                            employee.position,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
                 }
-                if (employee.branchName.isNotEmpty()) {
-                    Surface(
-                        shape = RoundedCornerShape(50),
-                        color = MaterialTheme.colorScheme.primaryContainer
-                    ) {
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF004F7C).copy(alpha = 0.10f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.AccountCircle, null, modifier = Modifier.size(32.dp), tint = Color(0xFF004F7C).copy(alpha = 0.5f))
+                }
+            }
+
+            // Nombre, puesto y teléfono
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 6.dp)) {
                         Text(
-                            employee.branchName,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                            employee.name,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        if (employee.positionTitle.isNotEmpty()) {
+                            Text(
+                                employee.positionTitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                    if (employee.branchName.isNotEmpty()) {
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.primaryContainer
+                        ) {
+                            Text(
+                                employee.branchName,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                 }
-            }
-            if (employee.phone.isNotEmpty()) {
-                Spacer(Modifier.height(6.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Phone,
-                        null,
-                        modifier = Modifier.size(14.dp),
-                        tint = MaterialTheme.colorScheme.outline
-                    )
-                    Text(
-                        employee.phone,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline
-                    )
+                if (employee.phone.isNotEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(Icons.Default.Phone, null, modifier = Modifier.size(12.dp), tint = MaterialTheme.colorScheme.outline)
+                        Text(employee.phone, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    }
                 }
             }
         }
@@ -509,17 +549,35 @@ private fun EmployeeTableRow(employee: Employee, isSelected: Boolean, onClick: (
                 else Color.Transparent
             )
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            employee.name,
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+        // Foto + nombre en primera columna
+        Row(
             modifier = Modifier.weight(0.3f),
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
-        )
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (employee.photoUrl.isNotBlank()) {
+                Box(modifier = Modifier.size(32.dp).clip(CircleShape)) {
+                    ProductImage(imageUrl = employee.photoUrl, contentDescription = null, modifier = Modifier.size(32.dp))
+                }
+            } else {
+                Box(
+                    modifier = Modifier.size(32.dp).clip(CircleShape).background(Color(0xFF004F7C).copy(alpha = 0.10f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.AccountCircle, null, modifier = Modifier.size(20.dp), tint = Color(0xFF004F7C).copy(alpha = 0.5f))
+                }
+            }
+            Text(
+                employee.name,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
         Text(
             employee.phone.ifEmpty { "—" },
             style = MaterialTheme.typography.bodySmall,
@@ -529,7 +587,7 @@ private fun EmployeeTableRow(employee: Employee, isSelected: Boolean, onClick: (
             overflow = TextOverflow.Ellipsis
         )
         Text(
-            employee.position.ifEmpty { "—" },
+            employee.positionTitle.ifEmpty { "—" },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(0.25f),

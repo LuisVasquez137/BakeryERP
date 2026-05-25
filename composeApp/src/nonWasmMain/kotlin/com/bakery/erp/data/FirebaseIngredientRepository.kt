@@ -1,4 +1,4 @@
-package com.bakery.erp.data
+﻿package com.bakery.erp.data
 
 import com.bakery.erp.domain.IngredientRepository
 import com.bakery.erp.model.BranchStock
@@ -9,6 +9,7 @@ import dev.gitlive.firebase.firestore.DocumentSnapshot
 import dev.gitlive.firebase.firestore.FirebaseFirestore
 import dev.gitlive.firebase.firestore.Timestamp
 import dev.gitlive.firebase.firestore.toMilliseconds
+import kotlin.time.Clock
 
 /**
  * Los formatos de compra se guardan en una subcollección separada para evitar
@@ -111,14 +112,14 @@ class FirebaseIngredientRepository(
         val stockDoc = branchStocksCol(companyId).document(docId)
         val existing = runCatching { stockDoc.get().get<Double?>("currentStock") }.getOrNull() ?: 0.0
         val newStock = (existing + delta).coerceAtLeast(0.0)
-        stockDoc.set(mapOf(
+        stockDoc.set(firestoreSafeOf(
             "id" to docId,
             "branchId" to branchId,
             "branchName" to branchName,
             "ingredientId" to ingredientId,
             "ingredientName" to ingredientName,
             "currentStock" to newStock,
-            "updatedAt" to System.currentTimeMillis()
+            "updatedAt" to Clock.System.now().toEpochMilliseconds()
         ))
     }
 
@@ -154,7 +155,7 @@ class FirebaseIngredientRepository(
 
     // ── Serialización ────────────────────────────────────────────────────────
 
-    private fun Ingredient.toMap(): Map<String, Any?> = mapOf(
+    private fun Ingredient.toMap(): Map<String, Any?> = firestoreSafeOf(
         "id" to id,
         "name" to name,
         "category" to category,
@@ -162,12 +163,12 @@ class FirebaseIngredientRepository(
         "stockAlert" to stockAlert,
         "notes" to notes,
         "active" to active,
-        "createdAt" to if (createdAt == 0L) System.currentTimeMillis() else createdAt,
-        "updatedAt" to System.currentTimeMillis()
+        "createdAt" to if (createdAt == 0L) Clock.System.now().toEpochMilliseconds() else createdAt,
+        "updatedAt" to Clock.System.now().toEpochMilliseconds()
         // purchaseFormats NO se guarda aquí — usa subcollección
     )
 
-    private fun PurchaseFormat.toMap(): Map<String, Any?> = mapOf(
+    private fun PurchaseFormat.toMap(): Map<String, Any?> = firestoreSafeOf(
         "id" to id,
         "description" to description,
         "unit" to unit,
@@ -222,7 +223,7 @@ class FirebaseIngredientRepository(
         updatedAt = readTimestampAsMillis("updatedAt")
     )
 
-    private fun StockMovement.toMovementMap(): Map<String, Any?> = mapOf(
+    private fun StockMovement.toMovementMap(): Map<String, Any?> = firestoreSafeOf(
         "id" to id,
         "type" to type,
         "quantity" to quantity,

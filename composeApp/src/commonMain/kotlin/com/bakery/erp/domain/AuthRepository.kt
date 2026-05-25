@@ -1,5 +1,6 @@
 package com.bakery.erp.domain
 
+import com.bakery.erp.model.Organization
 import com.bakery.erp.model.User
 import com.bakery.erp.model.UserRole
 import kotlinx.coroutines.flow.Flow
@@ -39,6 +40,8 @@ interface AuthRepository {
     suspend fun signOut()
     suspend fun getCurrentUser(): User?
     suspend fun getOrgInviteCode(): Result<String>
+    /** Devuelve el documento Organization (nombre comercial, plan, etc.) por id. */
+    suspend fun getOrganization(orgId: String): Result<Organization>
     suspend fun getUsersForOrg(orgId: String): List<User>
     suspend fun updateUserAccess(userId: String, branchIds: List<String>, permissions: List<String>): Result<Unit>
 }

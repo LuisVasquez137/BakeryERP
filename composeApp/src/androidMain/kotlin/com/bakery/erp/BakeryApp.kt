@@ -1,6 +1,7 @@
 package com.bakery.erp
 
 import android.app.Application
+import com.bakery.erp.data.CurrentActivityHolder
 import com.bakery.erp.di.androidModule
 import com.bakery.erp.di.appModule
 import com.bakery.erp.di.initializePlatform
@@ -11,6 +12,7 @@ class BakeryApp : Application() {
     override fun onCreate() {
         super.onCreate()
         initializePlatform()
+        CurrentActivityHolder.registerWith(this)
         startKoin {
             androidContext(this@BakeryApp)
             // androidModule va DESPUÉS para sobreescribir el GoogleAuthHandler stub
