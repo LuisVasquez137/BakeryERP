@@ -4,5 +4,7 @@ enum class UserRole {
     OWNER,
     ADMIN,
     MANAGER,
-    EMPLOYEE
+    EMPLOYEE,
+    /** Tienda revendedora con login propio. Sólo ve sus pedidos y precios mayoristas. */
+    RESELLER
 }

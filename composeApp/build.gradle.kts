@@ -76,6 +76,7 @@ kotlin {
             implementation(libs.androidx.credentials.play.services)
             implementation(libs.googleid)
             implementation("androidx.biometric:biometric:1.1.0")
+            implementation("androidx.core:core-splashscreen:1.0.1")
         }
         commonMain.dependencies {
             implementation(libs.compose.runtime)

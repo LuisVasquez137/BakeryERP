@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.production
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -136,6 +138,15 @@ fun ProductionOrderFormScreen(
         if (state.isSaved) { viewModel.resetOrderForm(); onNavigateBack() }
     }
 
+    // Cargar pedidos de revendedor pendientes cuando cambie la sucursal vendedora o la fecha.
+    LaunchedEffect(selectedSellingBranchId, targetDate, isEdit) {
+        if (!isEdit && !selectedSellingBranchId.isNullOrEmpty()) {
+            viewModel.loadPendingCustomerOrdersForSelling(
+                companyId, selectedSellingBranchId!!, targetDate
+            )
+        }
+    }
+
     LaunchedEffect(state.error) {
         state.error?.let { snackbarHostState.showSnackbar(it); viewModel.clearError() }
     }
@@ -216,7 +227,7 @@ fun ProductionOrderFormScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF123456),
+                    containerColor = Color(0xFF005B8D),
                     titleContentColor = Color.White,
                     navigationIconContentColor = Color.White
                 )
@@ -287,9 +298,36 @@ fun ProductionOrderFormScreen(
                 onConfirm = {
                     if (state.draftOrderLines.isEmpty()) return@OrderFormStep2
                     step = 3
+                },
+                resellerPanel = {
+                    if (state.pendingCustomerOrdersForSelling.isNotEmpty()) {
+                        ResellerOrdersPanel(
+                            orders = state.pendingCustomerOrdersForSelling,
+                            linesByOrder = state.pendingCustomerOrderLinesByOrder,
+                            selectedLineIds = state.selectedCustomerLineIds,
+                            producingBranch = selectedProducingBranch,
+                            allProducingBranches = state.producingBranches,
+                            onSetSelectedLines = { coId, newSelectedLineIds ->
+                                viewModel.setSelectedCustomerLinesForOrder(coId, newSelectedLineIds)
+                            }
+                        )
+                    }
                 }
             )
-            else -> OrderReviewStep(
+            else -> {
+                // Merge en vivo: para el review necesitamos ver las líneas combinadas
+                // (cantidad manual + cantidades de revendedores seleccionados) con sus
+                // customerLineRefs. El merge real se hace dentro de saveOrder, pero acá
+                // hacemos un preview idéntico para que la encargada vea el desglose.
+                val mergedReviewLines = remember(
+                    state.draftOrderLines,
+                    state.selectedCustomerLineIds,
+                    state.pendingCustomerOrderLinesByOrder,
+                    state.pendingCustomerOrdersForSelling
+                ) {
+                    buildMergedReviewLines(state)
+                }
+                OrderReviewStep(
                 modifier = Modifier.padding(padding),
                 isEdit = isEdit,
                 sellingBranchName = if (isEdit) state.selectedOrder?.sellingBranchName.orEmpty()
@@ -299,7 +337,7 @@ fun ProductionOrderFormScreen(
                 shiftName = selectedShift?.name.orEmpty(),
                 dateMillis = targetDate,
                 notes = notesText,
-                lines = state.draftOrderLines,
+                lines = mergedReviewLines,
                 isLoading = state.isLoading,
                 onBack = { step = 2 },
                 onSend = {
@@ -317,8 +355,61 @@ fun ProductionOrderFormScreen(
                     }
                 }
             )
+            }
         }
     }
+}
+
+/**
+ * Construye las líneas combinadas para mostrar en el step 3 (review): toma las
+ * cantidades manuales de la encargada (`draftOrderLines`) y les suma las líneas
+ * de revendedor seleccionadas, agrupando por productId y persistiendo el
+ * `customerLineRefs` por desglose. Es el MISMO algoritmo que usa `saveOrder`.
+ */
+private fun buildMergedReviewLines(
+    state: ProductionUiState
+): List<ProductionOrderLine> {
+    val coLinesById = state.pendingCustomerOrderLinesByOrder.values.flatten()
+        .associateBy { it.id }
+    val coNamesById = state.pendingCustomerOrdersForSelling
+        .associate { it.id to it.customerName }
+    val coIdByLineId: Map<String, String> = buildMap {
+        state.pendingCustomerOrderLinesByOrder.forEach { (coId, ls) ->
+            ls.forEach { l -> put(l.id, coId) }
+        }
+    }
+
+    val merged = state.draftOrderLines.toMutableList()
+    state.selectedCustomerLineIds.forEach { coLineId ->
+        val coLine = coLinesById[coLineId] ?: return@forEach
+        if (!coLine.requiresProduction) return@forEach
+        val coId = coIdByLineId[coLineId] ?: return@forEach
+        val ref = com.bakery.erp.model.CustomerLineRef(
+            customerOrderId = coId,
+            customerName = coNamesById[coId] ?: "",
+            customerOrderLineId = coLineId,
+            quantity = coLine.requestedQuantity,
+            customSpec = coLine.customSpec
+        )
+        val idx = merged.indexOfFirst { it.productId == coLine.productId }
+        if (idx >= 0) {
+            val existing = merged[idx]
+            merged[idx] = existing.copy(
+                requestedQuantity = existing.requestedQuantity + coLine.requestedQuantity,
+                customerLineRefs = existing.customerLineRefs + ref
+            )
+        } else {
+            merged += ProductionOrderLine(
+                id = "",
+                productId = coLine.productId,
+                productName = coLine.productName,
+                requestedQuantity = coLine.requestedQuantity,
+                productUnit = coLine.productUnit,
+                customerLineRefs = listOf(ref)
+            )
+        }
+    }
+    return merged
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -355,7 +446,7 @@ private fun OrderFormStep1(
     ) {
         when {
             singleSellingBranch -> {
-                Text("Pedido desde", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color(0xFF123456))
+                Text("Pedido desde", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color(0xFF005B8D))
                 Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
@@ -364,13 +455,13 @@ private fun OrderFormStep1(
                         Text(
                             selectedSellingBranch?.name ?: sellingBranches.firstOrNull()?.name ?: "",
                             fontWeight = FontWeight.SemiBold,
-                            color = Color(0xFF123456)
+                            color = Color(0xFF005B8D)
                         )
                     }
                 }
             }
             sellingBranches.size > 1 -> {
-                Text("¿Desde qué sucursal?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color(0xFF123456))
+                Text("¿Desde qué sucursal?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color(0xFF005B8D))
                 ExposedDropdownMenuBox(
                     expanded = sellingBranchDropdownExpanded,
                     onExpandedChange = onSellingBranchDropdownToggle
@@ -398,7 +489,7 @@ private fun OrderFormStep1(
             }
         }
 
-        Text("¿A qué planta va el pedido?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color(0xFF123456))
+        Text("¿A qué planta va el pedido?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color(0xFF005B8D))
 
         ExposedDropdownMenuBox(
             expanded = branchDropdownExpanded,
@@ -434,7 +525,7 @@ private fun OrderFormStep1(
         )
 
         Spacer(Modifier.height(8.dp))
-        Text("¿Para qué fecha?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color(0xFF123456))
+        Text("¿Para qué fecha?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color(0xFF005B8D))
 
         Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
             Row(
@@ -448,7 +539,7 @@ private fun OrderFormStep1(
                 Text(
                     formatDate(targetDate),
                     fontWeight = FontWeight.SemiBold,
-                    color = Color(0xFF123456),
+                    color = Color(0xFF005B8D),
                     style = MaterialTheme.typography.titleMedium
                 )
                 IconButton(onClick = { onDateChange(targetDate + 86_400_000L) }) {
@@ -471,7 +562,7 @@ private fun OrderFormStep1(
         Button(
             onClick = onNext,
             modifier = Modifier.fillMaxWidth().height(52.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF123456)),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF005B8D)),
             enabled = selectedProducingBranch != null && selectedSellingBranch != null && !shiftRequired
         ) {
             Text(
@@ -495,7 +586,7 @@ private fun ShiftSelector(
     if (!visible) return
     if (shifts.isEmpty()) return
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("¿Para qué turno?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color(0xFF123456))
+        Text("¿Para qué turno?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color(0xFF005B8D))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             shifts.forEach { shift ->
                 val selected = selectedShift?.id == shift.id
@@ -514,7 +605,7 @@ private fun ShiftSelector(
                         }
                     },
                     colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = Color(0xFF123456),
+                        selectedContainerColor = Color(0xFF005B8D),
                         selectedLabelColor = Color.White
                     )
                 )
@@ -541,7 +632,10 @@ private fun OrderFormStep2(
     draftLines: List<ProductionOrderLine>,
     onLineChanged: (ProductionOrderLine) -> Unit,
     isLoading: Boolean,
-    onConfirm: () -> Unit
+    onConfirm: () -> Unit,
+    /** Panel opcional renderizado encima del editor de líneas. Usado para mostrar
+     *  pedidos de revendedores pendientes que la encargada puede incluir. */
+    resellerPanel: @Composable () -> Unit = {}
 ) {
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         // En edición + pantalla ancha: dos columnas (info izquierda, productos derecha).
@@ -563,7 +657,7 @@ private fun OrderFormStep2(
                         Text(
                             "$headerSellingBranchName → $headerProducingBranchName",
                             fontWeight = FontWeight.SemiBold,
-                            color = Color(0xFF123456)
+                            color = Color(0xFF005B8D)
                         )
                         Text(
                             "Para el ${formatDate(headerDateMillis)}",
@@ -574,7 +668,7 @@ private fun OrderFormStep2(
                             "Sucursal origen, planta y fecha no se editan. Si te equivocaste, " +
                                 "cancela y crea uno nuevo.",
                             style = MaterialTheme.typography.labelSmall,
-                            color = Color(0xFFCC5500)
+                            color = Color(0xFFD9A441)
                         )
                     }
                 }
@@ -599,6 +693,8 @@ private fun OrderFormStep2(
         @Composable
         fun ProductsSection(modifier: Modifier = Modifier) {
             Column(modifier = modifier) {
+                // Panel de pedidos de revendedores pendientes (si los hay).
+                resellerPanel()
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = onSearchChange,
@@ -611,7 +707,7 @@ private fun OrderFormStep2(
                     Text(
                         "$totalItems unidades en el pedido",
                         style = MaterialTheme.typography.labelMedium,
-                        color = Color(0xFFCC5500),
+                        color = Color(0xFFD9A441),
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(bottom = 4.dp)
                     )
@@ -643,7 +739,7 @@ private fun OrderFormStep2(
                 Button(
                     onClick = onConfirm,
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(52.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF123456)),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF005B8D)),
                     enabled = draftLines.isNotEmpty() && !isLoading
                 ) {
                     Text(
@@ -724,13 +820,13 @@ private fun OrderReviewStep(
                     Text(
                         "⚠",
                         style = MaterialTheme.typography.titleLarge,
-                        color = Color(0xFFCC5500)
+                        color = Color(0xFFD9A441)
                     )
                     Text(
                         "Revisa bien tu pedido antes de enviarlo. Una vez enviado, " +
                             "la planta productora podrá tomarlo y modificarlo será limitado.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF7A4500),
+                        color = Color(0xFF8A6420),
                         fontWeight = FontWeight.Medium
                     )
                 }
@@ -746,7 +842,7 @@ private fun OrderReviewStep(
                         "Resumen del pedido",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFF123456)
+                        color = Color(0xFF005B8D)
                     )
                     HorizontalDivider()
                     ReviewRow("Sucursal solicitante", sellingBranchName.ifBlank { "—" })
@@ -772,7 +868,7 @@ private fun OrderReviewStep(
                             "Productos (${lines.size})",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF123456)
+                            color = Color(0xFF005B8D)
                         )
                         val totalUnits = lines.sumOf { it.requestedQuantity }.toInt()
                         Surface(
@@ -784,12 +880,14 @@ private fun OrderReviewStep(
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = Color(0xFF123456)
+                                color = Color(0xFF005B8D)
                             )
                         }
                     }
                     HorizontalDivider()
                     lines.forEachIndexed { index, line ->
+                        val resellerQty = line.customerLineRefs.sumOf { it.quantity }
+                        val ownQty = (line.requestedQuantity - resellerQty).coerceAtLeast(0.0)
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -799,7 +897,7 @@ private fun OrderReviewStep(
                                 Text(
                                     line.productName,
                                     fontWeight = FontWeight.SemiBold,
-                                    color = Color(0xFF123456),
+                                    color = Color(0xFF005B8D),
                                     style = MaterialTheme.typography.bodyMedium
                                 )
                                 if (line.productUnit.isNotBlank()) {
@@ -809,16 +907,86 @@ private fun OrderReviewStep(
                                         color = Color.Gray
                                     )
                                 }
+                                if (line.customerLineRefs.isNotEmpty()) {
+                                    Text(
+                                        "Tuyo: ${ownQty.toInt()}  +  Revendedores: ${resellerQty.toInt()}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color(0xFFD9A441),
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
                             }
                             Text(
                                 "${line.requestedQuantity.toInt()}",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.ExtraBold,
-                                color = Color(0xFFCC5500)
+                                color = Color(0xFFD9A441)
                             )
                         }
                         if (index < lines.lastIndex) {
                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                        }
+                    }
+                }
+            }
+
+            // Desglose por revendedor (si hay).
+            val resellerRefs = lines.flatMap { line ->
+                line.customerLineRefs.map { ref -> ref to line }
+            }
+            if (resellerRefs.isNotEmpty()) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8E1)),
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, Color(0xFFFFE0B2))
+                ) {
+                    Column(
+                        Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            "Sumado de revendedores",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFD9A441)
+                        )
+                        HorizontalDivider()
+                        val byCustomer = resellerRefs.groupBy { it.first.customerName }
+                        byCustomer.forEach { (name, refs) ->
+                            Text(
+                                name.ifEmpty { "Revendedor" },
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF005B8D),
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                            refs.forEach { (ref, line) ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth()
+                                        .padding(start = 12.dp, top = 2.dp, bottom = 2.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        line.productName,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFF424242)
+                                    )
+                                    Text(
+                                        "${ref.quantity.toInt()} ${line.productUnit}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFFD9A441),
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                                if (ref.customSpec.isNotEmpty()) {
+                                    Text(
+                                        "✱ ${ref.customSpec}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color(0xFFD9A441),
+                                        modifier = Modifier.padding(start = 12.dp)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -835,7 +1003,7 @@ private fun OrderReviewStep(
                     onClick = onBack,
                     enabled = !isLoading,
                     modifier = Modifier.weight(1f).height(52.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF123456))
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF005B8D))
                 ) {
                     Text(
                         if (isEdit) "Editar cambios" else "Editar pedido",
@@ -846,7 +1014,7 @@ private fun OrderReviewStep(
                     onClick = onSend,
                     enabled = !isLoading && lines.isNotEmpty(),
                     modifier = Modifier.weight(1.3f).height(52.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF123456))
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF005B8D))
                 ) {
                     if (isLoading) {
                         CircularProgressIndicator(
@@ -884,7 +1052,7 @@ private fun ReviewRow(label: String, value: String) {
             value,
             style = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.SemiBold,
-            color = Color(0xFF123456)
+            color = Color(0xFF005B8D)
         )
     }
 }
@@ -906,7 +1074,7 @@ private fun ProductOrderRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
-                Text(product.name, fontWeight = FontWeight.SemiBold, color = Color(0xFF123456))
+                Text(product.name, fontWeight = FontWeight.SemiBold, color = Color(0xFF005B8D))
                 Text(product.unit, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
             }
             Spacer(Modifier.width(8.dp))
@@ -948,5 +1116,296 @@ internal fun formatDate(millis: Long): String {
             else                                 -> ""
         }
         "$dayName ${ldt.dayOfMonth.toString().padStart(2,'0')}/${ldt.monthNumber.toString().padStart(2,'0')}/${ldt.year}"
+    }.getOrElse { "—" }
+}
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun ResellerOrdersPanel(
+    orders: List<com.bakery.erp.model.CustomerOrder>,
+    linesByOrder: Map<String, List<com.bakery.erp.model.CustomerOrderLine>>,
+    selectedLineIds: Set<String>,
+    producingBranch: com.bakery.erp.model.Branch?,
+    allProducingBranches: List<com.bakery.erp.model.Branch>,
+    onSetSelectedLines: (orderId: String, newSelectedLineIds: Set<String>) -> Unit
+) {
+    val primary = Color(0xFFD9A441)
+    val border = Color(0xFFFFE0B2)
+    var openOrderId by remember { mutableStateOf<String?>(null) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8E1)),
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, border)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                "Pedidos pendientes de revendedores (${orders.size})",
+                style = MaterialTheme.typography.titleSmall,
+                color = primary,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Tus revendedores ya pidieron para esta fecha. " +
+                    "Toca cada uno para elegir qué productos sumar a este pedido.",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFF6E6E6E)
+            )
+            Spacer(Modifier.height(8.dp))
+            orders.forEach { order ->
+                val lines = linesByOrder[order.id].orEmpty()
+                val selectedCount = lines.count { it.id in selectedLineIds }
+                val totalAssignable = lines.count { it.requiresProduction }
+
+                Surface(
+                    color = Color.White,
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(
+                        1.dp,
+                        if (selectedCount > 0) primary else Color(0xFFE0E0E0)
+                    ),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "🏪 ${order.customerName.ifEmpty { "Revendedor" }}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = Color(0xFF005B8D),
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    "$totalAssignable productos pendientes" +
+                                        (order.deliveryTime.takeIf { it.isNotEmpty() }
+                                            ?.let { " · $it" } ?: ""),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color(0xFF6E6E6E)
+                                )
+                            }
+                            if (selectedCount > 0) {
+                                Surface(
+                                    color = primary,
+                                    shape = RoundedCornerShape(50),
+                                    modifier = Modifier
+                                ) {
+                                    Text(
+                                        "$selectedCount/$totalAssignable",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = { openOrderId = order.id },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                if (selectedCount > 0)
+                                    "Ver / editar productos asignados"
+                                else "Ver productos para asignar a esta planta",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = primary
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Modal de líneas del CO abierto
+    val openOrder = openOrderId?.let { id -> orders.firstOrNull { it.id == id } }
+    if (openOrder != null) {
+        val lines = linesByOrder[openOrder.id].orEmpty()
+        CustomerOrderLinesBottomSheet(
+            customerName = openOrder.customerName,
+            deliveryBranchName = openOrder.deliveryBranchName,
+            deliveryDate = openOrder.deliveryDate,
+            deliveryTime = openOrder.deliveryTime,
+            lines = lines,
+            producingBranch = producingBranch,
+            allProducingBranches = allProducingBranches,
+            initialSelectedLineIds = lines.map { it.id }.filter { it in selectedLineIds }.toSet(),
+            onDismiss = { openOrderId = null },
+            onConfirm = { newSel ->
+                onSetSelectedLines(openOrder.id, newSel)
+                openOrderId = null
+            }
+        )
+    }
+}
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun CustomerOrderLinesBottomSheet(
+    customerName: String,
+    deliveryBranchName: String,
+    deliveryDate: Long,
+    deliveryTime: String,
+    lines: List<com.bakery.erp.model.CustomerOrderLine>,
+    /** Planta de destino del PO (donde se va a producir lo seleccionado). */
+    producingBranch: com.bakery.erp.model.Branch?,
+    /** TODAS las plantas con CAN_PRODUCE, para mostrar "Se produce en: Calvario, Bombero". */
+    allProducingBranches: List<com.bakery.erp.model.Branch>,
+    initialSelectedLineIds: Set<String>,
+    onDismiss: () -> Unit,
+    onConfirm: (newSelectedLineIds: Set<String>) -> Unit
+) {
+    val primary = Color(0xFFD9A441)
+    var localSelected by remember(initialSelectedLineIds) {
+        mutableStateOf(initialSelectedLineIds)
+    }
+    // Una línea es "compatible" si la planta de destino tiene el producto en su
+    // `assignedProductIds` (configurado desde el módulo de Sucursales).
+    //  - Si la planta tiene el producto asignado → compatible.
+    //  - Si la planta tiene `assignedProductIds` vacío → compatible (sin restricción).
+    //  - Si la planta tiene productos pero NO este → incompatible.
+    fun isCompatible(line: com.bakery.erp.model.CustomerOrderLine): Boolean {
+        if (!line.requiresProduction) return false
+        val branch = producingBranch ?: return true
+        return branch.assignedProductIds.isEmpty() ||
+            line.productId in branch.assignedProductIds
+    }
+
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = Color.White
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+        ) {
+            Text(
+                "Pedido de $customerName",
+                style = MaterialTheme.typography.titleMedium,
+                color = Color(0xFF005B8D),
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                "Para ${deliveryBranchName.ifEmpty { "—" }} · " +
+                    formatRequestedDay(deliveryDate) +
+                    (deliveryTime.takeIf { it.isNotEmpty() }?.let { " · $it" } ?: ""),
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFF6E6E6E)
+            )
+            Spacer(Modifier.height(12.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(8.dp))
+
+            // Línea por línea
+            lines.forEach { line ->
+                val compatible = isCompatible(line)
+                val checked = compatible && line.id in localSelected
+                // Plantas que TIENEN este producto en su assignedProductIds.
+                val plantasQueLoHacen = allProducingBranches
+                    .filter { line.productId in it.assignedProductIds }
+                // Plantas con assignedProductIds VACÍO (no tienen restricción configurada).
+                val plantasSinRestriccion = allProducingBranches
+                    .filter { it.assignedProductIds.isEmpty() }
+                Surface(
+                    color = if (checked) primary.copy(alpha = 0.08f) else Color.Transparent,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = checked,
+                                onCheckedChange = {
+                                    if (!compatible) return@Checkbox
+                                    localSelected = if (it) localSelected + line.id
+                                    else localSelected - line.id
+                                },
+                                enabled = compatible
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    line.productName,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = if (compatible) Color(0xFF005B8D) else Color(0xFF9E9E9E),
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    "${line.requestedQuantity.toInt()} ${line.productUnit}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (compatible) Color(0xFF6E6E6E) else Color(0xFFBDBDBD)
+                                )
+                            }
+                        }
+                        // Mensaje según situación
+                        when {
+                            !line.requiresProduction -> Text(
+                                "Producto de reventa — no entra al lote de producción.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFF9E9E9E),
+                                modifier = Modifier.padding(start = 48.dp, end = 8.dp, bottom = 4.dp)
+                            )
+                            !compatible -> {
+                                val nombres = plantasQueLoHacen
+                                    .joinToString(", ") { it.name }
+                                    .ifEmpty { "Ninguna planta lo tiene asignado" }
+                                Text(
+                                    "Este producto no se hace en esta planta productora, " +
+                                        "pendiente de pedir. Se produce en: $nombres",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color(0xFF9E9E9E),
+                                    modifier = Modifier.padding(start = 48.dp, end = 8.dp, bottom = 4.dp)
+                                )
+                            }
+                            // Compatible porque la planta destino tiene assignedProductIds vacío
+                            // (sin restricción). Avisar al usuario.
+                            producingBranch != null &&
+                                producingBranch.assignedProductIds.isEmpty() -> Text(
+                                "⚠ Esta planta no tiene productos configurados (compatible con " +
+                                    "todo por default). Edítala en Sucursales para limitar qué hace.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFFD9A441),
+                                modifier = Modifier.padding(start = 48.dp, end = 8.dp, bottom = 4.dp)
+                            )
+                            else -> {
+                                val nombres = plantasQueLoHacen.joinToString(", ") { it.name }
+                                if (nombres.isNotEmpty()) {
+                                    Text(
+                                        "Se produce en: $nombres",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color(0xFF6E6E6E),
+                                        modifier = Modifier.padding(start = 48.dp, end = 8.dp, bottom = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                TextButton(onClick = onDismiss) { Text("Cancelar") }
+                Spacer(Modifier.width(8.dp))
+                Button(
+                    onClick = { onConfirm(localSelected) },
+                    colors = ButtonDefaults.buttonColors(containerColor = primary)
+                ) { Text("Aceptar") }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+    }
+}
+
+private fun formatRequestedDay(millis: Long): String {
+    if (millis <= 0L) return "—"
+    return kotlin.runCatching {
+        val tz = TimeZone.currentSystemDefault()
+        val ldt = kotlin.time.Instant.fromEpochMilliseconds(millis).toLocalDateTime(tz)
+        "${ldt.dayOfMonth.toString().padStart(2,'0')}/${ldt.monthNumber.toString().padStart(2,'0')}/${ldt.year}"
     }.getOrElse { "—" }
 }

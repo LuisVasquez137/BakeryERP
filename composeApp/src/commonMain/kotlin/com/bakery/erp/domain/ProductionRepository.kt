@@ -129,6 +129,32 @@ interface ProductionRepository {
         orderLines: List<ProductionOrderLine>
     )
 
+    /**
+     * Anexa las líneas de un [CustomerOrder] al [lotId] — análogo a [addOrderToLot]
+     * pero para pedidos de clientes externos. Fusiona por `productId`. Cada línea
+     * entrante debe traer su [com.bakery.erp.model.CustomerLineSpec] adentro de
+     * `customerSpecs` para que se preserve quién lo pidió. Agrega el [customerOrderId]
+     * a `lot.customerOrderIds`. Filtra fuera líneas con productos `requiresProduction=false`
+     * (esos se descuentan directo del stock terminado, no entran al lote).
+     */
+    suspend fun addCustomerOrderToLot(
+        companyId: String,
+        lotId: String,
+        customerOrderId: String,
+        newLines: List<ProductionLotLine>
+    )
+
+    /**
+     * Inverso de [addCustomerOrderToLot]: resta las cantidades de [customerOrderId]
+     * y limpia los `customerSpecs` que pertenezcan a ese pedido. Líneas que queden
+     * en 0 se eliminan. Quita el id de `lot.customerOrderIds`.
+     */
+    suspend fun removeCustomerOrderFromLot(
+        companyId: String,
+        lotId: String,
+        customerOrderId: String
+    )
+
     // ── Lotes de producción ───────────────────────────────────────────────────
 
     suspend fun getLotsForBranch(companyId: String, branchId: String): List<ProductionLot>

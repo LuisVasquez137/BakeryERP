@@ -2,9 +2,14 @@ package com.bakery.erp.data
 
 import com.bakery.erp.domain.AuthRepository
 import com.bakery.erp.domain.AuthState
+import com.bakery.erp.model.ExternalCustomer
+import com.bakery.erp.model.ExternalCustomerType
 import com.bakery.erp.model.Organization
+import com.bakery.erp.model.ResellerDeliveryMode
+import com.bakery.erp.model.ResellerRegistrationStatus
 import com.bakery.erp.model.User
 import com.bakery.erp.model.UserRole
+import kotlin.time.Clock
 import dev.gitlive.firebase.auth.FirebaseAuth
 import dev.gitlive.firebase.auth.GoogleAuthProvider
 import dev.gitlive.firebase.firestore.DocumentSnapshot
@@ -228,7 +233,10 @@ class FirebaseAuthRepository(
             ownerEmail = runCatching { doc.get<String>("ownerEmail") }.getOrNull() ?: "",
             subscriptionPlan = runCatching { doc.get<String>("subscriptionPlan") }.getOrNull() ?: "",
             createdAt = runCatching { doc.get<Long>("createdAt") }.getOrNull() ?: 0L,
-            inviteCode = runCatching { doc.get<String>("inviteCode") }.getOrNull() ?: ""
+            inviteCode = runCatching { doc.get<String>("inviteCode") }.getOrNull() ?: "",
+            acceptsResellerDelivery = runCatching {
+                doc.get<Boolean?>("acceptsResellerDelivery")
+            }.getOrNull() ?: false
         )
     }
 
@@ -254,6 +262,137 @@ class FirebaseAuthRepository(
             )
             usersCol().document(userId).set(updated.toMap())
         }
+
+    // ── Registro de revendedor con código de invitación (en 2 pasos) ──────────
+
+    override suspend fun signupResellerAccount(
+        code: String,
+        email: String,
+        password: String,
+        displayName: String
+    ): Result<User> = runCatching {
+        // 1. Crear cuenta primero (las reglas exigen auth para leer inviteCodes).
+        val authResult = auth.createUserWithEmailAndPassword(email, password)
+        val uid = authResult.user?.uid ?: error("UID nulo tras registro")
+
+        // 2. Validar código de invitación.
+        val codeDoc = inviteCodesCol().document(code.uppercase()).get()
+        if (!codeDoc.exists) {
+            auth.currentUser?.delete()
+            error("Código de invitación inválido: ${code.uppercase()}")
+        }
+        val orgId = codeDoc.get<String>("orgId")
+
+        // 3. Crear el User con rol RESELLER y aprobación pendiente.
+        val user = User(
+            id = uid,
+            orgId = orgId,
+            email = email,
+            displayName = displayName,
+            role = UserRole.RESELLER,
+            branchIds = emptyList(),
+            isActive = true,
+            isApproved = false
+        )
+        usersCol().document(uid).set(user.toMap())
+        user
+    }
+
+    override suspend fun completeResellerProfile(
+        customerDraft: ExternalCustomer
+    ): Result<ExternalCustomer> = runCatching {
+        val firebaseUser = auth.currentUser ?: error("No hay usuario autenticado")
+        val uid = firebaseUser.uid
+        val userDoc = usersCol().document(uid).get()
+        if (!userDoc.exists) error("Perfil de usuario no encontrado")
+        val orgId = userDoc.get<String>("orgId")
+        if (orgId.isEmpty()) error("Usuario sin organización asignada")
+
+        // Validar modalidad vs config de org.
+        val orgDoc = orgsCol().document(orgId).get()
+        val acceptsDelivery = runCatching {
+            orgDoc.get<Boolean?>("acceptsResellerDelivery")
+        }.getOrNull() ?: false
+        if (customerDraft.deliveryMode == ResellerDeliveryMode.DELIVERY && !acceptsDelivery) {
+            error("Esta panadería no ofrece entregas a domicilio. Elige retirar en sucursal.")
+        }
+
+        val customersCol = firestore.collection("companies/$orgId/externalCustomers")
+        val customerRef = customersCol.document
+        val now = Clock.System.now().toEpochMilliseconds()
+        val customer = customerDraft.copy(
+            id = customerRef.id,
+            type = ExternalCustomerType.RESELLER,
+            linkedUserId = uid,
+            email = firebaseUser.email ?: customerDraft.email,
+            registrationStatus = ResellerRegistrationStatus.PENDING_APPROVAL,
+            active = false,
+            createdAt = now,
+            updatedAt = now
+        )
+        customerRef.set(customer.toResellerMap())
+        customer
+    }
+
+    override suspend fun setAcceptsResellerDelivery(
+        orgId: String,
+        accepts: Boolean
+    ): Result<Unit> = runCatching {
+        orgsCol().document(orgId).update("acceptsResellerDelivery" to accepts)
+    }
+
+    override suspend fun regenerateInviteCode(orgId: String): Result<String> = runCatching {
+        val orgDoc = orgsCol().document(orgId).get()
+        if (!orgDoc.exists) error("Organización no encontrada: $orgId")
+        val orgName = runCatching { orgDoc.get<String>("name") }.getOrNull() ?: ""
+        val oldCode = runCatching { orgDoc.get<String>("inviteCode") }.getOrNull() ?: ""
+
+        val newCode = generateInviteCode()
+        orgsCol().document(orgId).update("inviteCode" to newCode)
+        inviteCodesCol().document(newCode).set(
+            mapOf(
+                "orgId" to orgId,
+                "orgName" to orgName,
+                "createdAt" to FieldValue.serverTimestamp
+            )
+        )
+        // Borrar el código viejo para invalidarlo (puede no existir si la org es vieja).
+        if (oldCode.isNotEmpty()) {
+            runCatching { inviteCodesCol().document(oldCode).delete() }
+        }
+        newCode
+    }
+
+    private fun ExternalCustomer.toResellerMap(): Map<String, Any?> = firestoreSafeOf(
+        "id" to id,
+        "type" to type,
+        "name" to name,
+        "businessName" to businessName,
+        "phone" to phone,
+        "phoneAlt" to phoneAlt,
+        "email" to email,
+        "address" to address,
+        "taxId" to taxId,
+        "priceListId" to priceListId,
+        "priceListName" to priceListName,
+        "linkedUserId" to linkedUserId,
+        "active" to active,
+        "deliveryMode" to deliveryMode,
+        "preferredBranchId" to preferredBranchId,
+        "preferredBranchName" to preferredBranchName,
+        "preferredPickupTime" to preferredPickupTime,
+        "deliveryLatitude" to deliveryLatitude,
+        "deliveryLongitude" to deliveryLongitude,
+        "deliveryAddressReference" to deliveryAddressReference,
+        "assignedProducingBranchId" to assignedProducingBranchId,
+        "assignedProducingBranchName" to assignedProducingBranchName,
+        "assignedShiftId" to assignedShiftId,
+        "assignedShiftName" to assignedShiftName,
+        "registrationStatus" to registrationStatus,
+        "notes" to notes,
+        "createdAt" to createdAt,
+        "updatedAt" to updatedAt
+    )
 
     // Usar tipos explícitos en get<T>() para evitar que Kotlin infiera star projections (List<*>)
     // lo que causaría "Star projections in type arguments are not allowed" en gitlive SDK 2.x

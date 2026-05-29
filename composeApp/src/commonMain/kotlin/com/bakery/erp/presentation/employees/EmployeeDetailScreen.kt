@@ -109,7 +109,7 @@ import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 
-private val PrimaryBlue = Color(0xFF004F7C)
+private val PrimaryBlue = Color(0xFF005B8D)
 private val TealAccent = Color(0xFF0D7A8C)
 private val LabelColor = Color(0xFF455A64)
 private val ErrorRed = Color(0xFFB00020)
@@ -1101,7 +1101,7 @@ private fun historyEventColor(type: HistoryEventType) = when (type) {
     HistoryEventType.SUSPENSION -> Color(0xFF6A1B9A)
     HistoryEventType.REINSTATEMENT -> Color(0xFF0D47A1)
     HistoryEventType.LEAVE_PERMIT -> Color(0xFF00695C)
-    HistoryEventType.POSITION_CHANGE -> Color(0xFF004F7C)
+    HistoryEventType.POSITION_CHANGE -> Color(0xFF005B8D)
     HistoryEventType.NOTE -> Color(0xFF455A64)
 }
 

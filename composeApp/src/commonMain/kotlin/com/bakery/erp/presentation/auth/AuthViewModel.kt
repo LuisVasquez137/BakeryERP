@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.bakery.erp.domain.AuthRepository
 import com.bakery.erp.domain.AuthState
 import com.bakery.erp.domain.GoogleAuthHandler
+import com.bakery.erp.model.ExternalCustomer
 import com.bakery.erp.model.User
 import com.bakery.erp.model.UserRole
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,6 +23,9 @@ data class AuthUiState(
     val isAuthenticated: Boolean = false,
     val needsOnboarding: Boolean = false,  // true cuando aún no tiene organización
     val isPendingApproval: Boolean = false, // true cuando tiene org pero admin aún no aprobó
+    /** true cuando el revendedor terminó el signup pero falta completar su perfil
+     *  (sucursal de retiro, modalidad, hora habitual). Forza nav a ResellerSetupScreen. */
+    val needsResellerSetup: Boolean = false,
     val inviteCode: String? = null
 )
 
@@ -57,7 +61,16 @@ class AuthViewModel(
                         if (hasOrg && approved) loadInviteCode()
                     }
                     is AuthState.Unauthenticated -> _uiState.update {
-                        it.copy(isLoading = false, user = null, isAuthenticated = false, needsOnboarding = false, error = null)
+                        it.copy(
+                            isLoading = false,
+                            user = null,
+                            isAuthenticated = false,
+                            needsOnboarding = false,
+                            isPendingApproval = false,   // sin esto el AppNavigation no detectaba el sign-out
+                            needsResellerSetup = false,
+                            inviteCode = null,
+                            error = null
+                        )
                     }
                     is AuthState.Error -> _uiState.update {
                         it.copy(isLoading = false, error = state.message)
@@ -190,6 +203,54 @@ class AuthViewModel(
                 }
                 .onFailure { e ->
                     _uiState.update { it.copy(isLoading = false, error = e.message ?: "Error con Google Sign-In") }
+                }
+        }
+    }
+
+    fun signupAsReseller(code: String, displayName: String, email: String, password: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, error = null) }
+            repository.signupResellerAccount(code, email, password, displayName)
+                .onSuccess { user ->
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            user = user,
+                            isAuthenticated = false,
+                            isPendingApproval = false,
+                            needsOnboarding = false,
+                            needsResellerSetup = true,
+                            error = null
+                        )
+                    }
+                }
+                .onFailure { e ->
+                    _uiState.update {
+                        it.copy(isLoading = false, error = e.message ?: "Error al registrarse")
+                    }
+                }
+        }
+    }
+
+    fun completeResellerProfile(customerDraft: ExternalCustomer) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, error = null) }
+            repository.completeResellerProfile(customerDraft)
+                .onSuccess {
+                    // Perfil listo → revendedor queda pendiente de aprobación.
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            needsResellerSetup = false,
+                            isPendingApproval = true,
+                            error = null
+                        )
+                    }
+                }
+                .onFailure { e ->
+                    _uiState.update {
+                        it.copy(isLoading = false, error = e.message ?: "Error al completar el perfil")
+                    }
                 }
         }
     }

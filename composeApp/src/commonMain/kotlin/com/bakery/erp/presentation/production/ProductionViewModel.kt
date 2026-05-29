@@ -3,6 +3,7 @@
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bakery.erp.domain.BranchRepository
+import com.bakery.erp.domain.CustomerOrderRepository
 import com.bakery.erp.domain.DispatchRepository
 import com.bakery.erp.domain.IngredientRepository
 import com.bakery.erp.domain.PreparationBatchRepository
@@ -31,6 +32,7 @@ import com.bakery.erp.model.canAccessBranch
 import com.bakery.erp.model.convertUnits
 import com.bakery.erp.model.toBaseUnit
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -62,6 +64,12 @@ data class ProductionUiState(
     // ── Lista de lotes ────────────────────────────────────────────────────────
     val lots: List<ProductionLot> = emptyList(),
     val lotDateFilter: Long? = null,
+    /**
+     * Sucursales con CAN_PRODUCE accesibles para el usuario actual. Alimenta el
+     * header dinámico de "Lotes de Producción" — si es exactamente una, el título
+     * incluye el nombre de la sucursal.
+     */
+    val accessibleProducingBranches: List<Branch> = emptyList(),
 
     // ── Detalle ───────────────────────────────────────────────────────────────
     val selectedOrder: ProductionOrder? = null,
@@ -88,6 +96,20 @@ data class ProductionUiState(
      * null, la pantalla debe ofrecer "Editar existente" o "Crear de todos modos".
      */
     val pendingOrderConflict: ProductionOrder? = null,
+
+    /** Pedidos de revendedores con AL MENOS UNA línea pendiente (sin asignar a
+     *  ningún PO) cuyo deliveryBranchId = sucursal vendedora seleccionada en el
+     *  form + misma fecha. La encargada los puede consolidar en su PO marcando
+     *  líneas individuales en el modal. */
+    val pendingCustomerOrdersForSelling: List<com.bakery.erp.model.CustomerOrder> = emptyList(),
+    /** Líneas pendientes (linkedProductionOrderId vacío) por order. Las ya asignadas
+     *  a otros POs NO aparecen aquí. */
+    val pendingCustomerOrderLinesByOrder: Map<String, List<com.bakery.erp.model.CustomerOrderLine>> = emptyMap(),
+    /** IDs de las CustomerOrderLines que la encargada marcó para incluir en este PO. */
+    val selectedCustomerLineIds: Set<String> = emptySet(),
+    /** En edición de un PO existente: snapshot de las líneas que YA estaban
+     *  incluidas al momento de cargar. Usado para diff al guardar. */
+    val editingPOIncludedCustomerLineIds: Set<String> = emptySet(),
 
     // ── Formulario de lote ────────────────────────────────────────────────────
     val shifts: List<ProductionShift> = emptyList(),
@@ -147,7 +169,8 @@ class ProductionViewModel(
     private val branchRepository: BranchRepository,
     private val preparationRepository: PreparationRepository,
     private val preparationBatchRepository: PreparationBatchRepository,
-    private val dispatchRepository: DispatchRepository
+    private val dispatchRepository: DispatchRepository,
+    private val customerOrderRepository: CustomerOrderRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ProductionUiState())
@@ -405,9 +428,37 @@ class ProductionViewModel(
             _uiState.update {
                 it.copy(
                     lots = lots.distinctBy { l -> l.id }.sortedByDescending { l -> l.productionDate },
+                    accessibleProducingBranches = producingBranches,
                     isLoading = false
                 )
             }
+        }
+    }
+
+    /**
+     * Guarda cantidades reales producidas registradas durante el turno (no al final).
+     * Persiste cada línea modificada vía [saveLotLine] y actualiza [editableLotLines]
+     * para que la UI refleje el cambio sin esperar al listener.
+     */
+    fun saveProducedQuantities(
+        companyId: String,
+        lotId: String,
+        quantities: Map<String, Double>
+    ) {
+        if (quantities.isEmpty()) return
+        viewModelScope.launch {
+            runCatching {
+                val current = _uiState.value.editableLotLines
+                val updated = current.map { line ->
+                    quantities[line.id]?.let { line.copy(producedQuantity = it) } ?: line
+                }
+                updated.forEach { line ->
+                    if (line.id in quantities.keys) {
+                        productionRepository.saveLotLine(companyId, lotId, line)
+                    }
+                }
+                _uiState.update { it.copy(editableLotLines = updated) }
+            }.onFailure { err -> _uiState.update { it.copy(error = err.message) } }
         }
     }
 
@@ -536,7 +587,13 @@ class ProductionViewModel(
         }
     }
 
-    /** Carga un pedido para editarlo: pre-puebla [draftOrderLines] con sus líneas. */
+    /**
+     * Carga un pedido para editarlo. Separa las cantidades manuales de la encargada
+     * de los aportes de revendedores: las líneas guardadas combinan ambos, por eso
+     * restamos la suma de `customerLineRefs.quantity` para dejar solo la parte
+     * propia en `draftOrderLines`. Las líneas de revendedor se reflejan en
+     * `selectedCustomerLineIds` para que aparezcan pre-marcadas en el modal.
+     */
     fun loadOrderForEdit(companyId: String, orderId: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(isDetailLoading = true, draftOrderLines = emptyList()) }
@@ -544,11 +601,25 @@ class ProductionViewModel(
             val lines = if (order != null)
                 runCatching { productionRepository.getOrderLines(companyId, orderId) }.getOrElse { emptyList() }
             else emptyList()
+
+            // draftOrderLines = cantidad total - aportes de revendedor.
+            // Si la cantidad propia es 0, no la mostramos como línea del draft
+            // (es una línea que solo existe por el aporte del revendedor).
+            val manualOnlyLines = lines.mapNotNull { line ->
+                val resellerQty = line.customerLineRefs.sumOf { it.quantity }
+                val ownQty = (line.requestedQuantity - resellerQty).coerceAtLeast(0.0)
+                if (ownQty > 0.0) line.copy(requestedQuantity = ownQty, customerLineRefs = emptyList())
+                else null
+            }
+
+            val includedSet = (order?.includedCustomerLineIds ?: emptyList()).toSet()
             _uiState.update {
                 it.copy(
                     selectedOrder = order,
                     selectedOrderLines = lines,
-                    draftOrderLines = lines,
+                    draftOrderLines = manualOnlyLines,
+                    selectedCustomerLineIds = includedSet,
+                    editingPOIncludedCustomerLineIds = includedSet,
                     isDetailLoading = false
                 )
             }
@@ -560,6 +631,99 @@ class ProductionViewModel(
 
     fun clearPendingOrderConflict() {
         _uiState.update { it.copy(pendingOrderConflict = null) }
+    }
+
+    /**
+     * Carga los pedidos de revendedor PENDING para la sucursal vendedora seleccionada,
+     * filtrados por fecha de entrega = [requestedDate] (día calendario). Estos pedidos
+     * son candidatos para incluir en el PO que está armando la encargada.
+     */
+    /**
+     * Carga los pedidos de revendedor con al menos una línea pendiente para la
+     * sucursal vendedora seleccionada, filtrados por fecha = [requestedDate].
+     * Solo se muestran las líneas todavía no asignadas a ningún PO en
+     * `pendingCustomerOrderLinesByOrder`.
+     */
+    fun loadPendingCustomerOrdersForSelling(
+        companyId: String,
+        sellingBranchId: String,
+        requestedDate: Long
+    ) {
+        if (sellingBranchId.isEmpty() || requestedDate <= 0L) {
+            _uiState.update {
+                it.copy(
+                    pendingCustomerOrdersForSelling = emptyList(),
+                    pendingCustomerOrderLinesByOrder = emptyMap(),
+                    selectedCustomerLineIds = emptySet()
+                )
+            }
+            return
+        }
+        viewModelScope.launch {
+            // En modo edición, también queremos ver los CO con líneas ya asignadas
+            // al PO que se está editando (para que la encargada pueda desmarcarlas).
+            val editingPOId = _uiState.value.selectedOrder?.id ?: ""
+            val all = runCatching {
+                customerOrderRepository.getPendingOrdersForSellingBranch(
+                    companyId, sellingBranchId, editingPOId
+                )
+            }.getOrElse { emptyList() }
+            val tz = TimeZone.currentSystemDefault()
+            val targetDay = Instant.fromEpochMilliseconds(requestedDate).toLocalDateTime(tz).date
+            val filtered = all.filter {
+                Instant.fromEpochMilliseconds(it.deliveryDate).toLocalDateTime(tz).date == targetDay
+            }
+            // Para cada CO, cargar TODAS sus líneas; el panel filtrará las pendientes.
+            // Pero ya tenemos pre-seleccionadas (caso edición) — mantenemos las líneas
+            // marcadas como seleccionadas aunque ya tengan linkedProductionOrderId.
+            val editingIncluded = _uiState.value.editingPOIncludedCustomerLineIds
+            val linesMap = mutableMapOf<String, List<com.bakery.erp.model.CustomerOrderLine>>()
+            filtered.forEach { co ->
+                val all = runCatching {
+                    customerOrderRepository.getOrderLines(companyId, co.id)
+                }.getOrElse { emptyList() }
+                // Mostrar las pendientes (sin asignar) + las pre-seleccionadas (caso edit).
+                linesMap[co.id] = all.filter {
+                    it.linkedProductionOrderId.isEmpty() || it.id in editingIncluded
+                }
+            }
+            _uiState.update {
+                it.copy(
+                    pendingCustomerOrdersForSelling = filtered,
+                    pendingCustomerOrderLinesByOrder = linesMap
+                )
+            }
+        }
+    }
+
+    /**
+     * Reemplaza la selección de líneas pendientes para un CO específico — usado
+     * cuando la encargada cierra el modal con "Aceptar". NO modifica [draftOrderLines]
+     * (la encargada ingresa sus cantidades manualmente). La consolidación se hace
+     * solo al momento de guardar el PO.
+     */
+    fun setSelectedCustomerLinesForOrder(
+        customerOrderId: String,
+        newSelectedLineIds: Set<String>
+    ) {
+        val state = _uiState.value
+        val orderLines = state.pendingCustomerOrderLinesByOrder[customerOrderId].orEmpty()
+        val allOrderLineIds = orderLines.map { it.id }.toSet()
+        // Quitar las líneas de este CO de la selección y agregar las nuevas.
+        val withoutThisOrder = state.selectedCustomerLineIds - allOrderLineIds
+        val newSelection = withoutThisOrder + newSelectedLineIds
+        _uiState.update { it.copy(selectedCustomerLineIds = newSelection) }
+    }
+
+    fun clearCustomerOrderInclusions() {
+        _uiState.update {
+            it.copy(
+                selectedCustomerLineIds = emptySet(),
+                pendingCustomerOrdersForSelling = emptyList(),
+                pendingCustomerOrderLinesByOrder = emptyMap(),
+                editingPOIncludedCustomerLineIds = emptySet()
+            )
+        }
     }
 
     fun saveOrder(
@@ -612,6 +776,52 @@ class ProductionViewModel(
             }
             _uiState.update { it.copy(isLoading = true, error = null) }
             runCatching {
+                // 1. Construir las líneas finales del PO sumando las cantidades manuales
+                //    de la encargada + las líneas de revendedor seleccionadas, agrupando
+                //    por productId y guardando customerLineRefs por desglose.
+                val st = _uiState.value
+                val coLinesById = st.pendingCustomerOrderLinesByOrder.values.flatten()
+                    .associateBy { it.id }
+                val coNamesById = st.pendingCustomerOrdersForSelling
+                    .associate { it.id to it.customerName }
+                // CO line ID → CO ID (para saber a qué pedido pertenece cada línea selected)
+                val coIdByLineId: Map<String, String> = buildMap {
+                    st.pendingCustomerOrderLinesByOrder.forEach { (coId, ls) ->
+                        ls.forEach { l -> put(l.id, coId) }
+                    }
+                }
+
+                val mergedLines = lines.toMutableList()
+                st.selectedCustomerLineIds.forEach { coLineId ->
+                    val coLine = coLinesById[coLineId] ?: return@forEach
+                    if (!coLine.requiresProduction) return@forEach
+                    val coId = coIdByLineId[coLineId] ?: return@forEach
+                    val ref = com.bakery.erp.model.CustomerLineRef(
+                        customerOrderId = coId,
+                        customerName = coNamesById[coId] ?: "",
+                        customerOrderLineId = coLineId,
+                        quantity = coLine.requestedQuantity,
+                        customSpec = coLine.customSpec
+                    )
+                    val idx = mergedLines.indexOfFirst { it.productId == coLine.productId }
+                    if (idx >= 0) {
+                        val existing = mergedLines[idx]
+                        mergedLines[idx] = existing.copy(
+                            requestedQuantity = existing.requestedQuantity + coLine.requestedQuantity,
+                            customerLineRefs = existing.customerLineRefs + ref
+                        )
+                    } else {
+                        mergedLines += ProductionOrderLine(
+                            id = "",
+                            productId = coLine.productId,
+                            productName = coLine.productName,
+                            requestedQuantity = coLine.requestedQuantity,
+                            productUnit = coLine.productUnit,
+                            customerLineRefs = listOf(ref)
+                        )
+                    }
+                }
+
                 val order = ProductionOrder(
                     sellingBranchId = sellingBranch.id,
                     sellingBranchName = sellingBranch.name,
@@ -624,11 +834,50 @@ class ProductionViewModel(
                     isLateOrder = markAsLate,
                     notes = notes?.trim()?.ifEmpty { null },
                     createdByUserId = currentUser.id,
-                    createdByUserName = currentUser.displayName.ifEmpty { currentUser.email }
+                    createdByUserName = currentUser.displayName.ifEmpty { currentUser.email },
+                    includedCustomerLineIds = st.selectedCustomerLineIds.toList()
                 )
-                productionRepository.saveOrder(companyId, order, lines)
+                productionRepository.saveOrder(companyId, order, mergedLines)
+
+                // 2. Localizar el PO recién creado para obtener su ID definitivo.
+                val savedOrders = runCatching {
+                    productionRepository.getOrdersForSellingBranchInRange(
+                        companyId, sellingBranch.id,
+                        requestedDate, requestedDate + 24L * 60 * 60 * 1000
+                    )
+                }.getOrElse { emptyList() }
+                val ourOrder = savedOrders
+                    .filter { it.producingBranchId == producingBranch.id }
+                    .filter { it.shiftId == (shift?.id ?: "") }
+                    .maxByOrNull { it.createdAt }
+                val poId = ourOrder?.id
+
+                // 3. Marcar cada línea de revendedor seleccionada con su linkedProductionOrderId.
+                //    Agrupar por CO para llamar setLinesLinkedPO batch.
+                if (!poId.isNullOrEmpty()) {
+                    val linesByCo = st.selectedCustomerLineIds
+                        .mapNotNull { lineId -> coIdByLineId[lineId]?.let { it to lineId } }
+                        .groupBy({ it.first }, { it.second })
+                    linesByCo.forEach { (coId, lineIds) ->
+                        runCatching {
+                            customerOrderRepository.setLinesLinkedPO(
+                                companyId, coId, lineIds, poId
+                            )
+                        }
+                    }
+                }
             }.onSuccess {
-                _uiState.update { it.copy(isLoading = false, isSaved = true, draftOrderLines = emptyList()) }
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        isSaved = true,
+                        draftOrderLines = emptyList(),
+                        selectedCustomerLineIds = emptySet(),
+                        pendingCustomerOrdersForSelling = emptyList(),
+                        pendingCustomerOrderLinesByOrder = emptyMap(),
+                        editingPOIncludedCustomerLineIds = emptySet()
+                    )
+                }
             }.onFailure { err ->
                 _uiState.update { it.copy(isLoading = false, error = err.message ?: "Error al guardar el pedido") }
             }
@@ -659,15 +908,80 @@ class ProductionViewModel(
             }
             _uiState.update { it.copy(isLoading = true, error = null) }
             runCatching {
+                // 1. Construir las líneas combinadas (mismo merge que saveOrder).
+                val st = _uiState.value
+                val coLinesById = st.pendingCustomerOrderLinesByOrder.values.flatten()
+                    .associateBy { it.id }
+                val coNamesById = st.pendingCustomerOrdersForSelling
+                    .associate { it.id to it.customerName }
+                val coIdByLineId: Map<String, String> = buildMap {
+                    st.pendingCustomerOrderLinesByOrder.forEach { (coId, ls) ->
+                        ls.forEach { l -> put(l.id, coId) }
+                    }
+                }
+                val mergedLines = lines.toMutableList()
+                st.selectedCustomerLineIds.forEach { coLineId ->
+                    val coLine = coLinesById[coLineId] ?: return@forEach
+                    if (!coLine.requiresProduction) return@forEach
+                    val coId = coIdByLineId[coLineId] ?: return@forEach
+                    val ref = com.bakery.erp.model.CustomerLineRef(
+                        customerOrderId = coId,
+                        customerName = coNamesById[coId] ?: "",
+                        customerOrderLineId = coLineId,
+                        quantity = coLine.requestedQuantity,
+                        customSpec = coLine.customSpec
+                    )
+                    val idx = mergedLines.indexOfFirst { it.productId == coLine.productId }
+                    if (idx >= 0) {
+                        val existing = mergedLines[idx]
+                        mergedLines[idx] = existing.copy(
+                            requestedQuantity = existing.requestedQuantity + coLine.requestedQuantity,
+                            customerLineRefs = existing.customerLineRefs + ref
+                        )
+                    } else {
+                        mergedLines += ProductionOrderLine(
+                            id = "",
+                            productId = coLine.productId,
+                            productName = coLine.productName,
+                            requestedQuantity = coLine.requestedQuantity,
+                            productUnit = coLine.productUnit,
+                            customerLineRefs = listOf(ref)
+                        )
+                    }
+                }
+
                 val updated = current.copy(
                     shiftId = shift?.id ?: current.shiftId,
                     shiftName = shift?.name ?: current.shiftName,
-                    notes = notes?.trim()?.ifEmpty { null }
+                    notes = notes?.trim()?.ifEmpty { null },
+                    includedCustomerLineIds = st.selectedCustomerLineIds.toList()
                 )
-                productionRepository.updateOrder(companyId, updated, lines)
+                productionRepository.updateOrder(companyId, updated, mergedLines)
 
-                // Si el pedido está incluido en un lote OPEN, recalcular las líneas del
-                // lote para mantenerlo consistente con los pedidos fuente actualizados.
+                // 2. Diff: las líneas que ANTES estaban incluidas pero AHORA no →
+                //    liberarlas (linkedProductionOrderId = ""). Las nuevas → asignarlas.
+                val removed = st.editingPOIncludedCustomerLineIds - st.selectedCustomerLineIds
+                val added = st.selectedCustomerLineIds - st.editingPOIncludedCustomerLineIds
+                // Para hacer unset necesitamos saber a qué CO pertenece cada línea
+                // removida — la consultamos directamente al repo si no la tenemos en cache.
+                removed.groupBy { lineId ->
+                    coIdByLineId[lineId] ?: ""
+                }.filter { it.key.isNotEmpty() }.forEach { (coId, lineIds) ->
+                    runCatching {
+                        customerOrderRepository.unsetLinesLinkedPO(companyId, coId, lineIds)
+                    }
+                }
+                added.groupBy { lineId -> coIdByLineId[lineId] ?: "" }
+                    .filter { it.key.isNotEmpty() }
+                    .forEach { (coId, lineIds) ->
+                        runCatching {
+                            customerOrderRepository.setLinesLinkedPO(
+                                companyId, coId, lineIds, orderId
+                            )
+                        }
+                    }
+
+                // Si el pedido está incluido en un lote OPEN, recalcular sus líneas.
                 if (current.producingBranchId.isNotEmpty()) {
                     val lotsForBranch = runCatching {
                         productionRepository.getLotsForBranch(companyId, current.producingBranchId)
@@ -686,7 +1000,11 @@ class ProductionViewModel(
                         isSaved = true,
                         draftOrderLines = emptyList(),
                         selectedOrder = null,
-                        selectedOrderLines = emptyList()
+                        selectedOrderLines = emptyList(),
+                        selectedCustomerLineIds = emptySet(),
+                        editingPOIncludedCustomerLineIds = emptySet(),
+                        pendingCustomerOrdersForSelling = emptyList(),
+                        pendingCustomerOrderLinesByOrder = emptyMap()
                     )
                 }
             }.onFailure { err ->
@@ -756,6 +1074,10 @@ class ProductionViewModel(
                 }.getOrElse { emptyList() }
             }
 
+            // Nota: la consolidación de CustomerOrders ya NO ocurre aquí. Los pedidos
+            // de revendedor se consolidan al ProductionOrder de la sucursal vendedora
+            // (vía ProductionOrderFormScreen). El lote recibe solo los ProductionOrders.
+
             val recipesWithYields = runCatching {
                 recipeRepository.getRecipesWithYields(companyId)
             }.getOrElse { emptyList() }
@@ -777,7 +1099,8 @@ class ProductionViewModel(
             }.groupBy { it.preparationId }
 
             val consolidated = consolidateOrderLines(
-                linesMap.values.flatten(), recipesWithYields, products, decorationBatches
+                linesMap.values.flatten(),
+                recipesWithYields, products, decorationBatches
             )
 
             // Cargar la receta completa de cada línea (con components planos) para mostrar
@@ -1177,7 +1500,7 @@ class ProductionViewModel(
         }
     }
 
-    fun startLot(companyId: String, lotId: String) {
+    fun startLot(companyId: String, lotId: String, currentUser: User?) {
         viewModelScope.launch {
             runCatching {
                 // Persistir los cambios de esponja hechos en la pantalla de detalle antes
@@ -1186,6 +1509,21 @@ class ProductionViewModel(
                     runCatching { productionRepository.saveLotLine(companyId, lotId, line) }
                 }
                 productionRepository.updateLotStatus(companyId, lotId, ProductionLotStatus.IN_PROGRESS)
+
+                // Crear las notas de despacho DRAFT desde ya, para que despacho pueda empezar
+                // a contar mientras los panaderos siguen produciendo. Idempotente por
+                // (lotId, sourceOrderId) — no duplica al completar más adelante.
+                val lot = _uiState.value.selectedLot?.takeIf { it.id == lotId }
+                    ?: productionRepository.getLot(companyId, lotId)
+                if (lot != null && currentUser != null) {
+                    runCatching {
+                        dispatchRepository.createDispatchNotesForLot(
+                            companyId,
+                            lot.copy(status = ProductionLotStatus.IN_PROGRESS),
+                            currentUser
+                        )
+                    }
+                }
             }.onSuccess {
                 _uiState.update { state ->
                     state.copy(
@@ -1385,9 +1723,14 @@ class ProductionViewModel(
                 val ingredientMap = ingredients.associateBy { it.id }
                 val now = Clock.System.now().toEpochMilliseconds()
 
+                // 3a. Agregar consumo total por insumo en TODAS las líneas. Antes
+                //     hacíamos N×M round trips (N=líneas, M=insumos por receta). Ahora
+                //     se compacta en 1 lectura de stocks + (≤ M únicos) escrituras +
+                //     1 movimiento Kardex por insumo único. Reduce drásticamente el
+                //     tiempo de cierre del lote.
+                val aggregatedGramsByIngredient = HashMap<String, Double>()
                 for (line in activeLines) {
                     val recipe = fullRecipeMap[line.recipeId]
-
                     if (recipe == null) {
                         warnings.add("${line.productName}: sin receta asignada — stock no descontado")
                         continue
@@ -1397,67 +1740,78 @@ class ProductionViewModel(
                         warnings.add("${line.productName}: peso crudo no definido — stock no descontado")
                         continue
                     }
-
                     val sponge = spongePreparationMap[line.spongeBatchId]
                     val usage = calculateLineConsumption(line, recipe, sponge)
                     if (usage.isEmpty()) {
                         warnings.add("${line.productName}: no se pudo calcular el consumo de insumos")
                         continue
                     }
+                    for ((ingredientId, grams) in usage) {
+                        if (grams <= 0.0) continue
+                        aggregatedGramsByIngredient[ingredientId] =
+                            (aggregatedGramsByIngredient[ingredientId] ?: 0.0) + grams
+                    }
+                }
 
-                    for ((ingredientId, gramsToDeduct) in usage) {
-                        if (gramsToDeduct <= 0.0) continue
-                        val ingredient = ingredientMap[ingredientId] ?: continue
+                // 3b. Leer todos los stocks de la planta en UNA sola consulta.
+                val stockMap = runCatching {
+                    ingredientRepository.getBranchStocksForBranch(companyId, lot.producingBranchId)
+                }.getOrElse { emptyMap() }
+
+                // 3c. Aplicar descuento + Kardex en paralelo por insumo.
+                coroutineScope {
+                    aggregatedGramsByIngredient.forEach { (ingredientId, totalGrams) ->
+                        val ingredient = ingredientMap[ingredientId] ?: return@forEach
                         val baseUnit = ingredient.allowedUnits.firstOrNull() ?: "gr"
-                        val delta = -convertUnits(gramsToDeduct, "gr", baseUnit)
-
-                        val stocks = runCatching {
-                            ingredientRepository.getBranchStocksForIngredient(
-                                companyId, ingredientId, listOf(lot.producingBranchId)
-                            )
-                        }.getOrElse { emptyList() }
-                        val prevStock = stocks.find { it.branchId == lot.producingBranchId }?.currentStock ?: 0.0
-
-                        runCatching {
-                            ingredientRepository.updateBranchStock(
-                                companyId, ingredientId, ingredient.name,
-                                lot.producingBranchId, lot.producingBranchName, delta
-                            )
-                        }
-                        runCatching {
-                            ingredientRepository.addStockMovement(
-                                companyId, ingredientId, StockMovement(
-                                    type = "PRODUCCION",
-                                    quantity = delta,
-                                    balanceBefore = prevStock,
-                                    balanceAfter = (prevStock + delta).coerceAtLeast(0.0),
-                                    branchId = lot.producingBranchId,
-                                    branchName = lot.producingBranchName,
-                                    reference = lot.id,
-                                    date = now
+                        val delta = -convertUnits(totalGrams, "gr", baseUnit)
+                        val prevStock = stockMap[ingredientId] ?: 0.0
+                        launch {
+                            runCatching {
+                                ingredientRepository.updateBranchStock(
+                                    companyId, ingredientId, ingredient.name,
+                                    lot.producingBranchId, lot.producingBranchName, delta
                                 )
-                            )
+                            }
+                            runCatching {
+                                ingredientRepository.addStockMovement(
+                                    companyId, ingredientId, StockMovement(
+                                        type = "PRODUCCION",
+                                        quantity = delta,
+                                        balanceBefore = prevStock,
+                                        balanceAfter = (prevStock + delta).coerceAtLeast(0.0),
+                                        branchId = lot.producingBranchId,
+                                        branchName = lot.producingBranchName,
+                                        reference = lot.id,
+                                        date = now
+                                    )
+                                )
+                            }
                         }
                     }
 
-                    // Consumir el batch de esponja según los gramos declarados.
-                    if (line.spongeGramsUsed > 0.0 && line.spongeBatchId.isNotEmpty()) {
-                        runCatching {
-                            preparationBatchRepository.consumeFromBatch(
-                                companyId, line.spongeBatchId, line.spongeGramsUsed
-                            )
-                        }.onFailure { warnings.add("${line.productName}: ${it.message}") }
-                    }
-
-                    // Consumir los batches de adornos: gramsPerUnit × producedQuantity
-                    for (deco in line.decorationsSnapshot) {
-                        if (deco.batchId.isEmpty() || deco.gramsPerUnit <= 0.0) continue
-                        val totalGrams = deco.gramsPerUnit * line.producedQuantity
-                        if (totalGrams <= 0.0) continue
-                        runCatching {
-                            preparationBatchRepository.consumeFromBatch(companyId, deco.batchId, totalGrams)
-                        }.onFailure {
-                            warnings.add("${line.productName} · ${deco.preparationName}: ${it.message}")
+                    // 3d. Consumo de batches de esponja y adornos en paralelo. Cada batch
+                    //     es un documento distinto, no hay race condition entre líneas.
+                    for (line in activeLines) {
+                        if (line.spongeGramsUsed > 0.0 && line.spongeBatchId.isNotEmpty()) {
+                            launch {
+                                runCatching {
+                                    preparationBatchRepository.consumeFromBatch(
+                                        companyId, line.spongeBatchId, line.spongeGramsUsed
+                                    )
+                                }.onFailure { warnings.add("${line.productName}: ${it.message}") }
+                            }
+                        }
+                        for (deco in line.decorationsSnapshot) {
+                            if (deco.batchId.isEmpty() || deco.gramsPerUnit <= 0.0) continue
+                            val totalGrams = deco.gramsPerUnit * line.producedQuantity
+                            if (totalGrams <= 0.0) continue
+                            launch {
+                                runCatching {
+                                    preparationBatchRepository.consumeFromBatch(companyId, deco.batchId, totalGrams)
+                                }.onFailure {
+                                    warnings.add("${line.productName} · ${deco.preparationName}: ${it.message}")
+                                }
+                            }
                         }
                     }
                 }

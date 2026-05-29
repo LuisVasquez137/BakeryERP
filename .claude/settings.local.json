@@ -97,7 +97,10 @@
       "PowerShell(\\(Get-Item composeApp\\\\src\\\\commonMain\\\\kotlin\\\\com\\\\bakery\\\\erp\\\\presentation\\\\recipes\\\\RecipeFormScreen.kt\\).LastWriteTime = Get-Date)",
       "Bash(./gradlew *)",
       "Bash(unzip -l /c/Users/DELL/.gradle/caches/modules-2/files-2.1/dev.gitlive/firebase-firestore/2.1.0/f352cea086ad95cb91f093300093b011bf4f552a/firebase-firestore-2.1.0-sources.jar)",
-      "Bash(unzip *)"
+      "Bash(unzip *)",
+      "Bash(xargs grep -l \"punto de venta\\\\|POS\\\\|venta implementado\")",
+      "Bash(git -C \"C:\\\\Users\\\\DELL\\\\AndroidStudioProjects\\\\BakeryERP\" log --oneline --all)",
+      "Bash(git -C \"C:\\\\Users\\\\DELL\\\\AndroidStudioProjects\\\\BakeryERP\" show --name-status 0b34627)"
     ]
   }
 }

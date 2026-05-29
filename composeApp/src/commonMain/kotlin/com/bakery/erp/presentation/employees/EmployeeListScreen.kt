@@ -131,7 +131,7 @@ fun EmployeeListScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF004F7C),
+                    containerColor = Color(0xFF005B8D),
                     titleContentColor = Color.White,
                     navigationIconContentColor = Color.White
                 )
@@ -140,7 +140,7 @@ fun EmployeeListScreen(
         floatingActionButton = {
             FloatingActionButton(
                 onClick = { onNavigateToForm(null) },
-                containerColor = Color(0xFF004F7C)
+                containerColor = Color(0xFF005B8D)
             ) { Icon(Icons.Default.Add, "Nuevo colaborador", tint = Color.White) }
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -369,7 +369,7 @@ internal fun EmployeeDetailContent(
                     employee.name,
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFF004F7C)
+                    color = Color(0xFF005B8D)
                 )
                 if (employee.positionTitle.isNotEmpty()) {
                     Text(
@@ -385,7 +385,7 @@ internal fun EmployeeDetailContent(
                 }
                 Button(
                     onClick = onEdit,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF004F7C))
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF005B8D))
                 ) { Text("Editar") }
             }
         }
@@ -422,7 +422,7 @@ private fun EmployeeDetailRow(icon: ImageVector, label: String, value: String) {
         verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Icon(icon, null, modifier = Modifier.size(20.dp).padding(top = 2.dp), tint = Color(0xFF004F7C))
+        Icon(icon, null, modifier = Modifier.size(20.dp).padding(top = 2.dp), tint = Color(0xFF005B8D))
         Column {
             Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
             Text(value, style = MaterialTheme.typography.bodyMedium)
@@ -459,10 +459,10 @@ private fun EmployeeCard(employee: Employee, onClick: () -> Unit) {
                     modifier = Modifier
                         .size(48.dp)
                         .clip(CircleShape)
-                        .background(Color(0xFF004F7C).copy(alpha = 0.10f)),
+                        .background(Color(0xFF005B8D).copy(alpha = 0.10f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Default.AccountCircle, null, modifier = Modifier.size(32.dp), tint = Color(0xFF004F7C).copy(alpha = 0.5f))
+                    Icon(Icons.Default.AccountCircle, null, modifier = Modifier.size(32.dp), tint = Color(0xFF005B8D).copy(alpha = 0.5f))
                 }
             }
 
@@ -564,10 +564,10 @@ private fun EmployeeTableRow(employee: Employee, isSelected: Boolean, onClick: (
                 }
             } else {
                 Box(
-                    modifier = Modifier.size(32.dp).clip(CircleShape).background(Color(0xFF004F7C).copy(alpha = 0.10f)),
+                    modifier = Modifier.size(32.dp).clip(CircleShape).background(Color(0xFF005B8D).copy(alpha = 0.10f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Default.AccountCircle, null, modifier = Modifier.size(20.dp), tint = Color(0xFF004F7C).copy(alpha = 0.5f))
+                    Icon(Icons.Default.AccountCircle, null, modifier = Modifier.size(20.dp), tint = Color(0xFF005B8D).copy(alpha = 0.5f))
                 }
             }
             Text(

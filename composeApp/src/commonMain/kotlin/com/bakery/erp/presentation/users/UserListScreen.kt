@@ -239,12 +239,14 @@ internal fun RoleBadge(role: UserRole) {
         UserRole.ADMIN -> Color(0xFF6A1B9A) to Color.White
         UserRole.MANAGER -> Color(0xFF2E7D32) to Color.White
         UserRole.EMPLOYEE -> Color(0xFF455A64) to Color.White
+        UserRole.RESELLER -> Color(0xFFD9A441) to Color.White
     }
     val label = when (role) {
         UserRole.OWNER -> "Dueño"
         UserRole.ADMIN -> "Admin"
         UserRole.MANAGER -> "Encargado"
         UserRole.EMPLOYEE -> "Empleado"
+        UserRole.RESELLER -> "Revendedor"
     }
     Surface(color = bg.copy(alpha = 0.15f), shape = RoundedCornerShape(50)) {
         Text(

@@ -71,18 +71,35 @@ fun ProductionLotListScreen(
         }.sortedBy { it.shiftName }
     }
 
+    // Agrupado por turno para mostrar encabezados de sección — un panadero con
+    // dos turnos por día necesita verlos claramente separados.
+    // No usamos toSortedMap() porque Kotlin/JS no lo soporta.
+    val groupedByShift = remember(filteredLots) {
+        filteredLots.groupBy { it.shiftName.ifBlank { "Sin turno" } }
+            .entries
+            .sortedBy { it.key }
+    }
+
+    // Si el usuario solo tiene acceso a una planta productora, el título incluye
+    // su nombre. Con más de una se mantiene plano (no hay selector aquí).
+    val headerTitle = remember(state.accessibleProducingBranches) {
+        val branches = state.accessibleProducingBranches
+        if (branches.size == 1) "Lotes - ${branches.first().name}"
+        else "Lotes de Producción"
+    }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
-                title = { Text("Lotes de Producción", fontWeight = FontWeight.SemiBold) },
+                title = { Text(headerTitle, fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Volver")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF123456),
+                    containerColor = Color(0xFF005B8D),
                     titleContentColor = Color.White,
                     navigationIconContentColor = Color.White
                 )
@@ -92,7 +109,7 @@ fun ProductionLotListScreen(
             if (canManage) {
                 FloatingActionButton(
                     onClick = onNavigateToForm,
-                    containerColor = Color(0xFF123456)
+                    containerColor = Color(0xFF005B8D)
                 ) { Icon(Icons.Default.Add, "Nuevo lote", tint = Color.White) }
             }
         },
@@ -129,8 +146,18 @@ fun ProductionLotListScreen(
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    items(filteredLots) { lot ->
-                        ProductionLotCard(lot = lot, onClick = { onNavigateToDetail(lot.id) })
+                    groupedByShift.forEach { entry ->
+                        val shiftLabel = entry.key
+                        val lotsInShift = entry.value
+                        item(key = "header_$shiftLabel") {
+                            ShiftSectionHeader(
+                                shiftName = shiftLabel,
+                                lotCount = lotsInShift.size
+                            )
+                        }
+                        items(lotsInShift, key = { it.id }) { lot ->
+                            ProductionLotCard(lot = lot, onClick = { onNavigateToDetail(lot.id) })
+                        }
                     }
                 }
             }
@@ -156,7 +183,7 @@ private fun DateHeader(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onPrev) {
-                Icon(Icons.Default.ChevronLeft, "Día anterior", tint = Color(0xFF123456))
+                Icon(Icons.Default.ChevronLeft, "Día anterior", tint = Color(0xFF005B8D))
             }
             Row(
                 modifier = Modifier.weight(1f).clickable(onClick = onResetToday),
@@ -166,14 +193,14 @@ private fun DateHeader(
                 Icon(
                     Icons.Default.CalendarToday,
                     contentDescription = null,
-                    tint = Color(0xFF123456),
+                    tint = Color(0xFF005B8D),
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
                     formatProductionDate(dateMillis),
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFF123456),
+                    color = Color(0xFF005B8D),
                     style = MaterialTheme.typography.titleMedium
                 )
                 Spacer(Modifier.width(8.dp))
@@ -184,7 +211,7 @@ private fun DateHeader(
                 )
             }
             IconButton(onClick = onNext) {
-                Icon(Icons.Default.ChevronRight, "Día siguiente", tint = Color(0xFF123456))
+                Icon(Icons.Default.ChevronRight, "Día siguiente", tint = Color(0xFF005B8D))
             }
         }
     }
@@ -194,6 +221,37 @@ private fun startOfTodayLotListMillis(): Long {
     val tz = TimeZone.currentSystemDefault()
     val today = Clock.System.now().toLocalDateTime(tz).date
     return LocalDateTime(today, LocalTime(0, 0, 0)).toInstant(tz).toEpochMilliseconds()
+}
+
+@Composable
+private fun ShiftSectionHeader(shiftName: String, lotCount: Int) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = Color(0xFF005B8D),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                shiftName,
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleMedium
+            )
+            Surface(shape = RoundedCornerShape(12.dp), color = Color(0xFFD9A441)) {
+                Text(
+                    "$lotCount lote${if (lotCount == 1) "" else "s"}",
+                    color = Color.White,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -217,7 +275,7 @@ fun ProductionLotCard(lot: ProductionLot, onClick: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
-                Text(lot.producingBranchName, fontWeight = FontWeight.SemiBold, color = Color(0xFF123456))
+                Text(lot.producingBranchName, fontWeight = FontWeight.SemiBold, color = Color(0xFF005B8D))
                 Text(
                     "${lot.shiftName} — ${formatProductionDate(lot.productionDate)}",
                     style = MaterialTheme.typography.bodySmall,

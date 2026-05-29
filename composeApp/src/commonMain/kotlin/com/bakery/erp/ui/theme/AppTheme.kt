@@ -12,35 +12,44 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-// Bagueto — Helvetia Blue Palette
-private val HelvetiaBlue  = Color(0xFF004F7C) // Primary brand color (slightly deeper)
-private val WarmCream     = Color(0xFFFDFBF7) // Main background
-private val CoffeeBrown   = Color(0xFF2E4A6E) // Dark marine accent
-private val SandLight     = Color(0xFFF5EFE6) // Light beige containers
-private val SlateText     = Color(0xFF1A2B38) // Primary dark text
-private val MutedSlate    = Color(0xFF5E6E7A) // Secondary text
-private val CafeLatte     = Color(0xFFC8A882) // Subtle warm border/outline
+// BakeOS — Helvetia Blue palette.
+// Fuente única de verdad de la marca. El código nuevo/editado debe importar `BrandColors`
+// en vez de re-declarar literales `Color(0xFF...)` por pantalla (ver memoria
+// feedback_ui_responsive_palette). La app SIEMPRE usa tema claro: no se define darkColorScheme.
+object BrandColors {
+    val Primary          = Color(0xFF005B8D) // Helvetia Blue — primario, headers
+    val PrimaryDark      = Color(0xFF00486F) // hover / borde azul
+    val PrimaryContainer = Color(0xFFDCEEFB) // contenedor azul claro
+    val Accent           = Color(0xFFD9A441) // Honey Gold — acento (reemplaza el naranja quemado)
+    val AccentDark       = Color(0xFF8A6420) // texto/borde acento oscuro legible
+    val Ivory            = Color(0xFFFDFBF7) // fondo cálido
+    val Sand             = Color(0xFFF5EFE6) // cards beige
+    val TextSlate        = Color(0xFF1A2B38) // texto principal
+    val MutedSlate       = Color(0xFF5E6E7A) // texto secundario
+    val Outline          = Color(0xFFC8A882) // borde sutil café latte
+    // Semánticos que NO cambian: success verde / error rojo se mantienen inline donde aplica.
+}
 
 private val BakeryLightColorScheme = lightColorScheme(
-    primary            = HelvetiaBlue,
+    primary            = BrandColors.Primary,
     onPrimary          = Color.White,
-    primaryContainer   = Color(0xFFE3F2FB),
-    onPrimaryContainer = HelvetiaBlue,
+    primaryContainer   = BrandColors.PrimaryContainer,
+    onPrimaryContainer = BrandColors.Primary,
 
-    secondary            = CoffeeBrown,
+    secondary            = BrandColors.Accent,
     onSecondary          = Color.White,
-    secondaryContainer   = SandLight,
-    onSecondaryContainer = CoffeeBrown,
+    secondaryContainer   = BrandColors.Sand,
+    onSecondaryContainer = BrandColors.AccentDark,
 
-    background       = WarmCream,
-    onBackground     = SlateText,
+    background       = BrandColors.Ivory,
+    onBackground     = BrandColors.TextSlate,
 
     surface          = Color.White,
-    onSurface        = SlateText,
+    onSurface        = BrandColors.TextSlate,
     surfaceVariant   = Color(0xFFF0EAE2),
-    onSurfaceVariant = MutedSlate,
+    onSurfaceVariant = BrandColors.MutedSlate,
 
-    outline = CafeLatte
+    outline = BrandColors.Outline
 )
 
 private val BakeryShapes = Shapes(

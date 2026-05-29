@@ -14,16 +14,23 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.delay
+import kotlin.time.Clock as KotlinClock
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.bakery.erp.model.CustomerLineSpec
+import com.bakery.erp.model.CustomerOrderType
 import com.bakery.erp.model.PreparationBatch
 import com.bakery.erp.model.Permission
 import com.bakery.erp.model.ProductionLot
@@ -87,14 +94,29 @@ fun ProductionLotDetailScreen(
 
     var selectedLineId by remember { mutableStateOf<String?>(null) }
     val selectedLine = lines.find { it.id == selectedLineId }
+    // Tarjetas "ya preparé" — al tocar una y abrir la receta, la marcamos en beige
+    // para que el panadero recuerde qué ya trabajó. Solo en sesión.
+    var visitedLineIds by remember { mutableStateOf(emptySet<String>()) }
     val scaledView = selectedLine?.let { viewModel.buildScaledRecipeView(it) }
     val scaledIssue = selectedLine?.let { viewModel.diagnoseScaledRecipe(it) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val registerSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val canEditSponge = lot?.status == ProductionLotStatus.OPEN ||
         lot?.status == ProductionLotStatus.IN_PROGRESS
 
     // Pedido tardío pendiente de confirmación (cuando lote está IN_PROGRESS).
     var pendingLateOrderConfirm by remember { mutableStateOf<ProductionOrder?>(null) }
+
+    // Dialog de inicio: se muestra cuando el lote sigue OPEN. Bloquea el detalle
+    // hasta que el panadero acuse el inicio del turno para que el cronómetro
+    // arranque y quede registro auditable de la hora de inicio.
+    var isStartingLot by remember { mutableStateOf(false) }
+
+    // Confirmación de cierre temprano (<1h de trabajo) para evitar cierres accidentales.
+    var pendingEarlyComplete by remember { mutableStateOf<Int?>(null) }
+
+    // FAB "Registrar producción" — bottom sheet con cantidades reales por producto.
+    var showRegisterSheet by remember { mutableStateOf(false) }
 
     pendingLateOrderConfirm?.let { lateOrder ->
         if (lot != null) {
@@ -125,14 +147,57 @@ fun ProductionLotDetailScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
-                title = { Text("Lista de Producción", fontWeight = FontWeight.SemiBold) },
+                title = {
+                    // Compactamos toda la info del lote en el header (sucursal,
+                    // turno y estado) para no gastar espacio en una card encima
+                    // del listado de productos.
+                    Column {
+                        Text(
+                            buildString {
+                                append("Orden de producción")
+                                if (lot != null && lot.producingBranchName.isNotBlank()) {
+                                    append(" - ").append(lot.producingBranchName)
+                                }
+                            },
+                            fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1
+                        )
+                        if (lot != null) {
+                            val turnoTxt = if (lot.shiftName.isNotBlank()) "Turno: ${lot.shiftName}" else ""
+                            val estadoTxt = ProductionLotStatus.label(lot.status)
+                            Text(
+                                listOf(turnoTxt, estadoTxt).filter { it.isNotEmpty() }
+                                    .joinToString("  ·  "),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFFFFD166),
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Volver")
                     }
                 },
+                actions = {
+                    // "Registrar producción" sale del FAB (tapaba la receta escalada)
+                    // y vive aquí, alineado a la derecha. Solo visible en producción.
+                    if (canManage && lot?.status == ProductionLotStatus.IN_PROGRESS) {
+                        TextButton(
+                            onClick = { showRegisterSheet = true },
+                            colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
+                        ) {
+                            Icon(Icons.Default.Edit, contentDescription = null)
+                            Spacer(Modifier.width(4.dp))
+                            Text("Registrar conteo", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF123456),
+                    containerColor = Color(0xFF005B8D),
                     titleContentColor = Color.White,
                     navigationIconContentColor = Color.White
                 )
@@ -147,42 +212,51 @@ fun ProductionLotDetailScreen(
             return@Scaffold
         }
 
-        BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(padding)) {
+        // Antes de mostrar la orden, un panadero con lote OPEN debe pulsar
+        // "Iniciar orden de producción". Bloqueamos el detalle con un fondo
+        // neutro y un dialog centrado para que el acuse sea explícito y el
+        // cronómetro arranque desde aquí.
+        if (canManage && lot.status == ProductionLotStatus.OPEN) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .background(Color(0xFFFDFBF7))
+            ) {
+                StartShiftDialog(
+                    lot = lot,
+                    isStarting = isStartingLot,
+                    onStart = {
+                        isStartingLot = true
+                        viewModel.startLot(companyId, lot.id, user)
+                    }
+                )
+            }
+            // Al pasar a IN_PROGRESS el dialog se desmonta automáticamente.
+            LaunchedEffect(lot.status) {
+                if (lot.status != ProductionLotStatus.OPEN) isStartingLot = false
+            }
+            return@Scaffold
+        }
+
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            // Cronómetro del turno: visible mientras el lote esté en producción.
+            if (lot.status == ProductionLotStatus.IN_PROGRESS && lot.startedAt != null) {
+                ElapsedTimeBanner(startedAtMillis = lot.startedAt)
+            }
+            BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth()) {
             val isWide = maxWidth >= 1000.dp
 
             @Composable
             fun LotBodyContent(modifier: Modifier) {
                 LazyColumn(
                     modifier = modifier,
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    // ── Encabezado del lote ──────────────────────────────────────
-                    item {
-                        LotHeaderCard(lot)
-                    }
-
-                    // ── Sección de productos ─────────────────────────────────────
-                    item {
-                        Text(
-                            "Productos a producir (${lines.size})",
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF123456)
-                        )
-                        if (isWide) {
-                            Text(
-                                "Selecciona un producto para ver su receta escalada en el panel derecho.",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.Gray
-                            )
-                        } else {
-                            Text(
-                                "Toca un producto para ver la receta escalada.",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.Gray
-                            )
-                        }
-                    }
+                    // Sin header card ni texto introductorio — la info de sucursal/
+                    // turno/estado ya vive en el TopAppBar. Maximiza el espacio para
+                    // la orden de producción.
 
                     if (isWide) {
                         // Tabla compacta en pantallas anchas
@@ -196,7 +270,11 @@ fun ProductionLotDetailScreen(
                                 line = line,
                                 showProducedColumn = lot.status == ProductionLotStatus.COMPLETED,
                                 isSelected = selectedLineId == line.id,
-                                onClick = { selectedLineId = line.id }
+                                isVisited = line.id in visitedLineIds,
+                                onClick = {
+                                    selectedLineId = line.id
+                                    visitedLineIds = visitedLineIds + line.id
+                                }
                             )
                         }
                     } else {
@@ -205,18 +283,11 @@ fun ProductionLotDetailScreen(
                                 line = line,
                                 showProduced = lot.status == ProductionLotStatus.COMPLETED,
                                 isSelected = selectedLineId == line.id,
-                                onClick = { selectedLineId = line.id }
-                            )
-                        }
-                    }
-                    if (canManage && lot.status == ProductionLotStatus.OPEN) {
-                        item {
-                            Text(
-                                "Para modificar las cantidades, edita el pedido fuente desde " +
-                                    "\"Recibidos\". El lote se recalcula automáticamente al guardar.",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.Gray,
-                                modifier = Modifier.padding(vertical = 4.dp)
+                                isVisited = line.id in visitedLineIds,
+                                onClick = {
+                                    selectedLineId = line.id
+                                    visitedLineIds = visitedLineIds + line.id
+                                }
                             )
                         }
                     }
@@ -251,26 +322,27 @@ fun ProductionLotDetailScreen(
                     }
 
                     // ── Acciones ─────────────────────────────────────────────────
-                    if (canManage) {
+                    if (canManage && lot.status == ProductionLotStatus.IN_PROGRESS) {
                         item {
                             Spacer(Modifier.height(8.dp))
-                            when (lot.status) {
-                                ProductionLotStatus.OPEN -> {
-                                    Button(
-                                        onClick = { viewModel.startLot(companyId, lot.id) },
-                                        modifier = Modifier.fillMaxWidth().height(52.dp),
-                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1565C0))
-                                    ) { Text("Iniciar producción", fontWeight = FontWeight.Bold) }
-                                }
-                                ProductionLotStatus.IN_PROGRESS -> {
-                                    Button(
-                                        onClick = { onNavigateToComplete(lot.id) },
-                                        modifier = Modifier.fillMaxWidth().height(52.dp),
-                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
-                                    ) { Text("Completar lote y descontar stock", fontWeight = FontWeight.Bold) }
-                                }
-                                else -> Unit
-                            }
+                            // Espacio extra al fondo para que el FAB no tape el botón.
+                            Button(
+                                onClick = {
+                                    val started = lot.startedAt
+                                    if (started != null) {
+                                        val elapsedMin = ((KotlinClock.System.now()
+                                            .toEpochMilliseconds() - started) / 60_000L).toInt()
+                                        if (elapsedMin < 60) {
+                                            pendingEarlyComplete = elapsedMin
+                                            return@Button
+                                        }
+                                    }
+                                    onNavigateToComplete(lot.id)
+                                },
+                                modifier = Modifier.fillMaxWidth().height(52.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+                            ) { Text("Terminar lote y descontar stock", fontWeight = FontWeight.Bold) }
+                            Spacer(Modifier.height(80.dp))
                         }
                     }
                 }
@@ -341,6 +413,48 @@ fun ProductionLotDetailScreen(
                     }
                 }
             }
+            }  // BoxWithConstraints
+        }  // Column wrapping the timer banner + body
+
+        // Bottom sheet "Registrar producción" — el panadero puede registrar
+        // cantidades reales en cualquier momento del turno (no solo al final).
+        if (showRegisterSheet && lot.status == ProductionLotStatus.IN_PROGRESS) {
+            RegisterProductionSheet(
+                lines = lines,
+                sheetState = registerSheetState,
+                onDismiss = { showRegisterSheet = false },
+                onSave = { quantities ->
+                    viewModel.saveProducedQuantities(companyId, lot.id, quantities)
+                    showRegisterSheet = false
+                }
+            )
+        }
+
+        // Confirmación de cierre temprano (<1h de producción): evita cierres
+        // accidentales que dañen el reporte y el descuento de stock.
+        pendingEarlyComplete?.let { minutes ->
+            AlertDialog(
+                onDismissRequest = { pendingEarlyComplete = null },
+                title = { Text("¿Terminar lote ahora?") },
+                text = {
+                    Text(
+                        "Solo llevas $minutes minuto${if (minutes == 1) "" else "s"} de producción, " +
+                            "parece muy poco tiempo para terminar este lote. ¿Estás seguro?"
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            pendingEarlyComplete = null
+                            onNavigateToComplete(lot.id)
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+                    ) { Text("Sí, completar producción", fontWeight = FontWeight.Bold) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingEarlyComplete = null }) { Text("Cancelar") }
+                }
+            )
         }
     }
 }
@@ -355,7 +469,7 @@ private fun LotHeaderCard(lot: com.bakery.erp.model.ProductionLot) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
-                    Text(lot.producingBranchName, fontWeight = FontWeight.Bold, color = Color(0xFF123456), style = MaterialTheme.typography.titleMedium)
+                    Text(lot.producingBranchName, fontWeight = FontWeight.Bold, color = Color(0xFF005B8D), style = MaterialTheme.typography.titleMedium)
                     Text(lot.shiftName, style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
                     Text(formatProductionDate(lot.productionDate), style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                 }
@@ -391,13 +505,13 @@ private fun ProductTableHeader(showProducedColumn: Boolean) {
             modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Producto", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = Color(0xFF123456), modifier = Modifier.weight(2f))
-            Text("Receta", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = Color(0xFF123456), modifier = Modifier.weight(1.5f))
+            Text("Producto", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = Color(0xFF005B8D), modifier = Modifier.weight(2f))
+            Text("Receta", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = Color(0xFF005B8D), modifier = Modifier.weight(1.5f))
             Text(
                 "Unidades",
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Bold,
-                color = Color(0xFF123456),
+                color = Color(0xFF005B8D),
                 modifier = Modifier.width(90.dp)
             )
             if (showProducedColumn) {
@@ -419,53 +533,62 @@ private fun ProductTableRow(
     line: ProductionLotLine,
     showProducedColumn: Boolean,
     isSelected: Boolean,
+    isVisited: Boolean,
     onClick: () -> Unit
 ) {
-    val bg = if (isSelected) Color(0xFFE3F2FD) else Color.White
-    val border = if (isSelected) Color(0xFF123456) else Color(0xFFE8E8E8)
+    // Beige cuando ya se tocó (panadero ya vio la receta = "ya preparé").
+    val bg = when {
+        isVisited  -> Color(0xFFFFF8E1)
+        isSelected -> Color(0xFFE3F2FD)
+        else       -> Color.White
+    }
+    val border = if (isSelected) Color(0xFF005B8D) else Color(0xFFE8E8E8)
     Surface(
         color = bg,
         border = BorderStroke(if (isSelected) 1.5.dp else 0.5.dp, border),
         modifier = Modifier.fillMaxWidth().clickable { onClick() }
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(2f)) {
-                Text(line.productName, fontWeight = FontWeight.SemiBold, color = Color(0xFF123456))
-                if (line.productUnit.isNotEmpty()) {
-                    Text(line.productUnit, style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(2f)) {
+                    Text(line.productName, fontWeight = FontWeight.SemiBold, color = Color(0xFF005B8D))
+                    if (line.productUnit.isNotEmpty()) {
+                        Text(line.productUnit, style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                    }
                 }
-            }
-            Text(
-                line.recipeName.ifEmpty { "—" },
-                style = MaterialTheme.typography.bodySmall,
-                color = if (line.recipeName.isEmpty()) Color.Gray else Color(0xFF1565C0),
-                modifier = Modifier.weight(1.5f)
-            )
-            Text(
-                "${line.plannedQuantity.toInt()}",
-                fontWeight = FontWeight.ExtraBold,
-                color = Color(0xFFCC5500),
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.width(90.dp)
-            )
-            if (showProducedColumn) {
                 Text(
-                    "${line.producedQuantity.toInt()}",
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF2E7D32),
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.width(80.dp)
+                    line.recipeName.ifEmpty { "—" },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (line.recipeName.isEmpty()) Color.Gray else Color(0xFF1565C0),
+                    modifier = Modifier.weight(1.5f)
+                )
+                Text(
+                    "${line.plannedQuantity.toInt()}",
+                    fontWeight = FontWeight.ExtraBold,
+                    color = Color(0xFFD9A441),
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.width(90.dp)
+                )
+                if (showProducedColumn) {
+                    Text(
+                        "${line.producedQuantity.toInt()}",
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF2E7D32),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.width(80.dp)
+                    )
+                }
+                Icon(
+                    Icons.Default.ChevronRight,
+                    contentDescription = "Ver receta",
+                    tint = Color.Gray,
+                    modifier = Modifier.size(24.dp)
                 )
             }
-            Icon(
-                Icons.Default.ChevronRight,
-                contentDescription = "Ver receta",
-                tint = Color.Gray,
-                modifier = Modifier.size(24.dp)
-            )
+            CustomerSpecsRow(line.customerSpecs)
         }
     }
 }
@@ -475,39 +598,45 @@ private fun ProductCard(
     line: ProductionLotLine,
     showProduced: Boolean,
     isSelected: Boolean,
+    isVisited: Boolean,
     onClick: () -> Unit
 ) {
-    val cardColor = if (isSelected) Color(0xFFE3F2FD) else Color.White
+    val cardColor = when {
+        isVisited  -> Color(0xFFFFF8E1)
+        isSelected -> Color(0xFFE3F2FD)
+        else       -> Color.White
+    }
     Card(
         colors = CardDefaults.cardColors(containerColor = cardColor),
-        shape = RoundedCornerShape(10.dp),
-        border = BorderStroke(if (isSelected) 2.dp else 0.dp, if (isSelected) Color(0xFF123456) else Color.Transparent),
+        shape = RoundedCornerShape(8.dp),
+        border = BorderStroke(if (isSelected) 1.5.dp else 0.dp, if (isSelected) Color(0xFF005B8D) else Color.Transparent),
         modifier = Modifier.fillMaxWidth().clickable { onClick() }
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(14.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(line.productName, fontWeight = FontWeight.SemiBold, color = Color(0xFF123456))
-                Text(line.productUnit, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
-                if (line.recipeId.isNotEmpty())
-                    Text("Receta: ${line.recipeName}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF1565C0))
-                Text("Toca para ver receta escalada →", style = MaterialTheme.typography.labelSmall, color = Color(0xFFCC5500))
-            }
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    "${line.plannedQuantity.toInt()}",
-                    fontWeight = FontWeight.ExtraBold,
-                    color = Color(0xFFCC5500),
-                    style = MaterialTheme.typography.titleLarge
-                )
-                Text("unidades", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                if (showProduced && line.producedQuantity != line.plannedQuantity) {
-                    Text("${line.producedQuantity.toInt()} reales", style = MaterialTheme.typography.labelSmall, color = Color(0xFF2E7D32))
+        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(line.productName, fontWeight = FontWeight.SemiBold, color = Color(0xFF005B8D))
+                    if (line.recipeId.isNotEmpty())
+                        Text("Receta: ${line.recipeName}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF1565C0))
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        "${line.plannedQuantity.toInt()}",
+                        fontWeight = FontWeight.ExtraBold,
+                        color = Color(0xFFD9A441),
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text("unidades", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                    if (showProduced && line.producedQuantity != line.plannedQuantity) {
+                        Text("${line.producedQuantity.toInt()} reales", style = MaterialTheme.typography.labelSmall, color = Color(0xFF2E7D32))
+                    }
                 }
             }
+            CustomerSpecsRow(line.customerSpecs)
         }
     }
 }
@@ -529,13 +658,13 @@ private fun RecipeIssuePanel(
                 Text(
                     "Receta no disponible",
                     style = MaterialTheme.typography.labelMedium,
-                    color = Color(0xFFCC5500),
+                    color = Color(0xFFD9A441),
                     fontWeight = FontWeight.SemiBold
                 )
                 Text(
                     "No se puede mostrar la receta escalada",
                     style = MaterialTheme.typography.titleMedium,
-                    color = Color(0xFF7A4500),
+                    color = Color(0xFF8A6420),
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -544,7 +673,7 @@ private fun RecipeIssuePanel(
                     Icon(
                         Icons.Default.Close,
                         contentDescription = "Cerrar",
-                        tint = Color(0xFF7A4500)
+                        tint = Color(0xFF8A6420)
                     )
                 }
             }
@@ -574,7 +703,7 @@ private fun EmptyDetailRecipePlaceholder(modifier: Modifier = Modifier) {
             Text(
                 "Receta escalada",
                 style = MaterialTheme.typography.labelMedium,
-                color = Color(0xFFCC5500),
+                color = Color(0xFFD9A441),
                 fontWeight = FontWeight.SemiBold
             )
             Spacer(Modifier.height(8.dp))
@@ -602,11 +731,11 @@ private fun SpongeControlsForLine(
     val selectedBatch = batches.find { it.id == line.spongeBatchId }
 
     Surface(
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
         color = Color(0xFFFFF8E1),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(
                     checked = useSponge,
@@ -624,18 +753,20 @@ private fun SpongeControlsForLine(
                             lbText = ""
                         }
                     },
-                    enabled = batches.isNotEmpty()
+                    enabled = batches.isNotEmpty(),
+                    modifier = Modifier.size(28.dp)
                 )
+                Spacer(Modifier.width(6.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        "¿Le pondrás esponja a esta masa?",
-                        style = MaterialTheme.typography.bodyMedium,
+                        "¿Esponja para esta masa?",
+                        style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF7A4500)
+                        color = Color(0xFF8A6420)
                     )
                     if (batches.isEmpty()) {
                         Text(
-                            "Sin lotes activos de esponja en esta sucursal. Produce uno en Lotes de Preparación.",
+                            "Sin lotes activos de esponja.",
                             style = MaterialTheme.typography.labelSmall,
                             color = Color(0xFFD32F2F)
                         )
@@ -714,7 +845,7 @@ private fun SpongeControlsForLine(
 @Composable
 private fun LateOrdersPanelHeader(count: Int, isInProgress: Boolean) {
     val bg = if (isInProgress) Color(0xFFFFF3E0) else Color(0xFFFFFDE7)
-    val accent = if (isInProgress) Color(0xFFCC5500) else Color(0xFFF9A825)
+    val accent = if (isInProgress) Color(0xFFD9A441) else Color(0xFFF9A825)
     Surface(
         color = bg,
         shape = RoundedCornerShape(10.dp),
@@ -742,7 +873,7 @@ private fun LateOrdersPanelHeader(count: Int, isInProgress: Boolean) {
                         "El lote ya está en producción. Habla con el panadero antes de aprobar."
                     else "Pedidos enviados después de creado el lote. Aprueba para añadirlos.",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFF7A4500)
+                    color = Color(0xFF8A6420)
                 )
             }
         }
@@ -774,7 +905,7 @@ private fun LateOrderCard(
                     Text(
                         order.sellingBranchName.ifBlank { "Sucursal —" },
                         fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF123456)
+                        color = Color(0xFF005B8D)
                     )
                     Text(
                         "$displayCount productos · enviado ${formatHourMinute(order.createdAt)}" +
@@ -823,7 +954,7 @@ private fun LateOrderCard(
                             "Productos pedidos:",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.SemiBold,
-                            color = Color(0xFF7A4500)
+                            color = Color(0xFF8A6420)
                         )
                         Spacer(Modifier.height(4.dp))
                         lines.forEach { line ->
@@ -842,12 +973,254 @@ private fun LateOrderCard(
                                     "${line.requestedQuantity.toInt()} ${line.productUnit}".trim(),
                                     style = MaterialTheme.typography.bodySmall,
                                     fontWeight = FontWeight.Bold,
-                                    color = Color(0xFFCC5500)
+                                    color = Color(0xFFD9A441)
                                 )
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StartShiftDialog(
+    lot: ProductionLot,
+    isStarting: Boolean,
+    onStart: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = { /* No se puede cerrar — solo iniciar o volver con back. */ },
+        title = {
+            Text(
+                "Iniciar orden de producción",
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF005B8D)
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    lot.shiftName.ifBlank { "Turno no especificado" },
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = Color(0xFF005B8D)
+                )
+                Text(
+                    lot.producingBranchName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color(0xFF555555)
+                )
+                Text(
+                    formatProductionDate(lot.productionDate),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray
+                )
+                Spacer(Modifier.height(8.dp))
+                Surface(
+                    color = Color(0xFFFFF8E1),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Schedule,
+                            contentDescription = null,
+                            tint = Color(0xFFD9A441)
+                        )
+                        Text(
+                            "Al iniciar se registra la hora de inicio del turno trabajado. " +
+                                "El tiempo se contará automáticamente hasta el cierre del lote.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF8A6420)
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onStart,
+                enabled = !isStarting,
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1565C0))
+            ) {
+                if (isStarting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        color = Color.White,
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Iniciar orden de producción", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    )
+}
+
+@Composable
+private fun ElapsedTimeBanner(startedAtMillis: Long) {
+    var nowMillis by remember { mutableStateOf(KotlinClock.System.now().toEpochMilliseconds()) }
+    LaunchedEffect(startedAtMillis) {
+        while (true) {
+            nowMillis = KotlinClock.System.now().toEpochMilliseconds()
+            delay(1000L)
+        }
+    }
+    val totalSec = ((nowMillis - startedAtMillis) / 1000L).coerceAtLeast(0L)
+    val h = totalSec / 3600
+    val m = (totalSec % 3600) / 60
+    val s = totalSec % 60
+    val text = "${h.toString().padStart(2, '0')}:" +
+        "${m.toString().padStart(2, '0')}:" +
+        s.toString().padStart(2, '0')
+
+    Surface(
+        color = Color(0xFFFFF3E0),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                Icons.Default.Schedule,
+                contentDescription = null,
+                tint = Color(0xFFD9A441),
+                modifier = Modifier.size(16.dp)
+            )
+            Text(
+                "Tiempo trabajado",
+                style = MaterialTheme.typography.labelMedium,
+                color = Color(0xFF8A6420),
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text,
+                style = MaterialTheme.typography.titleMedium,
+                color = Color(0xFFD9A441),
+                fontWeight = FontWeight.ExtraBold
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RegisterProductionSheet(
+    lines: List<ProductionLotLine>,
+    sheetState: SheetState,
+    onDismiss: () -> Unit,
+    onSave: (Map<String, Double>) -> Unit
+) {
+    // Pre-llenamos con el producedQuantity actual si > 0 (lo que ya se registró
+    // durante el turno). En blanco si nada se ha registrado todavía para esa línea.
+    var inputs by remember(lines.map { it.id }.joinToString(",")) {
+        mutableStateOf(
+            lines.associate { line ->
+                line.id to (line.producedQuantity.takeIf { it > 0.0 }?.toInt()?.toString() ?: "")
+            }
+        )
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = Color(0xFFFDFBF7)
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 20.dp)) {
+            Text(
+                "Registrar producción",
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleLarge,
+                color = Color(0xFF005B8D)
+            )
+            Text(
+                "Anota las unidades reales que han salido. Lo que registres aquí se guarda " +
+                    "al instante. Deja en blanco lo que aún no salga.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.Gray,
+                modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
+            )
+
+            LazyColumn(
+                modifier = Modifier.weight(1f, fill = false),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(lines, key = { it.id }) { line ->
+                    Surface(
+                        color = Color.White,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    line.productName,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color(0xFF005B8D)
+                                )
+                                Text(
+                                    "Pedido: ${line.plannedQuantity.toInt()} ${line.productUnit}".trim(),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color.Gray
+                                )
+                            }
+                            OutlinedTextField(
+                                value = inputs[line.id].orEmpty(),
+                                onValueChange = { txt ->
+                                    val filtered = txt.filter { it.isDigit() }
+                                    inputs = inputs.toMutableMap().also { it[line.id] = filtered }
+                                },
+                                placeholder = { Text("0") },
+                                suffix = { Text("/${line.plannedQuantity.toInt()}") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                singleLine = true,
+                                modifier = Modifier.width(130.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = Color(0xFFD9A441),
+                                    focusedLabelColor = Color(0xFFD9A441)
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f).height(48.dp)
+                ) { Text("Cancelar") }
+                Button(
+                    onClick = {
+                        // Solo enviamos los campos con valor numérico — los vacíos no
+                        // se tocan (la línea conserva su producedQuantity actual).
+                        val parsed = inputs.mapNotNull { (id, txt) ->
+                            txt.toDoubleOrNull()?.let { id to it }
+                        }.toMap()
+                        onSave(parsed)
+                    },
+                    modifier = Modifier.weight(1.5f).height(48.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD9A441))
+                ) { Text("Guardar todo", fontWeight = FontWeight.Bold) }
             }
         }
     }
@@ -869,5 +1242,94 @@ private fun LotStatusChip(status: String) {
             color = color,
             fontWeight = FontWeight.Bold
         )
+    }
+}
+
+/**
+ * Lista horizontal con badges por cada [CustomerLineSpec] de la línea. Cada chip
+ * muestra el tipo de cliente (Revendedor / Encargo / Pastel) y el nombre. Si la
+ * línea tiene customSpec, lo agrega abajo en cursiva-ish para el panadero.
+ *
+ * Se renderiza solo si la línea tiene specs — no afecta líneas que vienen 100%
+ * de sucursales.
+ */
+@Composable
+private fun CustomerSpecsRow(specs: List<CustomerLineSpec>) {
+    if (specs.isEmpty()) return
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        FlowRowSimple(items = specs) { spec ->
+            CustomerSpecChip(spec)
+        }
+        val customSpecs = specs.filter { it.customSpec.isNotEmpty() }
+        if (customSpecs.isNotEmpty()) {
+            customSpecs.forEach { spec ->
+                Text(
+                    "✱ ${spec.customerName}: ${spec.customSpec}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFFD9A441),
+                    fontWeight = FontWeight.Medium
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CustomerSpecChip(spec: CustomerLineSpec) {
+    val (bg, fg, label) = when (spec.customerType) {
+        CustomerOrderType.RESELLER -> Triple(
+            Color(0xFFD9A441).copy(alpha = 0.18f),
+            Color(0xFFD9A441),
+            "Revendedor"
+        )
+        CustomerOrderType.CAKE -> Triple(
+            Color(0xFFAD1457).copy(alpha = 0.18f),
+            Color(0xFFAD1457),
+            "Pastel"
+        )
+        CustomerOrderType.RETAIL_SPECIAL -> Triple(
+            Color(0xFF1565C0).copy(alpha = 0.18f),
+            Color(0xFF1565C0),
+            "Encargo"
+        )
+        else -> Triple(Color(0x11000000), Color(0xFF424242), "Cliente")
+    }
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = bg,
+        modifier = Modifier.padding(end = 4.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "$label · ${spec.customerName} (${spec.quantity.toInt()})",
+                style = MaterialTheme.typography.labelSmall,
+                color = fg,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+    }
+}
+
+/**
+ * FlowRow simple (sin la API experimental de Material3). Lista horizontal que
+ * salta a la siguiente línea cuando no cabe. Suficiente para pintar 1-5 chips.
+ */
+@Composable
+private fun <T> FlowRowSimple(
+    items: List<T>,
+    item: @Composable (T) -> Unit
+) {
+    androidx.compose.foundation.layout.FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        items.forEach { item(it) }
     }
 }

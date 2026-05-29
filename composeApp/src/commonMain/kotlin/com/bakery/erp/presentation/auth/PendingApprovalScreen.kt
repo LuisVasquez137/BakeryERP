@@ -8,29 +8,54 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
+private val PrimaryBlue = Color(0xFF005B8D)
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PendingApprovalScreen(viewModel: AuthViewModel) {
     val state by viewModel.uiState.collectAsState()
 
-    Scaffold { padding ->
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Esperando aprobación", color = Color.White, fontWeight = FontWeight.SemiBold) },
+                actions = {
+                    IconButton(onClick = { viewModel.signOut() }) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ExitToApp,
+                            contentDescription = "Cerrar sesión",
+                            tint = Color.White
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = PrimaryBlue)
+            )
+        }
+    ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -67,25 +92,27 @@ fun PendingApprovalScreen(viewModel: AuthViewModel) {
 
             Spacer(Modifier.height(32.dp))
 
+            // Indicador y botones siempre visibles; el spinner ya no oculta el logout.
             if (state.isLoading) {
                 CircularProgressIndicator()
-            } else {
-                OutlinedButton(
-                    onClick = { viewModel.refreshUser() },
-                    modifier = Modifier.padding(bottom = 12.dp)
-                ) {
-                    Text("Revisar estado")
-                }
+                Spacer(Modifier.height(16.dp))
+            }
+            OutlinedButton(
+                onClick = { viewModel.refreshUser() },
+                enabled = !state.isLoading,
+                modifier = Modifier.padding(bottom = 12.dp)
+            ) {
+                Text("Revisar estado")
+            }
 
-                Button(
-                    onClick = { viewModel.signOut() },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer,
-                        contentColor = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                ) {
-                    Text("Cerrar sesión")
-                }
+            Button(
+                onClick = { viewModel.signOut() },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                )
+            ) {
+                Text("Cerrar sesión")
             }
 
             state.error?.let { error ->

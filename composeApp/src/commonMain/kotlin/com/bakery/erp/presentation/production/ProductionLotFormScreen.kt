@@ -55,13 +55,13 @@ private fun ConsolidatedTableHeader() {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("#", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
-                color = Color(0xFF123456), modifier = Modifier.width(36.dp))
+                color = Color(0xFF005B8D), modifier = Modifier.width(36.dp))
             Text("Producto", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
-                color = Color(0xFF123456), modifier = Modifier.weight(2f))
+                color = Color(0xFF005B8D), modifier = Modifier.weight(2f))
             Text("Receta", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
-                color = Color(0xFF123456), modifier = Modifier.weight(1.5f))
+                color = Color(0xFF005B8D), modifier = Modifier.weight(1.5f))
             Text("Unidades", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
-                color = Color(0xFF123456), modifier = Modifier.width(110.dp))
+                color = Color(0xFF005B8D), modifier = Modifier.width(110.dp))
         }
     }
 }
@@ -87,11 +87,11 @@ private fun ConsolidatedTableRow(
                     "$index",
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFFCC5500),
+                    color = Color(0xFFD9A441),
                     modifier = Modifier.width(36.dp)
                 )
                 Column(modifier = Modifier.weight(2f)) {
-                    Text(line.productName, fontWeight = FontWeight.SemiBold, color = Color(0xFF123456))
+                    Text(line.productName, fontWeight = FontWeight.SemiBold, color = Color(0xFF005B8D))
                     if (line.productUnit.isNotEmpty())
                         Text(line.productUnit, style = MaterialTheme.typography.labelSmall, color = Color.Gray)
                 }
@@ -105,7 +105,7 @@ private fun ConsolidatedTableRow(
                     "${line.plannedQuantity.toInt()}",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.ExtraBold,
-                    color = Color(0xFFCC5500),
+                    color = Color(0xFFD9A441),
                     modifier = Modifier.width(110.dp)
                 )
             }
@@ -239,7 +239,7 @@ fun ProductionLotFormScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF123456),
+                    containerColor = Color(0xFF005B8D),
                     titleContentColor = Color.White,
                     navigationIconContentColor = Color.White
                 )
@@ -364,7 +364,7 @@ fun ProductionLotFormScreen(
                             }
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text("Fecha de producción", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                                Text(formatDate(productionDate), fontWeight = FontWeight.SemiBold, color = Color(0xFF123456), style = MaterialTheme.typography.titleMedium)
+                                Text(formatDate(productionDate), fontWeight = FontWeight.SemiBold, color = Color(0xFF005B8D), style = MaterialTheme.typography.titleMedium)
                             }
                             IconButton(onClick = { productionDate += 86_400_000L }) {
                                 Icon(Icons.Default.ChevronRight, "Día siguiente")
@@ -387,7 +387,7 @@ fun ProductionLotFormScreen(
                                 "Hay pedidos pendientes en otras fechas para esta planta:",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFF7A4500)
+                                color = Color(0xFF8A6420)
                             )
                             state.pendingOrdersInOtherDates.entries
                                 .sortedBy { it.key }
@@ -423,7 +423,7 @@ fun ProductionLotFormScreen(
                     Text(
                         "Pedidos pendientes (${state.pendingOrdersForDate.size})",
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFF123456)
+                        color = Color(0xFF005B8D)
                     )
                 }
                 items(state.pendingOrdersForDate) { order ->
@@ -434,7 +434,7 @@ fun ProductionLotFormScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(Modifier.weight(1f)) {
-                                Text(order.sellingBranchName, fontWeight = FontWeight.SemiBold, color = Color(0xFF123456))
+                                Text(order.sellingBranchName, fontWeight = FontWeight.SemiBold, color = Color(0xFF005B8D))
                                 Text(
                                     "${formatDate(order.requestedDate)} · ${order.lineCount} productos",
                                     style = MaterialTheme.typography.labelSmall,
@@ -459,7 +459,7 @@ fun ProductionLotFormScreen(
                 item {
                     HorizontalDivider()
                     Spacer(Modifier.height(4.dp))
-                    Text("Lista consolidada", fontWeight = FontWeight.Bold, color = Color(0xFF123456))
+                    Text("Lista consolidada", fontWeight = FontWeight.Bold, color = Color(0xFF005B8D))
                 }
                 if (isWide) {
                     item { ConsolidatedTableHeader() }
@@ -503,7 +503,7 @@ fun ProductionLotFormScreen(
                         viewModel.saveLot(companyId, currentUser, branch, shift, productionDate, notesText)
                     },
                     modifier = Modifier.fillMaxWidth().height(52.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF123456)),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF005B8D)),
                     enabled = selectedBranch != null && selectedShift != null && !state.isLoading
                 ) {
                     if (state.isLoading) CircularProgressIndicator(Modifier.size(20.dp), color = Color.White)
@@ -530,7 +530,7 @@ private fun LotLineEditRow(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text(line.productName, fontWeight = FontWeight.SemiBold, color = Color(0xFF123456))
+                    Text(line.productName, fontWeight = FontWeight.SemiBold, color = Color(0xFF005B8D))
                     Text(line.productUnit, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                     if (line.recipeId.isNotEmpty())
                         Text(line.recipeName, style = MaterialTheme.typography.labelSmall, color = Color(0xFF1565C0))
@@ -539,7 +539,7 @@ private fun LotLineEditRow(
                     "${line.plannedQuantity.toInt()}",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.ExtraBold,
-                    color = Color(0xFFCC5500),
+                    color = Color(0xFFD9A441),
                     modifier = Modifier.width(90.dp)
                 )
             }
@@ -551,7 +551,7 @@ private fun LotLineEditRow(
                     "Adornos del producto",
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.SemiBold,
-                    color = Color(0xFF123456)
+                    color = Color(0xFF005B8D)
                 )
                 line.decorationsSnapshot.forEachIndexed { idx, deco ->
                     DecorationRow(
@@ -650,7 +650,7 @@ private fun InfoLabelCard(label: String, value: String) {
                 value,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
-                color = Color(0xFF123456)
+                color = Color(0xFF005B8D)
             )
         }
     }

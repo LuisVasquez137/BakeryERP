@@ -1,7 +1,13 @@
 package com.bakery.erp.presentation.home
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.layout.ContentScale
+import org.jetbrains.compose.resources.painterResource
+import bakeryerp.composeapp.generated.resources.Res
+import bakeryerp.composeapp.generated.resources.bakeos_logo
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -35,7 +41,7 @@ import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.util.fmtMoney
 import androidx.compose.runtime.remember
 
-private val PrimaryBlue = Color(0xFF004F7C)
+private val PrimaryBlue = Color(0xFF005B8D)
 private val CoffeeBrown = Color(0xFF2E4A6E)
 private val SlateText   = Color(0xFF1A2B38)
 private val MutedText   = Color(0xFF607585)
@@ -69,12 +75,15 @@ private val ALL_SECTIONS = listOf(
     ModuleSection("Ventas", Icons.Default.PointOfSale, Color(0xFF1A56A0), listOf(
         ModuleItem("Productos",       "Catálogo y precios",   Icons.Default.BakeryDining,  Color(0xFFEEF3FC)),
         ModuleItem("Listas de Precios", "Canales y mayoreo",  Icons.Default.Sell,          Color(0xFFEEF3FC)),
+        ModuleItem("Pedidos de Clientes", "Revendedores y encargos", Icons.Default.ShoppingCart, Color(0xFFEEF3FC)),
+        ModuleItem("Aprobar Revendedores", "Validar nuevos registros", Icons.Default.HowToReg, Color(0xFFEEF3FC)),
         ModuleItem("Punto de Venta",  "Caja y cobro rápido",  Icons.Default.PointOfSale,   Color(0xFFEEF3FC)),
         ModuleItem("Historial de Ventas", "Transacciones del día", Icons.Default.Receipt,  Color(0xFFEEF3FC)),
         ModuleItem("Cierre del día",      "Consolidado por sucursal", Icons.Default.PointOfSale, Color(0xFFEEF3FC)),
         ModuleItem("Cuadre sorpresa",     "Auditoría a cajas abiertas", Icons.Default.PointOfSale, Color(0xFFEEF3FC)),
     )),
     ModuleSection("Administración", Icons.Default.Settings, CoffeeBrown, listOf(
+        ModuleItem("Configuración",        "Código de invitación y entregas", Icons.Default.Settings, Color(0xFFE0E8F0)),
         ModuleItem("Proveedores",          "Gestión externa",      Icons.Default.Business,    Color(0xFFE0E8F0)),
         ModuleItem("Gastos",               "Control por sucursal", Icons.Default.Receipt,     Color(0xFFE0E8F0)),
         ModuleItem("Sucursales",           "Gestión de locales",   Icons.Default.Store,       Color(0xFFE0E8F0)),
@@ -124,6 +133,13 @@ private fun hasModuleAccess(title: String, user: User) = with(user) {
         "Cuadre sorpresa"   -> hasPermission(Permission.SPOT_CHECK_CASH)
         "Conteo de pan"     -> hasPermission(Permission.COUNT_FINISHED_STOCK) ||
                                hasPermission(Permission.VIEW_BREAD_COUNTS)
+        "Pedidos de Clientes" -> hasPermission(Permission.VIEW_CUSTOMER_ORDERS) ||
+                                 hasPermission(Permission.CREATE_RESELLER_ORDER) ||
+                                 hasPermission(Permission.CREATE_RETAIL_SPECIAL_ORDER) ||
+                                 hasPermission(Permission.CREATE_CAKE_ORDER) ||
+                                 hasPermission(Permission.MANAGE_CUSTOMER_ORDERS)
+        "Configuración"       -> hasPermission(Permission.MANAGE_USERS)
+        "Aprobar Revendedores" -> hasPermission(Permission.MANAGE_EXTERNAL_CUSTOMERS)
         else                      -> true
     }
 }
@@ -162,6 +178,9 @@ fun HomeScreen(
     onNavigateToSalesReport: () -> Unit = {},
     onNavigateToProductionReport: () -> Unit = {},
     onNavigateToFinancialReport: () -> Unit = {},
+    onNavigateToCustomerOrders: () -> Unit = {},
+    onNavigateToOrganizationSettings: () -> Unit = {},
+    onNavigateToResellerApproval: () -> Unit = {},
     viewModel: AuthViewModel,
     homeViewModel: HomeViewModel
 ) {
@@ -204,6 +223,9 @@ fun HomeScreen(
             "Conteo de pan"           -> onNavigateToBreadCount()
             "Cierre del día"          -> onNavigateToDailyCashClose()
             "Cuadre sorpresa"         -> onNavigateToSpotCashCheck()
+            "Pedidos de Clientes"     -> onNavigateToCustomerOrders()
+            "Configuración"           -> onNavigateToOrganizationSettings()
+            "Aprobar Revendedores"    -> onNavigateToResellerApproval()
         }
     }
 
@@ -219,7 +241,16 @@ fun HomeScreen(
         containerColor = Color(0xFFFDFBF7),
         topBar = {
             TopAppBar(
-                title = { Text("Bagueto", fontWeight = FontWeight.ExtraBold, color = Color.White) },
+                title = {
+                    // Logo (recortado, aspecto ~2.8:1) tintado en blanco para resaltar sobre el header azul.
+                    Image(
+                        painter = painterResource(Res.drawable.bakeos_logo),
+                        contentDescription = "BakeOS",
+                        contentScale = ContentScale.Fit,
+                        colorFilter = ColorFilter.tint(Color.White),
+                        modifier = Modifier.height(40.dp)
+                    )
+                },
                 actions = {
                     IconButton(onClick = {}) {
                         Icon(Icons.Default.Notifications, null, tint = Color.White.copy(alpha = 0.85f))
@@ -329,10 +360,11 @@ private fun GreetingHeader(user: User?) {
             )
             Text(
                 text = when (user?.role ?: UserRole.EMPLOYEE) {
-                    UserRole.OWNER    -> "Propietario · Bagueto"
+                    UserRole.OWNER    -> "Propietario · BakeOS"
                     UserRole.ADMIN    -> "Administrador"
                     UserRole.MANAGER  -> "Encargado"
                     UserRole.EMPLOYEE -> "Empleado"
+                    UserRole.RESELLER -> "Revendedor"
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MutedText

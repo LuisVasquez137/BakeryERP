@@ -66,7 +66,16 @@ enum class Permission {
     VIEW_SALES_REPORT,
     VIEW_PRODUCTION_REPORT,
     VIEW_FINANCIAL_REPORT,
-    VIEW_INVENTORY_REPORT;
+    VIEW_INVENTORY_REPORT,
+
+    // Pedidos de Clientes
+    VIEW_CUSTOMER_ORDERS,
+    CREATE_RESELLER_ORDER,
+    CREATE_RETAIL_SPECIAL_ORDER,
+    CREATE_CAKE_ORDER,
+    MANAGE_CUSTOMER_ORDERS,
+    MANAGE_EXTERNAL_CUSTOMERS,
+    COLLECT_ORDER_PAYMENT;
 
     val label: String get() = when (this) {
         VIEW_PRODUCTS -> "Ver productos"
@@ -117,6 +126,13 @@ enum class Permission {
         VIEW_PRODUCTION_REPORT -> "Ver reporte de producción"
         VIEW_FINANCIAL_REPORT -> "Ver reporte financiero"
         VIEW_INVENTORY_REPORT -> "Ver reporte de inventario"
+        VIEW_CUSTOMER_ORDERS -> "Ver pedidos de clientes"
+        CREATE_RESELLER_ORDER -> "Crear pedido de revendedor"
+        CREATE_RETAIL_SPECIAL_ORDER -> "Crear encargo de cliente"
+        CREATE_CAKE_ORDER -> "Crear encargo de pastel"
+        MANAGE_CUSTOMER_ORDERS -> "Confirmar y gestionar pedidos de clientes"
+        MANAGE_EXTERNAL_CUSTOMERS -> "Gestionar clientes externos y revendedores"
+        COLLECT_ORDER_PAYMENT -> "Cobrar anticipos y saldos de pedidos"
     }
 
     val description: String get() = when (this) {
@@ -168,6 +184,13 @@ enum class Permission {
         VIEW_PRODUCTION_REPORT -> "Puede consultar el reporte formal de producción: planeado vs producido, eficiencia, mermas en tránsito y discrepancias"
         VIEW_FINANCIAL_REPORT -> "Puede consultar el estado financiero del mes: ingresos, gastos, planilla, utilidad operativa y margen"
         VIEW_INVENTORY_REPORT -> "Puede consultar el reporte de inventario: rotación, mermas valoradas y movimientos por sucursal"
+        VIEW_CUSTOMER_ORDERS -> "Puede ver el listado y detalle de pedidos de clientes (revendedores, encargos especiales, pasteles)"
+        CREATE_RESELLER_ORDER -> "Puede crear pedidos para tiendas revendedoras con lista mayorista"
+        CREATE_RETAIL_SPECIAL_ORDER -> "Puede crear encargos especiales de cliente final (panes especiales, cantidades grandes)"
+        CREATE_CAKE_ORDER -> "Puede crear encargos de pastel con especificaciones de sabor, relleno, decoración y anticipo"
+        MANAGE_CUSTOMER_ORDERS -> "Puede confirmar, editar y cancelar pedidos de clientes; consolidarlos en lotes de producción"
+        MANAGE_EXTERNAL_CUSTOMERS -> "Puede crear y editar la agenda de clientes externos y revendedores"
+        COLLECT_ORDER_PAYMENT -> "Puede registrar anticipos, depósitos y cobros del saldo de un pedido (en POS o directo)"
     }
 
     val group: String get() = when (this) {
@@ -198,5 +221,9 @@ enum class Permission {
         VIEW_OPERATIONS_REPORT, VIEW_SALES_REPORT,
         VIEW_PRODUCTION_REPORT, VIEW_FINANCIAL_REPORT,
         VIEW_INVENTORY_REPORT -> "Reportes"
+        VIEW_CUSTOMER_ORDERS, CREATE_RESELLER_ORDER,
+        CREATE_RETAIL_SPECIAL_ORDER, CREATE_CAKE_ORDER,
+        MANAGE_CUSTOMER_ORDERS, MANAGE_EXTERNAL_CUSTOMERS,
+        COLLECT_ORDER_PAYMENT -> "Pedidos de Clientes"
     }
 }

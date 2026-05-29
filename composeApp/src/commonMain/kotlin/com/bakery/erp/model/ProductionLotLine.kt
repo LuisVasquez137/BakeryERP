@@ -16,5 +16,23 @@ data class ProductionLotLine(
     val spongeBatchName: String = "",
     val spongeGramsUsed: Double = 0.0,
     // Snapshot de los adornos del producto al crear la línea, con el batch elegido.
-    val decorationsSnapshot: List<ProductionLotDecoration> = emptyList()
+    val decorationsSnapshot: List<ProductionLotDecoration> = emptyList(),
+    /**
+     * Notas por encargo de cliente externo. Permite que el panadero vea
+     * "Doña María: 5 pirujos grandes" sin perder la consolidación de cantidades.
+     * Se llena cuando la línea proviene total o parcialmente de un [CustomerOrder].
+     */
+    val customerSpecs: List<CustomerLineSpec> = emptyList()
 )
+
+/** Marca de cliente sobre una línea consolidada de lote — informativo. */
+data class CustomerLineSpec(
+    val customerOrderId: String = "",
+    val customerName: String = "",
+    val quantity: Double = 0.0,
+    val customSpec: String = "",
+    /** Tipo del [CustomerOrder] de origen: RESELLER | RETAIL_SPECIAL | CAKE. Permite
+     *  pintar el badge correcto al panadero sin tener que cargar el pedido. */
+    val customerType: String = "",
+)
+

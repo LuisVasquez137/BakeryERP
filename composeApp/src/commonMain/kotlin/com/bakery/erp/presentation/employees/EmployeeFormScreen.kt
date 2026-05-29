@@ -71,7 +71,7 @@ import com.bakery.erp.ui.AdaptiveContainer
 import com.bakery.erp.ui.ImagePickerButton
 import kotlin.time.Clock
 
-private val PrimaryBlue = Color(0xFF004F7C)
+private val PrimaryBlue = Color(0xFF005B8D)
 
 private val DAY_LABELS = listOf("L", "M", "X", "J", "V", "S", "D")
 private val DAY_NUMBERS = listOf(1, 2, 3, 4, 5, 6, 7)

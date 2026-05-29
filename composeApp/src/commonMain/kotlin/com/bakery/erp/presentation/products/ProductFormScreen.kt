@@ -36,6 +36,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -150,6 +152,12 @@ fun ProductFormScreen(
     var shelfLife by rememberSaveable { mutableStateOf(existingProduct?.shelfLife?.toString() ?: "") }
     var storageType by rememberSaveable { mutableStateOf(existingProduct?.storageType ?: "") }
     var notes by rememberSaveable { mutableStateOf(existingProduct?.notes ?: "") }
+    // ¿Producto in-house o de reventa? La asignación de plantas que pueden
+    // producirlo se hace desde el módulo de Sucursales (Branch.assignedProductIds),
+    // no aquí — única fuente de verdad.
+    var isInHouseProduced by rememberSaveable {
+        mutableStateOf(existingProduct?.isInHouseProduced ?: true)
+    }
     var selectedImageBytes by remember { mutableStateOf<ByteArray?>(null) }
     var nameError by remember { mutableStateOf(false) }
     var salePriceError by remember { mutableStateOf(false) }
@@ -240,7 +248,8 @@ fun ProductFormScreen(
                 shapingNotes = shapingNotes.trim().ifEmpty { null },
                 bakingNotes = bakingNotes.trim().ifEmpty { null }
             ),
-            decorations = decorations.filter { it.preparationId.isNotEmpty() && it.gramsPerUnit > 0.0 }
+            decorations = decorations.filter { it.preparationId.isNotEmpty() && it.gramsPerUnit > 0.0 },
+            isInHouseProduced = isInHouseProduced
         )
     }
 
@@ -345,7 +354,8 @@ fun ProductFormScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         when (selectedTab) {
-                            0 -> GeneralTabContent(
+                            0 -> {
+                                GeneralTabContent(
                                 name = name, onNameChange = { name = it; nameError = false },
                                 nameError = nameError,
                                 description = description, onDescriptionChange = { description = it },
@@ -368,6 +378,11 @@ fun ProductFormScreen(
                                 storageType = storageType, onStorageTypeChange = { storageType = it },
                                 notes = notes, onNotesChange = { notes = it }
                             )
+                                ProductionRoutingSection(
+                                    isInHouseProduced = isInHouseProduced,
+                                    onIsInHouseChange = { isInHouseProduced = it }
+                                )
+                            }
                             1 -> PricesTabContent(
                                 lists = activeLists,
                                 retailDefaultId = retailDefaultId,
@@ -1255,12 +1270,58 @@ private fun PricesTabContent(
                     Text(
                         "Al guardar se borrará el precio fijo anterior y volverá a aplicarse el factor.",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFFCC5500),
+                        color = Color(0xFFD9A441),
                         modifier = Modifier.padding(top = 2.dp)
                     )
                 }
             }
         }
         Spacer(Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun ProductionRoutingSection(
+    isInHouseProduced: Boolean,
+    onIsInHouseChange: (Boolean) -> Unit
+) {
+    val PrimaryBlue = Color(0xFF005B8D)
+    Spacer(Modifier.height(8.dp))
+    HorizontalDivider()
+    Spacer(Modifier.height(12.dp))
+
+    Text(
+        "Producción",
+        style = MaterialTheme.typography.titleSmall,
+        color = PrimaryBlue,
+        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+    )
+
+    // Switch: producto in-house vs reventa
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                "Lo producimos nosotros",
+                color = PrimaryBlue,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+            )
+            Text(
+                if (isInHouseProduced)
+                    "El producto entra al lote de producción de la planta. " +
+                        "Para asignar qué plantas lo producen, ve a Sucursales → editar la planta → " +
+                        "sección 'Productos que produce'."
+                else "Reventa pura (ej. tostadas, chocolate): se sirve directo del stock terminado.",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFF6E6E6E)
+            )
+        }
+        Switch(
+            checked = isInHouseProduced,
+            onCheckedChange = onIsInHouseChange
+        )
     }
 }

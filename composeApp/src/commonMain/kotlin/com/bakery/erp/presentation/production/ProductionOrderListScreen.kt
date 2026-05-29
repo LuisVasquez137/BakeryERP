@@ -146,7 +146,7 @@ fun ProductionOrderListScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF123456),
+                    containerColor = Color(0xFF005B8D),
                     titleContentColor = Color.White,
                     navigationIconContentColor = Color.White
                 )
@@ -156,7 +156,7 @@ fun ProductionOrderListScreen(
             if (canSend && selectedTab == 0) {
                 FloatingActionButton(
                     onClick = onNavigateToForm,
-                    containerColor = Color(0xFF123456)
+                    containerColor = Color(0xFF005B8D)
                 ) { Icon(Icons.Default.Add, "Nuevo pedido", tint = Color.White) }
             }
         },
@@ -337,7 +337,7 @@ private fun OrdersTab(
                     onClick = { onShiftFilterChange("") },
                     label = { Text("Todos los turnos") },
                     colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = Color(0xFF123456),
+                        selectedContainerColor = Color(0xFF005B8D),
                         selectedLabelColor = Color.White
                     )
                 )
@@ -347,7 +347,7 @@ private fun OrdersTab(
                         onClick = { onShiftFilterChange(id) },
                         label = { Text(name) },
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0xFF123456),
+                            selectedContainerColor = Color(0xFF005B8D),
                             selectedLabelColor = Color.White
                         )
                     )
@@ -421,7 +421,7 @@ private fun MonthHeader(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onPrev) {
-                Icon(Icons.Default.ChevronLeft, "Mes anterior", tint = Color(0xFF123456))
+                Icon(Icons.Default.ChevronLeft, "Mes anterior", tint = Color(0xFF005B8D))
             }
             Row(
                 modifier = Modifier.weight(1f).clickable(onClick = onTap),
@@ -431,19 +431,19 @@ private fun MonthHeader(
                 Icon(
                     Icons.Default.CalendarMonth,
                     contentDescription = null,
-                    tint = Color(0xFF123456),
+                    tint = Color(0xFF005B8D),
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
                     "${monthName(month)} $year",
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFF123456),
+                    color = Color(0xFF005B8D),
                     style = MaterialTheme.typography.titleMedium
                 )
             }
             IconButton(onClick = onNext) {
-                Icon(Icons.Default.ChevronRight, "Mes siguiente", tint = Color(0xFF123456))
+                Icon(Icons.Default.ChevronRight, "Mes siguiente", tint = Color(0xFF005B8D))
             }
         }
     }
@@ -471,17 +471,17 @@ private fun MonthPickerDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = { year -= 1 }) {
-                        Icon(Icons.Default.ChevronLeft, "Año anterior", tint = Color(0xFF123456))
+                        Icon(Icons.Default.ChevronLeft, "Año anterior", tint = Color(0xFF005B8D))
                     }
                     Text(
                         "$year",
                         fontWeight = FontWeight.Bold,
                         style = MaterialTheme.typography.titleLarge,
-                        color = Color(0xFF123456),
+                        color = Color(0xFF005B8D),
                         modifier = Modifier.padding(horizontal = 24.dp)
                     )
                     IconButton(onClick = { year += 1 }) {
-                        Icon(Icons.Default.ChevronRight, "Año siguiente", tint = Color(0xFF123456))
+                        Icon(Icons.Default.ChevronRight, "Año siguiente", tint = Color(0xFF005B8D))
                     }
                 }
                 // Grid 4x3 de meses.
@@ -493,7 +493,7 @@ private fun MonthPickerDialog(
                                 Surface(
                                     modifier = Modifier.weight(1f).clickable { month = m },
                                     shape = RoundedCornerShape(8.dp),
-                                    color = if (selected) Color(0xFF123456) else Color.Transparent,
+                                    color = if (selected) Color(0xFF005B8D) else Color.Transparent,
                                     border = if (selected) null
                                              else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                                 ) {
@@ -501,7 +501,7 @@ private fun MonthPickerDialog(
                                         monthShort(m),
                                         modifier = Modifier.padding(vertical = 10.dp),
                                         textAlign = TextAlign.Center,
-                                        color = if (selected) Color.White else Color(0xFF123456),
+                                        color = if (selected) Color.White else Color(0xFF005B8D),
                                         fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                                         style = MaterialTheme.typography.bodyMedium
                                     )
@@ -574,7 +574,7 @@ private fun ProductionOrderTable(
                         Box(modifier = Modifier.weight(1.2f).padding(horizontal = 4.dp)) {
                             Surface(
                                 shape = RoundedCornerShape(6.dp),
-                                color = Color(0xFF123456)
+                                color = Color(0xFF005B8D)
                             ) {
                                 Text(
                                     order.sellingBranchName.ifBlank { "—" },
@@ -625,7 +625,7 @@ private fun TableHeaderCell(
         modifier = modifier.padding(horizontal = 4.dp),
         style = MaterialTheme.typography.labelLarge,
         fontWeight = FontWeight.Bold,
-        color = Color(0xFF123456),
+        color = Color(0xFF005B8D),
         textAlign = textAlign
     )
 }
@@ -819,7 +819,7 @@ private fun ConsolidatedTab(
                             onClick = { selectedShiftId = shift.id },
                             label = { Text(shift.name, fontWeight = FontWeight.SemiBold) },
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = Color(0xFF123456),
+                                selectedContainerColor = Color(0xFF005B8D),
                                 selectedLabelColor = Color.White
                             )
                         )
@@ -844,7 +844,7 @@ private fun ConsolidatedTab(
                     Text(
                         shifts.first().name,
                         fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF123456)
+                        color = Color(0xFF005B8D)
                     )
                 }
             }
@@ -1059,7 +1059,7 @@ private fun ConsolidatedTab(
                         )
                     },
                     modifier = Modifier.fillMaxWidth().height(52.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF123456))
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF005B8D))
                 ) {
                     Text("Crear lote de producción →", fontWeight = FontWeight.Bold)
                 }
@@ -1187,7 +1187,7 @@ private fun ConsolidatedTable(
                             modifier = Modifier.width(productColWidth).padding(horizontal = 6.dp),
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF123456)
+                            color = Color(0xFF005B8D)
                         )
                         branches.forEach { (_, branchName) ->
                             Text(
@@ -1195,7 +1195,7 @@ private fun ConsolidatedTable(
                                 modifier = Modifier.width(qtyColWidth).padding(horizontal = 6.dp),
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = Color(0xFF123456),
+                                color = Color(0xFF005B8D),
                                 textAlign = TextAlign.End
                             )
                         }
@@ -1204,7 +1204,7 @@ private fun ConsolidatedTable(
                             modifier = Modifier.width(qtyColWidth).padding(horizontal = 6.dp),
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF123456),
+                            color = Color(0xFF005B8D),
                             textAlign = TextAlign.End
                         )
                     }
@@ -1259,7 +1259,7 @@ private fun ConsolidatedTable(
                             modifier = Modifier.width(productColWidth).padding(horizontal = 6.dp),
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF123456)
+                            color = Color(0xFF005B8D)
                         )
                         branches.forEach { (branchId, _) ->
                             val branchTotal = rows.sumOf { it.quantitiesByBranch[branchId] ?: 0.0 }
@@ -1268,7 +1268,7 @@ private fun ConsolidatedTable(
                                 modifier = Modifier.width(qtyColWidth).padding(horizontal = 6.dp),
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = Color(0xFF123456),
+                                color = Color(0xFF005B8D),
                                 textAlign = TextAlign.End
                             )
                         }
@@ -1277,7 +1277,7 @@ private fun ConsolidatedTable(
                             modifier = Modifier.width(qtyColWidth).padding(horizontal = 6.dp),
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF123456),
+                            color = Color(0xFF005B8D),
                             textAlign = TextAlign.End
                         )
                     }
@@ -1302,7 +1302,7 @@ private fun ProductionOrderCard(
         ),
         shape = RoundedCornerShape(12.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        border = if (isSelected) BorderStroke(1.5.dp, Color(0xFF123456)) else null
+        border = if (isSelected) BorderStroke(1.5.dp, Color(0xFF005B8D)) else null
     ) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             // Fila superior: estado + #productos
@@ -1321,7 +1321,7 @@ private fun ProductionOrderCard(
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF123456)
+                        color = Color(0xFF005B8D)
                     )
                 }
             }
@@ -1350,7 +1350,7 @@ private fun CardInfoRow(label: String, value: String) {
             value,
             style = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.SemiBold,
-            color = Color(0xFF123456),
+            color = Color(0xFF005B8D),
             textAlign = TextAlign.End,
             modifier = Modifier.padding(start = 12.dp)
         )

@@ -138,7 +138,7 @@ fun ProductionShiftListScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF123456),
+                    containerColor = Color(0xFF005B8D),
                     titleContentColor = Color.White,
                     navigationIconContentColor = Color.White
                 )
@@ -148,7 +148,7 @@ fun ProductionShiftListScreen(
             selectedBranch?.let { branch ->
                 FloatingActionButton(
                     onClick = { onNavigateToForm(branch.id, null) },
-                    containerColor = Color(0xFF123456)
+                    containerColor = Color(0xFF005B8D)
                 ) { Icon(Icons.Default.Add, "Nuevo turno", tint = Color.White) }
             }
         },
@@ -254,7 +254,7 @@ private fun ShiftCard(shift: ProductionShift, onEdit: () -> Unit, onDelete: () -
                 Text(
                     shift.name,
                     fontWeight = FontWeight.SemiBold,
-                    color = Color(0xFF123456),
+                    color = Color(0xFF005B8D),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -326,7 +326,7 @@ private fun ShiftTableRow(shift: ProductionShift, onEdit: () -> Unit, onDelete: 
             shift.name,
             style = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.SemiBold,
-            color = Color(0xFF123456),
+            color = Color(0xFF005B8D),
             modifier = Modifier.weight(0.3f),
             maxLines = 2,
             overflow = TextOverflow.Ellipsis

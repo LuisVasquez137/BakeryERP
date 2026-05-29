@@ -5,10 +5,12 @@ import com.bakery.erp.domain.report.DailyProductionPoint
 import com.bakery.erp.domain.report.ProductProductionStat
 import com.bakery.erp.domain.report.ProductionSummary
 import com.bakery.erp.domain.report.ShiftProductionStat
+import com.bakery.erp.model.CustomerLineSpec
 import com.bakery.erp.model.ProductionLot
 import com.bakery.erp.model.ProductionLotDecoration
 import com.bakery.erp.model.ProductionLotLine
 import com.bakery.erp.model.ProductionLotStatus
+import com.bakery.erp.model.CustomerLineRef
 import com.bakery.erp.model.ProductionOrder
 import com.bakery.erp.model.ProductionOrderLine
 import com.bakery.erp.model.ProductionOrderStatus
@@ -307,6 +309,93 @@ class FirebaseProductionRepository(
         lotsCol(companyId).document(lotId).set(updatedLot.toLotMap())
     }
 
+    override suspend fun addCustomerOrderToLot(
+        companyId: String,
+        lotId: String,
+        customerOrderId: String,
+        newLines: List<ProductionLotLine>
+    ) {
+        val lot = getLot(companyId, lotId) ?: error("Lote no encontrado: $lotId")
+        if (lot.status == ProductionLotStatus.COMPLETED || lot.status == ProductionLotStatus.CANCELLED) {
+            error("No se puede agregar a un lote ${lot.status}")
+        }
+        val existing = getLotLines(companyId, lotId)
+        val byProduct = existing.associateBy { it.productId }.toMutableMap()
+
+        for (incoming in newLines) {
+            val match = byProduct[incoming.productId]
+            if (match != null) {
+                // Suma cantidades y combina customerSpecs (sin duplicar el mismo orderId).
+                val mergedSpecs = (match.customerSpecs +
+                    incoming.customerSpecs.filter { spec ->
+                        match.customerSpecs.none { it.customerOrderId == spec.customerOrderId }
+                    })
+                val merged = match.copy(
+                    plannedQuantity = match.plannedQuantity + incoming.plannedQuantity,
+                    producedQuantity = match.producedQuantity + incoming.producedQuantity,
+                    customerSpecs = mergedSpecs
+                )
+                lotLinesCol(companyId, lotId).document(match.id).set(merged.toLotLineMap())
+                byProduct[incoming.productId] = merged
+            } else {
+                val lineDoc = lotLinesCol(companyId, lotId).document
+                val created = incoming.copy(id = lineDoc.id)
+                lineDoc.set(created.toLotLineMap())
+                byProduct[incoming.productId] = created
+            }
+        }
+
+        val now = Clock.System.now().toEpochMilliseconds()
+        val updatedLot = lot.copy(
+            lineCount = byProduct.size,
+            customerOrderIds = (lot.customerOrderIds + customerOrderId).distinct(),
+            updatedAt = now
+        )
+        lotsCol(companyId).document(lotId).set(updatedLot.toLotMap())
+    }
+
+    override suspend fun removeCustomerOrderFromLot(
+        companyId: String,
+        lotId: String,
+        customerOrderId: String
+    ) {
+        val lot = getLot(companyId, lotId) ?: error("Lote no encontrado: $lotId")
+        if (lot.status == ProductionLotStatus.COMPLETED || lot.status == ProductionLotStatus.CANCELLED) {
+            error("No se puede quitar el pedido de un lote ${lot.status}")
+        }
+        val existing = getLotLines(companyId, lotId)
+
+        for (line in existing) {
+            val specsToRemove = line.customerSpecs.filter { it.customerOrderId == customerOrderId }
+            if (specsToRemove.isEmpty()) continue
+
+            val qtyToRemove = specsToRemove.sumOf { it.quantity }
+            val newPlanned = (line.plannedQuantity - qtyToRemove).coerceAtLeast(0.0)
+            val newProduced = (line.producedQuantity - qtyToRemove).coerceAtLeast(0.0)
+            val remainingSpecs = line.customerSpecs - specsToRemove.toSet()
+
+            if (newPlanned <= 0.0 && remainingSpecs.isEmpty()) {
+                runCatching { lotLinesCol(companyId, lotId).document(line.id).delete() }
+            } else {
+                val updated = line.copy(
+                    plannedQuantity = newPlanned,
+                    producedQuantity = newProduced,
+                    customerSpecs = remainingSpecs
+                )
+                lotLinesCol(companyId, lotId).document(line.id).set(updated.toLotLineMap())
+            }
+        }
+
+        val now = Clock.System.now().toEpochMilliseconds()
+        val remainingLines = getLotLines(companyId, lotId)
+        val updatedLot = lot.copy(
+            lineCount = remainingLines.size,
+            customerOrderIds = lot.customerOrderIds.filter { it != customerOrderId },
+            updatedAt = now
+        )
+        lotsCol(companyId).document(lotId).set(updatedLot.toLotMap())
+    }
+
     // ── Lotes ─────────────────────────────────────────────────────────────────
 
     override suspend fun getLotsForBranch(companyId: String, branchId: String): List<ProductionLot> =
@@ -377,8 +466,14 @@ class FirebaseProductionRepository(
 
     override suspend fun updateLotStatus(companyId: String, lotId: String, newStatus: String) {
         val lot = getLot(companyId, lotId) ?: return
+        val now = Clock.System.now().toEpochMilliseconds()
+        // Cuando un lote pasa a IN_PROGRESS por primera vez, registramos la hora real
+        // de inicio. Esto alimenta el cronómetro vivo del detalle y permite que el
+        // tiempo trabajado quede como dato auditable para reportes de producción.
+        val startedAt = if (newStatus == ProductionLotStatus.IN_PROGRESS && lot.startedAt == null) now
+                        else lot.startedAt
         lotsCol(companyId).document(lotId).set(
-            lot.copy(status = newStatus, updatedAt = Clock.System.now().toEpochMilliseconds()).toLotMap()
+            lot.copy(status = newStatus, updatedAt = now, startedAt = startedAt).toLotMap()
         )
     }
 
@@ -574,7 +669,8 @@ class FirebaseProductionRepository(
         "createdByUserName" to createdByUserName,
         "createdAt" to createdAt,
         "updatedAt" to updatedAt,
-        "lineCount" to lineCount
+        "lineCount" to lineCount,
+        "includedCustomerLineIds" to includedCustomerLineIds
     )
 
     private fun ProductionOrderLine.toOrderLineMap(): Map<String, Any?> = firestoreSafeOf(
@@ -582,7 +678,16 @@ class FirebaseProductionRepository(
         "productId" to productId,
         "productName" to productName,
         "requestedQuantity" to requestedQuantity,
-        "productUnit" to productUnit
+        "productUnit" to productUnit,
+        "customerLineRefs" to customerLineRefs.map {
+            mapOf(
+                "customerOrderId" to it.customerOrderId,
+                "customerName" to it.customerName,
+                "customerOrderLineId" to it.customerOrderLineId,
+                "quantity" to it.quantity,
+                "customSpec" to it.customSpec
+            )
+        }
     )
 
     private fun DocumentSnapshot.toOrder() = ProductionOrder(
@@ -601,7 +706,10 @@ class FirebaseProductionRepository(
         createdByUserName = get<String?>("createdByUserName") ?: "",
         createdAt = readMillis("createdAt"),
         updatedAt = readMillis("updatedAt"),
-        lineCount = runCatching { get<Long?>("lineCount")?.toInt() }.getOrNull() ?: 0
+        lineCount = runCatching { get<Long?>("lineCount")?.toInt() }.getOrNull() ?: 0,
+        includedCustomerLineIds = runCatching {
+            get<List<String>?>("includedCustomerLineIds")
+        }.getOrNull() ?: emptyList()
     )
 
     private fun DocumentSnapshot.toOrderLine() = ProductionOrderLine(
@@ -609,7 +717,19 @@ class FirebaseProductionRepository(
         productId = get<String?>("productId") ?: "",
         productName = get<String?>("productName") ?: "",
         requestedQuantity = runCatching { get<Double?>("requestedQuantity") }.getOrNull() ?: 0.0,
-        productUnit = get<String?>("productUnit") ?: ""
+        productUnit = get<String?>("productUnit") ?: "",
+        customerLineRefs = runCatching {
+            @Suppress("UNCHECKED_CAST")
+            (get<List<Map<String, Any?>>?>("customerLineRefs") ?: emptyList()).map {
+                CustomerLineRef(
+                    customerOrderId = it["customerOrderId"] as? String ?: "",
+                    customerName = it["customerName"] as? String ?: "",
+                    customerOrderLineId = it["customerOrderLineId"] as? String ?: "",
+                    quantity = (it["quantity"] as? Number)?.toDouble() ?: 0.0,
+                    customSpec = it["customSpec"] as? String ?: ""
+                )
+            }
+        }.getOrElse { emptyList() }
     )
 
     // ── Serialización — Lotes ─────────────────────────────────────────────────
@@ -628,10 +748,12 @@ class FirebaseProductionRepository(
         "createdByUserName" to createdByUserName,
         "createdAt" to createdAt,
         "updatedAt" to updatedAt,
+        "startedAt" to startedAt,
         "completedAt" to completedAt,
         "stockDeducted" to stockDeducted,
         "lineCount" to lineCount,
-        "sourceOrderIds" to sourceOrderIds
+        "sourceOrderIds" to sourceOrderIds,
+        "customerOrderIds" to customerOrderIds
     )
 
     private fun ProductionLotLine.toLotLineMap(): Map<String, Any?> = firestoreSafeOf(
@@ -655,6 +777,15 @@ class FirebaseProductionRepository(
                 "batchId" to it.batchId,
                 "batchName" to it.batchName
             )
+        },
+        "customerSpecs" to customerSpecs.map {
+            mapOf(
+                "customerOrderId" to it.customerOrderId,
+                "customerName" to it.customerName,
+                "quantity" to it.quantity,
+                "customSpec" to it.customSpec,
+                "customerType" to it.customerType
+            )
         }
     )
 
@@ -672,10 +803,12 @@ class FirebaseProductionRepository(
         createdByUserName = get<String?>("createdByUserName") ?: "",
         createdAt = readMillis("createdAt"),
         updatedAt = readMillis("updatedAt"),
+        startedAt = runCatching { get<Long?>("startedAt") }.getOrNull(),
         completedAt = runCatching { get<Long?>("completedAt") }.getOrNull(),
         stockDeducted = runCatching { get<Boolean?>("stockDeducted") }.getOrNull() ?: false,
         lineCount = runCatching { get<Long?>("lineCount")?.toInt() }.getOrNull() ?: 0,
-        sourceOrderIds = runCatching { get<List<String>?>("sourceOrderIds") }.getOrNull() ?: emptyList()
+        sourceOrderIds = runCatching { get<List<String>?>("sourceOrderIds") }.getOrNull() ?: emptyList(),
+        customerOrderIds = runCatching { get<List<String>?>("customerOrderIds") }.getOrNull() ?: emptyList()
     )
 
     private fun DocumentSnapshot.toLotLine() = ProductionLotLine(
@@ -700,6 +833,18 @@ class FirebaseProductionRepository(
                     gramsPerUnit = (it["gramsPerUnit"] as? Number)?.toDouble() ?: 0.0,
                     batchId = it["batchId"] as? String ?: "",
                     batchName = it["batchName"] as? String ?: ""
+                )
+            }
+        }.getOrElse { emptyList() },
+        customerSpecs = runCatching {
+            @Suppress("UNCHECKED_CAST")
+            (get<List<Map<String, Any?>>?>("customerSpecs") ?: emptyList()).map {
+                CustomerLineSpec(
+                    customerOrderId = it["customerOrderId"] as? String ?: "",
+                    customerName = it["customerName"] as? String ?: "",
+                    quantity = (it["quantity"] as? Number)?.toDouble() ?: 0.0,
+                    customSpec = it["customSpec"] as? String ?: "",
+                    customerType = it["customerType"] as? String ?: ""
                 )
             }
         }.getOrElse { emptyList() }

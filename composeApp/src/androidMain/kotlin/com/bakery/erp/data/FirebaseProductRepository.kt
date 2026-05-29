@@ -82,6 +82,7 @@ class FirebaseProductRepository(
                 "gramsPerUnit" to it.gramsPerUnit
             )
         },
+        "isInHouseProduced" to isInHouseProduced,
         "notes" to notes,
         "createdAt" to if (createdAt == 0L) System.currentTimeMillis() else createdAt,
         "updatedAt" to System.currentTimeMillis()
@@ -128,6 +129,7 @@ class FirebaseProductRepository(
                 )
             }
         }.getOrElse { emptyList() },
+        isInHouseProduced = runCatching { get<Boolean?>("isInHouseProduced") }.getOrNull() ?: true,
         notes = get<String?>("notes"),
         createdAt = readTimestampAsMillis("createdAt"),
         updatedAt = readTimestampAsMillis("updatedAt")

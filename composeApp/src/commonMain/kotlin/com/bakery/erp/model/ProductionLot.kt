@@ -13,10 +13,17 @@ data class ProductionLot(
     val createdByUserName: String = "",
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L,
+    val startedAt: Long? = null,
     val completedAt: Long? = null,
     val stockDeducted: Boolean = false,
     val lineCount: Int = 0,
     val sourceOrderIds: List<String> = emptyList(),
+    /**
+     * IDs de [CustomerOrder] consolidados en este lote (revendedor / encargo retail / pastel).
+     * Lista separada de [sourceOrderIds] para mantener retrocompatibilidad y permitir
+     * queries `where-in` específicas por canal.
+     */
+    val customerOrderIds: List<String> = emptyList(),
     val lines: List<ProductionLotLine> = emptyList()
 )
 

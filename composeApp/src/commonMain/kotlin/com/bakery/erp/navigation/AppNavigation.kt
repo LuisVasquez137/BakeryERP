@@ -47,9 +47,21 @@ import com.bakery.erp.presentation.auth.JoinOrgScreen
 import com.bakery.erp.presentation.auth.LoginScreen
 import com.bakery.erp.presentation.auth.PendingApprovalScreen
 import com.bakery.erp.presentation.auth.RegisterScreen
+import com.bakery.erp.presentation.auth.ResellerSetupScreen
 import com.bakery.erp.presentation.reports.financial.FinancialReportScreen
 import com.bakery.erp.presentation.reports.production.ProductionReportScreen
 import com.bakery.erp.presentation.reports.sales.SalesReportScreen
+import com.bakery.erp.presentation.customerOrders.CustomerOrderDetailScreen
+import com.bakery.erp.presentation.customerOrders.CustomerOrderFormScreen
+import com.bakery.erp.presentation.customerOrders.CustomerOrderListScreen
+import com.bakery.erp.presentation.customerOrders.ExternalCustomerFormScreen
+import com.bakery.erp.presentation.customerOrders.ExternalCustomerListScreen
+import com.bakery.erp.presentation.customerOrders.ResellerApprovalScreen
+import com.bakery.erp.presentation.organization.OrganizationSettingsScreen
+import com.bakery.erp.presentation.reseller.ResellerHomeScreen
+import com.bakery.erp.presentation.splash.SplashScreen
+import com.bakery.erp.presentation.reseller.ResellerOrderDetailScreen
+import com.bakery.erp.presentation.reseller.ResellerQuickOrderScreen
 import com.bakery.erp.presentation.users.UserListScreen
 import com.bakery.erp.presentation.users.UserPermissionsScreen
 import com.bakery.erp.presentation.users.UserViewModel
@@ -74,6 +86,7 @@ import com.bakery.erp.presentation.dispatch.DispatchNoteListScreen
 import com.bakery.erp.presentation.dispatch.DispatchNotePackScreen
 import com.bakery.erp.presentation.dispatch.DispatchNoteReceiveScreen
 import com.bakery.erp.presentation.dispatch.DispatchViewModel
+import com.bakery.erp.presentation.delivery.DeliveryHistoryScreen
 import com.bakery.erp.presentation.delivery.DeliveryRunFormScreen
 import com.bakery.erp.presentation.delivery.DeliveryRunListScreen
 import com.bakery.erp.presentation.delivery.DeliveryRunScreen
@@ -332,6 +345,7 @@ sealed class Screen(val route: String) {
     object DeliveryRunDetail : Screen("delivery/run/{runId}") {
         fun route(runId: String) = "delivery/run/$runId"
     }
+    object DeliveryHistory : Screen("delivery/history")
 
     // Punto de venta (POS)
     object POSHome : Screen("pos")
@@ -402,6 +416,40 @@ sealed class Screen(val route: String) {
     object SalesReport      : Screen("reports/sales")
     object ProductionReport : Screen("reports/production")
     object FinancialReport  : Screen("reports/financial")
+
+    // Pedidos de clientes
+    object CustomerOrderList : Screen("customerOrders")
+    object CustomerOrderForm : Screen("customerOrders/form?orderId={orderId}") {
+        fun route(orderId: String?) =
+            if (orderId.isNullOrEmpty()) "customerOrders/form"
+            else "customerOrders/form?orderId=$orderId"
+    }
+    object CustomerOrderDetail : Screen("customerOrders/detail/{orderId}") {
+        fun route(orderId: String) = "customerOrders/detail/$orderId"
+    }
+    object ExternalCustomerList : Screen("externalCustomers")
+    object ExternalCustomerForm : Screen("externalCustomers/form?customerId={customerId}") {
+        fun route(customerId: String?) =
+            if (customerId.isNullOrEmpty()) "externalCustomers/form"
+            else "externalCustomers/form?customerId=$customerId"
+    }
+    object OrganizationSettings : Screen("organization/settings")
+    /** Pantalla post-signup donde el revendedor configura sucursal, modalidad y hora. */
+    object ResellerSetup : Screen("auth/reseller_setup")
+    /** Pantalla donde la encargada aprueba revendedores pendientes y asigna planta+turno. */
+    object ResellerApproval : Screen("resellers/approval")
+    /** Landing del revendedor tras login: perfil + botón pedido + pedidos recientes. */
+    object ResellerHome : Screen("reseller/home")
+    /** Pantalla del pedido diario del revendedor: lista de productos con cantidad.
+     *  Acepta editDate+editTime para modo edición de un slot existente. */
+    object ResellerQuickOrder : Screen("reseller/quickOrder?editDate={editDate}&editTime={editTime}") {
+        fun route(editDate: Long? = null, editTime: String? = null) =
+            if (editDate == null) "reseller/quickOrder"
+            else "reseller/quickOrder?editDate=$editDate&editTime=${editTime ?: ""}"
+    }
+    object ResellerOrderDetail : Screen("reseller/order/{orderId}") {
+        fun route(orderId: String) = "reseller/order/$orderId"
+    }
 }
 
 @Composable
@@ -441,6 +489,9 @@ fun AppNavigation(
     val salesReportViewModel = vms.salesReport
     val productionReportViewModel = vms.productionReport
     val financialReportViewModel = vms.financialReport
+    val customerOrderViewModel = vms.customerOrder
+    val externalCustomerViewModel = vms.externalCustomer
+    val organizationSettingsViewModel = vms.organizationSettings
     val bluetoothPrinterManager = vms.bluetoothPrinterManager
 
     val state by viewModel.uiState.collectAsState()
@@ -459,16 +510,39 @@ fun AppNavigation(
     // re-navegue a Home cada vez que la Activity se recrea.
     var initialNavigationDone by rememberSaveable { mutableStateOf(false) }
 
-    LaunchedEffect(state.isAuthenticated, state.isLoading, state.needsOnboarding, state.isPendingApproval) {
+    /** Home destino según el rol del usuario autenticado. */
+    fun authenticatedHomeRoute() =
+        if (state.user?.role == com.bakery.erp.model.UserRole.RESELLER)
+            Screen.ResellerHome.route
+        else Screen.Home.route
+
+    LaunchedEffect(
+        state.isAuthenticated,
+        state.isLoading,
+        state.needsOnboarding,
+        state.isPendingApproval,
+        state.needsResellerSetup
+    ) {
         if (state.isLoading) return@LaunchedEffect
         if (!initialNavigationDone) {
             initialNavigationDone = true
             when {
-                state.isAuthenticated -> navController.navigate(Screen.Home.route) { popUpTo(0) { inclusive = true } }
+                state.needsResellerSetup -> navController.navigate(Screen.ResellerSetup.route) { popUpTo(0) { inclusive = true } }
+                state.isAuthenticated -> navController.navigate(authenticatedHomeRoute()) { popUpTo(0) { inclusive = true } }
                 state.isPendingApproval -> navController.navigate(Screen.PendingApproval.route) { popUpTo(0) { inclusive = true } }
                 state.needsOnboarding -> navController.navigate(Screen.AuthChoice.route) { popUpTo(0) { inclusive = true } }
                 else -> navController.navigate(Screen.Login.route) { popUpTo(0) { inclusive = true } }
             }
+        } else if (state.needsResellerSetup) {
+            // Transición JoinOrg → ResellerSetup tras signupAsReseller exitoso.
+            navController.navigate(Screen.ResellerSetup.route) { popUpTo(0) { inclusive = true } }
+        } else if (state.isAuthenticated) {
+            // Transición de aprobación: revendedor que estaba en PendingApproval
+            // ahora ve isAuthenticated=true tras refresh — enviarlo a su home.
+            navController.navigate(authenticatedHomeRoute()) { popUpTo(0) { inclusive = true } }
+        } else if (state.isPendingApproval && !state.isAuthenticated) {
+            // Transición ResellerSetup → PendingApproval tras completar perfil.
+            navController.navigate(Screen.PendingApproval.route) { popUpTo(0) { inclusive = true } }
         } else if (!state.isAuthenticated && !state.needsOnboarding && !state.isPendingApproval) {
             // Sesión cerrada mientras la app estaba abierta
             initialNavigationDone = false
@@ -476,10 +550,65 @@ fun AppNavigation(
         }
     }
 
+    var showSplash by rememberSaveable { mutableStateOf(true) }
+
+    Box(Modifier.fillMaxSize()) {
     NavHost(navController = navController, startDestination = Screen.Login.route) {
 
         composable(Screen.PendingApproval.route) {
             PendingApprovalScreen(viewModel = viewModel)
+        }
+        composable(Screen.ResellerSetup.route) {
+            ResellerSetupScreen(
+                authViewModel = viewModel,
+                setupViewModel = vms.resellerSetup
+            )
+        }
+        composable(Screen.ResellerHome.route) {
+            ResellerHomeScreen(
+                onNavigateToQuickOrder = { navController.navigate(Screen.ResellerQuickOrder.route()) },
+                onNavigateToOrderDetail = { id ->
+                    navController.navigate(Screen.ResellerOrderDetail.route(id))
+                },
+                authViewModel = viewModel,
+                viewModel = vms.reseller
+            )
+        }
+        composable(
+            route = Screen.ResellerQuickOrder.route,
+            arguments = listOf(
+                navArgument("editDate") {
+                    type = NavType.StringType; nullable = true; defaultValue = null
+                },
+                navArgument("editTime") {
+                    type = NavType.StringType; nullable = true; defaultValue = null
+                }
+            )
+        ) { backStackEntry ->
+            val editDateStr = backStackEntry.savedStateHandle.get<String>("editDate")
+            val editTime = backStackEntry.savedStateHandle.get<String>("editTime")
+            ResellerQuickOrderScreen(
+                onNavigateBack = { navController.popBackStack() },
+                authViewModel = viewModel,
+                viewModel = vms.reseller,
+                editDateMillis = editDateStr?.toLongOrNull(),
+                editTime = editTime?.takeIf { it.isNotEmpty() }
+            )
+        }
+        composable(
+            route = Screen.ResellerOrderDetail.route,
+            arguments = listOf(navArgument("orderId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val orderId = backStackEntry.savedStateHandle.get<String>("orderId") ?: ""
+            ResellerOrderDetailScreen(
+                orderId = orderId,
+                onNavigateBack = { navController.popBackStack() },
+                onEditOrder = { date, time ->
+                    navController.navigate(Screen.ResellerQuickOrder.route(date, time))
+                },
+                authViewModel = viewModel,
+                viewModel = vms.reseller
+            )
         }
         composable(Screen.Login.route) {
             LoginScreen(
@@ -539,6 +668,9 @@ fun AppNavigation(
                 onNavigateToSalesReport = { navController.navigate(Screen.SalesReport.route) },
                 onNavigateToProductionReport = { navController.navigate(Screen.ProductionReport.route) },
                 onNavigateToFinancialReport = { navController.navigate(Screen.FinancialReport.route) },
+                onNavigateToCustomerOrders = { navController.navigate(Screen.CustomerOrderList.route) },
+                onNavigateToOrganizationSettings = { navController.navigate(Screen.OrganizationSettings.route) },
+                onNavigateToResellerApproval = { navController.navigate(Screen.ResellerApproval.route) },
                 viewModel = viewModel,
                 homeViewModel = homeViewModel
             )
@@ -808,6 +940,7 @@ fun AppNavigation(
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToForm = { runId -> navController.navigate(Screen.DeliveryForm.route(runId)) },
                     onNavigateToRun = { runId -> navController.navigate(Screen.DeliveryRunDetail.route(runId)) },
+                    onNavigateToHistory = { navController.navigate(Screen.DeliveryHistory.route) },
                     authViewModel = viewModel,
                     viewModel = deliveryViewModel
                 )
@@ -841,6 +974,16 @@ fun AppNavigation(
                 authViewModel = viewModel,
                 viewModel = deliveryViewModel
             )
+        }
+        composable(Screen.DeliveryHistory.route) {
+            RequirePermission(state.user, Permission.MANAGE_DELIVERY_RUNS, onBack = { navController.popBackStack() }) {
+                DeliveryHistoryScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToRun = { id -> navController.navigate(Screen.DeliveryRunDetail.route(id)) },
+                    authViewModel = viewModel,
+                    viewModel = deliveryViewModel
+                )
+            }
         }
 
         // ── Inventario de tienda ─────────────────────────────────────────────
@@ -1433,6 +1576,14 @@ fun AppNavigation(
                 ProductionLotCompleteScreen(
                     lotId = lotId,
                     onNavigateBack = { navController.popBackStack() },
+                    onCompleted = {
+                        // Tras completar exitosamente, volvemos a Home en vez de
+                        // dejar al panadero en el detalle del lote ya cerrado.
+                        navController.navigate(Screen.Home.route) {
+                            popUpTo(Screen.Home.route) { inclusive = false }
+                            launchSingleTop = true
+                        }
+                    },
                     authViewModel = viewModel,
                     viewModel = productionViewModel,
                     productViewModel = productViewModel
@@ -1764,6 +1915,127 @@ fun AppNavigation(
                     viewModel = financialReportViewModel
                 )
             }
+        }
+
+        // ── Pedidos de clientes ──────────────────────────────────────────────
+        composable(Screen.CustomerOrderList.route) {
+            RequirePermission(state.user, Permission.VIEW_CUSTOMER_ORDERS,
+                onBack = { navController.popBackStack() }) {
+                CustomerOrderListScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToForm = { id ->
+                        navController.navigate(Screen.CustomerOrderForm.route(id))
+                    },
+                    onNavigateToDetail = { id ->
+                        navController.navigate(Screen.CustomerOrderDetail.route(id))
+                    },
+                    onNavigateToCustomers = {
+                        navController.navigate(Screen.ExternalCustomerList.route)
+                    },
+                    authViewModel = viewModel,
+                    viewModel = customerOrderViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.CustomerOrderForm.route,
+            arguments = listOf(navArgument("orderId") {
+                type = NavType.StringType; nullable = true; defaultValue = null
+            })
+        ) { backStackEntry ->
+            val orderId = backStackEntry.savedStateHandle.get<String>("orderId")
+            // RESELLER intencionalmente fuera: los revendedores crean sus pedidos
+            // desde su propia app (ResellerQuickOrderScreen). Este form solo permite
+            // encargos de cliente final.
+            RequirePermission(state.user,
+                Permission.CREATE_RETAIL_SPECIAL_ORDER, Permission.CREATE_CAKE_ORDER,
+                Permission.MANAGE_CUSTOMER_ORDERS,
+                onBack = { navController.popBackStack() }) {
+                CustomerOrderFormScreen(
+                    orderId = orderId,
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = customerOrderViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.CustomerOrderDetail.route,
+            arguments = listOf(navArgument("orderId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val orderId = backStackEntry.savedStateHandle.get<String>("orderId") ?: ""
+            RequirePermission(state.user, Permission.VIEW_CUSTOMER_ORDERS,
+                onBack = { navController.popBackStack() }) {
+                CustomerOrderDetailScreen(
+                    orderId = orderId,
+                    onNavigateBack = { navController.popBackStack() },
+                    onEdit = { id ->
+                        navController.navigate(Screen.CustomerOrderForm.route(id))
+                    },
+                    authViewModel = viewModel,
+                    viewModel = customerOrderViewModel
+                )
+            }
+        }
+        composable(Screen.ResellerApproval.route) {
+            RequirePermission(state.user, Permission.MANAGE_EXTERNAL_CUSTOMERS,
+                onBack = { navController.popBackStack() }) {
+                ResellerApprovalScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToPriceListAdmin = {
+                        navController.navigate(Screen.PriceListAdmin.route)
+                    },
+                    authViewModel = viewModel,
+                    viewModel = externalCustomerViewModel
+                )
+            }
+        }
+        composable(Screen.ExternalCustomerList.route) {
+            RequirePermission(state.user, Permission.MANAGE_EXTERNAL_CUSTOMERS,
+                onBack = { navController.popBackStack() }) {
+                ExternalCustomerListScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToForm = { id ->
+                        navController.navigate(Screen.ExternalCustomerForm.route(id))
+                    },
+                    authViewModel = viewModel,
+                    viewModel = externalCustomerViewModel
+                )
+            }
+        }
+        composable(Screen.OrganizationSettings.route) {
+            // OWNER es implícitamente permitido; gate por MANAGE_USERS para que
+            // un admin con permisos amplios también pueda configurar.
+            RequirePermission(state.user, Permission.MANAGE_USERS,
+                onBack = { navController.popBackStack() }) {
+                OrganizationSettingsScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = organizationSettingsViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.ExternalCustomerForm.route,
+            arguments = listOf(navArgument("customerId") {
+                type = NavType.StringType; nullable = true; defaultValue = null
+            })
+        ) { backStackEntry ->
+            val customerId = backStackEntry.savedStateHandle.get<String>("customerId")
+            RequirePermission(state.user, Permission.MANAGE_EXTERNAL_CUSTOMERS,
+                onBack = { navController.popBackStack() }) {
+                ExternalCustomerFormScreen(
+                    customerId = customerId,
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = externalCustomerViewModel
+                )
+            }
+        }
+    }
+
+        if (showSplash) {
+            SplashScreen(onFinished = { showSplash = false })
         }
     }
 }

@@ -44,7 +44,7 @@ fun ProductionOrderDetailScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF123456),
+                    containerColor = Color(0xFF005B8D),
                     titleContentColor = Color.White,
                     navigationIconContentColor = Color.White
                 )
@@ -138,7 +138,7 @@ fun ProductionOrderDetailContent(
                             "Pedido",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF123456)
+                            color = Color(0xFF005B8D)
                         )
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             StatusChip(order.status, state.lotForSelectedOrder?.status, order.isLateOrder)
@@ -184,13 +184,13 @@ fun ProductionOrderDetailContent(
                         Icon(
                             Icons.Default.Lock,
                             contentDescription = null,
-                            tint = Color(0xFFCC5500)
+                            tint = Color(0xFFD9A441)
                         )
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 "Este pedido ya está en un lote (${ProductionLotStatus.label(lotForOrder.status)}).",
                                 fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFFCC5500),
+                                color = Color(0xFFD9A441),
                                 style = MaterialTheme.typography.bodySmall
                             )
                             Text(
@@ -209,7 +209,7 @@ fun ProductionOrderDetailContent(
             Text(
                 "Productos solicitados (${lines.size})",
                 fontWeight = FontWeight.Bold,
-                color = Color(0xFF123456)
+                color = Color(0xFF005B8D)
             )
         }
 
@@ -224,13 +224,13 @@ fun ProductionOrderDetailContent(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text(line.productName, fontWeight = FontWeight.SemiBold, color = Color(0xFF123456))
+                        Text(line.productName, fontWeight = FontWeight.SemiBold, color = Color(0xFF005B8D))
                         Text(line.productUnit, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                     }
                     Text(
                         "${line.requestedQuantity.toInt()} uds.",
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFFCC5500)
+                        color = Color(0xFFD9A441)
                     )
                 }
             }
@@ -265,7 +265,7 @@ fun ProductionOrderDetailContent(
                         onClick = { onNavigateToEdit(order.id) },
                         modifier = Modifier.fillMaxWidth().height(48.dp),
                         enabled = editable,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF123456))
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF005B8D))
                     ) {
                         Icon(Icons.Default.Edit, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
@@ -286,7 +286,7 @@ fun ProductionOrderDetailContent(
                             "El lote ya está en producción o cerrado. La cancelación queda " +
                                 "bloqueada para no descuadrar el stock.",
                             style = MaterialTheme.typography.labelSmall,
-                            color = Color(0xFFCC5500),
+                            color = Color(0xFFD9A441),
                             modifier = Modifier.padding(top = 4.dp)
                         )
                     }
@@ -314,6 +314,6 @@ private fun StatusChip(status: String, lotStatus: String? = null, isLateOrder: B
 private fun InfoRow(label: String, value: String) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
-        Text(value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = Color(0xFF123456))
+        Text(value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = Color(0xFF005B8D))
     }
 }

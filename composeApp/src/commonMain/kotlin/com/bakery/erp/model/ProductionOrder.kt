@@ -25,6 +25,12 @@ data class ProductionOrder(
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L,
     val lineCount: Int = 0,
+    /**
+     * IDs de las [CustomerOrderLine] (de pedidos de revendedor) que se consolidaron
+     * en este PO. Permite restaurar el estado de selección al editar el PO y diff
+     * entre ediciones para liberar/asignar líneas correctamente.
+     */
+    val includedCustomerLineIds: List<String> = emptyList(),
     val lines: List<ProductionOrderLine> = emptyList()
 )
 

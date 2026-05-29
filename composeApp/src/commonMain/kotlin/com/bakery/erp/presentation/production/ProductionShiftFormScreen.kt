@@ -111,6 +111,7 @@ fun ProductionShiftFormScreen(
             initialHour = h,
             initialMinute = m,
             title = "Hora de inicio",
+            is24Hour = true,
             onDismiss = { showStartPicker = false },
             onConfirm = { hh, mm ->
                 startTime = formatHHmm(hh, mm)
@@ -124,6 +125,7 @@ fun ProductionShiftFormScreen(
             initialHour = h,
             initialMinute = m,
             title = "Hora de fin",
+            is24Hour = true,
             onDismiss = { showEndPicker = false },
             onConfirm = { hh, mm ->
                 endTime = formatHHmm(hh, mm)
@@ -151,7 +153,7 @@ fun ProductionShiftFormScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF123456),
+                    containerColor = Color(0xFF005B8D),
                     titleContentColor = Color.White,
                     navigationIconContentColor = Color.White
                 )
@@ -255,7 +257,7 @@ fun ProductionShiftFormScreen(
                                 Icon(
                                     Icons.Default.AccessTime,
                                     contentDescription = "Elegir hora de inicio",
-                                    tint = Color(0xFF123456),
+                                    tint = Color(0xFF005B8D),
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -276,7 +278,7 @@ fun ProductionShiftFormScreen(
                                 Icon(
                                     Icons.Default.AccessTime,
                                     contentDescription = "Elegir hora de fin",
-                                    tint = Color(0xFF123456),
+                                    tint = Color(0xFF005B8D),
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -359,7 +361,7 @@ fun ProductionShiftFormScreen(
                         viewModel.saveShift(companyId, shift)
                     },
                     modifier = Modifier.fillMaxWidth().height(52.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF123456)),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF005B8D)),
                     enabled = name.isNotBlank() && branch != null && !state.isLoading
                 ) {
                     if (state.isLoading) CircularProgressIndicator(Modifier.size(20.dp), color = Color.White)
