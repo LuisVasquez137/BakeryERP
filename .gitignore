@@ -17,3 +17,8 @@ captures
 !*.xcworkspace/contents.xcworkspacedata
 **/xcshareddata/WorkspaceSettings.xcsettings
 node_modules/
+
+# Firma de release (NUNCA subir a git)
+keystore.properties
+*.jks
+*.keystore
