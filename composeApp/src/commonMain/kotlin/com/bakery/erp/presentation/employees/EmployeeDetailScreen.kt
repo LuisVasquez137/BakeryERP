@@ -108,8 +108,9 @@ import kotlin.time.Clock
 import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
+import com.bakery.erp.ui.theme.BrandColors.Primary as PrimaryBlue
+import com.bakery.erp.ui.theme.BrandColors
 
-private val PrimaryBlue = Color(0xFF005B8D)
 private val TealAccent = Color(0xFF0D7A8C)
 private val LabelColor = Color(0xFF455A64)
 private val ErrorRed = Color(0xFFB00020)
@@ -185,7 +186,7 @@ fun EmployeeDetailScreen(
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
-        containerColor = Color(0xFFFDFBF7)
+        containerColor = BrandColors.Ivory
     ) { padding ->
         when {
             state.isDetailLoading -> Box(
@@ -394,7 +395,7 @@ private fun StatusChip(status: EmployeeStatus) {
     val (bg, fg) = when (status) {
         EmployeeStatus.ACTIVE -> Color(0xFFDCF1DC) to Color(0xFF1B5E20)
         EmployeeStatus.SUSPENDED -> Color(0xFFFFF9C4) to Color(0xFFF57F17)
-        EmployeeStatus.ON_VACATION -> Color(0xFFDCEEFB) to PrimaryBlue
+        EmployeeStatus.ON_VACATION -> BrandColors.PrimaryContainer to PrimaryBlue
         EmployeeStatus.FIRED -> Color(0xFFFFEBEE) to Color(0xFFB00020)
         EmployeeStatus.RESIGNED -> Color(0xFFF3E5F5) to Color(0xFF6A1B9A)
     }
@@ -643,7 +644,7 @@ private fun AttendanceKpi(label: String, value: String, fg: Color, bg: Color, mo
 @Composable
 private fun TodayAttendanceCard(record: AttendanceRecord) {
     val isClosed = record.clockOut > 0
-    val cardColor = if (isClosed) Color(0xFFDCF1DC) else Color(0xFFDCEEFB)
+    val cardColor = if (isClosed) Color(0xFFDCF1DC) else BrandColors.PrimaryContainer
     val accentColor = if (isClosed) Color(0xFF1B5E20) else PrimaryBlue
 
     Card(
@@ -1052,7 +1053,7 @@ private fun DocumentCard(doc: EmployeeDocument, onDelete: () -> Unit) {
         Row(modifier = Modifier.padding(14.dp).fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                 Box(
-                    modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFFDCEEFB)),
+                    modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)).background(BrandColors.PrimaryContainer),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(Icons.Default.AttachFile, null, tint = PrimaryBlue, modifier = Modifier.size(20.dp))
@@ -1101,7 +1102,7 @@ private fun historyEventColor(type: HistoryEventType) = when (type) {
     HistoryEventType.SUSPENSION -> Color(0xFF6A1B9A)
     HistoryEventType.REINSTATEMENT -> Color(0xFF0D47A1)
     HistoryEventType.LEAVE_PERMIT -> Color(0xFF00695C)
-    HistoryEventType.POSITION_CHANGE -> Color(0xFF005B8D)
+    HistoryEventType.POSITION_CHANGE -> BrandColors.Primary
     HistoryEventType.NOTE -> Color(0xFF455A64)
 }
 

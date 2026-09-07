@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Solo la cache: la foto recien tomada se lee, se sube a Storage y deja de importar.
+  Exponer mas directorios ampliaria sin necesidad lo que otra app puede leer por esta Uri.
+-->
+<paths>
+    <cache-path name="capturas" path="." />
+</paths>

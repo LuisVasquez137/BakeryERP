@@ -74,8 +74,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.bakery.erp.presentation.ingredients.IngredientPickerDialog
+import com.bakery.erp.model.usableInRecipes
+import com.bakery.erp.ui.BarcodeField
 import com.bakery.erp.model.BakingTechnicalSheet
+import com.bakery.erp.model.DoughFilling
+import com.bakery.erp.model.Ingredient
 import com.bakery.erp.model.PRODUCT_CATEGORIES
+import com.bakery.erp.model.RESALE_CATEGORY
 import com.bakery.erp.model.Preparation
 import com.bakery.erp.model.PreparationUsage
 import com.bakery.erp.model.PriceList
@@ -83,14 +89,21 @@ import com.bakery.erp.model.PriceListType
 import com.bakery.erp.model.Product
 import com.bakery.erp.model.ProductCharacteristics
 import com.bakery.erp.model.ProductDecoration
+import com.bakery.erp.model.Recipe
+import com.bakery.erp.model.Supplier
 import com.bakery.erp.presentation.auth.AuthViewModel
+import com.bakery.erp.presentation.ingredients.IngredientViewModel
 import com.bakery.erp.presentation.pricing.PriceListViewModel
 import com.bakery.erp.presentation.preparations.PreparationViewModel
+import com.bakery.erp.presentation.recipes.RecipeViewModel
+import com.bakery.erp.presentation.suppliers.SupplierViewModel
 import com.bakery.erp.ui.AdaptiveContainer
 import com.bakery.erp.ui.ImagePickerButton
+import com.bakery.erp.ui.LoadingOverlay
 import com.bakery.erp.util.fmt
 import com.bakery.erp.util.gramsToOz
 import com.bakery.erp.util.ozToGrams
+import com.bakery.erp.ui.theme.BrandColors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -100,11 +113,17 @@ fun ProductFormScreen(
     authViewModel: AuthViewModel,
     viewModel: ProductViewModel,
     preparationViewModel: PreparationViewModel,
-    priceListViewModel: PriceListViewModel
+    priceListViewModel: PriceListViewModel,
+    supplierViewModel: SupplierViewModel,
+    ingredientViewModel: IngredientViewModel,
+    recipeViewModel: RecipeViewModel
 ) {
     val state by viewModel.uiState.collectAsState()
     val preparationState by preparationViewModel.uiState.collectAsState()
     val priceState by priceListViewModel.uiState.collectAsState()
+    val supplierState by supplierViewModel.uiState.collectAsState()
+    val ingredientState by ingredientViewModel.uiState.collectAsState()
+    val recipeState by recipeViewModel.uiState.collectAsState()
     val authState by authViewModel.uiState.collectAsState()
     val companyId = authState.user?.orgId ?: ""
     val snackbarHostState = remember { SnackbarHostState() }
@@ -113,6 +132,9 @@ fun ProductFormScreen(
         if (companyId.isNotEmpty()) {
             preparationViewModel.loadPreparations(companyId)
             priceListViewModel.loadLists(companyId)
+            supplierViewModel.loadSuppliers(companyId)
+            ingredientViewModel.loadIngredients(companyId)
+            recipeViewModel.loadRecipes(companyId)
         }
     }
     LaunchedEffect(companyId, productId) {
@@ -128,6 +150,15 @@ fun ProductFormScreen(
     }
     var decorations by remember(existingProduct?.id) {
         mutableStateOf(existingProduct?.decorations ?: emptyList())
+    }
+    var doughFillings by remember(existingProduct?.id) {
+        mutableStateOf(existingProduct?.doughFillings ?: emptyList())
+    }
+    // Receta que ya genera este producto (si alguna) — se excluye del picker de
+    // "relleno de otra masa": no tiene sentido que un producto lleve de relleno
+    // masa de su propia receta.
+    val ownRecipeId = remember(existingProduct?.id, recipeState.recipeList) {
+        existingProduct?.let { p -> recipeState.recipeList.find { r -> r.yields.any { it.productId == p.id } }?.id }
     }
 
     // ── Form state ──────────────────────────────────────────────────────────
@@ -151,6 +182,9 @@ fun ProductFormScreen(
 
     var shelfLife by rememberSaveable { mutableStateOf(existingProduct?.shelfLife?.toString() ?: "") }
     var storageType by rememberSaveable { mutableStateOf(existingProduct?.storageType ?: "") }
+    var unitsPerTray by rememberSaveable {
+        mutableStateOf(existingProduct?.unitsPerTray?.takeIf { it > 0 }?.toString() ?: "")
+    }
     var notes by rememberSaveable { mutableStateOf(existingProduct?.notes ?: "") }
     // ¿Producto in-house o de reventa? La asignación de plantas que pueden
     // producirlo se hace desde el módulo de Sucursales (Branch.assignedProductIds),
@@ -158,9 +192,27 @@ fun ProductFormScreen(
     var isInHouseProduced by rememberSaveable {
         mutableStateOf(existingProduct?.isInHouseProduced ?: true)
     }
+    // Reventa: proveedor + costo de compra de referencia.
+    var supplierId by rememberSaveable { mutableStateOf(existingProduct?.supplierId ?: "") }
+    var supplierName by rememberSaveable { mutableStateOf(existingProduct?.supplierName ?: "") }
+    var barcode by rememberSaveable { mutableStateOf(existingProduct?.barcode ?: "") }
+    // Producto que vende del inventario de un insumo (el huevo: entra a las recetas y
+    // además se vende por docena). Vacío = producto normal, con su stock de terminado.
+    var linkedIngredientId by rememberSaveable { mutableStateOf(existingProduct?.linkedIngredientId ?: "") }
+    var linkedIngredientName by rememberSaveable { mutableStateOf(existingProduct?.linkedIngredientName ?: "") }
+    var ingredientUnitsPerSale by rememberSaveable {
+        mutableStateOf(existingProduct?.ingredientUnitsPerSale?.takeIf { it > 0.0 }?.toString() ?: "")
+    }
+    var purchaseCost by rememberSaveable {
+        mutableStateOf(existingProduct?.purchaseCost?.takeIf { it > 0 }?.toString() ?: "")
+    }
+    var supplierExpanded by remember { mutableStateOf(false) }
+    // Al crear (productId==null) se pide el tipo antes de mostrar el form.
+    var typeChosen by rememberSaveable { mutableStateOf(productId != null) }
     var selectedImageBytes by remember { mutableStateOf<ByteArray?>(null) }
     var nameError by remember { mutableStateOf(false) }
     var salePriceError by remember { mutableStateOf(false) }
+    var formError by remember { mutableStateOf<String?>(null) }
 
     // Organoléptico
     val ch = existingProduct?.characteristics ?: ProductCharacteristics()
@@ -212,34 +264,42 @@ fun ProductFormScreen(
     LaunchedEffect(state.error) {
         state.error?.let { snackbarHostState.showSnackbar(it); viewModel.clearError() }
     }
+    LaunchedEffect(formError) {
+        formError?.let { snackbarHostState.showSnackbar(it); formError = null }
+    }
 
     fun buildProduct(): Product {
         val rawNumeric = rawWeightInput.toDoubleOrNull()
         val rawGrams = rawNumeric?.let { if (rawWeightUnit == "oz") it.ozToGrams() else it }
+        // Los datos solo-producción (peso crudo, organoléptico, ficha, adornos) no aplican
+        // a la reventa: se persisten vacíos para no arrastrar basura.
         return Product(
             id = existingProduct?.id ?: "",
             name = name.trim().replaceFirstChar { it.uppercase() },
             description = description.trim(),
-            category = category,
+            // Toda la reventa se normaliza a una sola categoría (incluye docs legacy
+            // que se hayan guardado como Abarrotes/Bebidas/Otros).
+            category = if (isInHouseProduced) category else RESALE_CATEGORY,
             active = active,
             imageUrl = existingProduct?.imageUrl,
             salePrice = salePrice.toDoubleOrNull() ?: 0.0,
             unit = unit.trim(),
             weightPerUnit = weightPerUnit.toDoubleOrNull(),
-            rawWeightGrams = rawGrams,
-            rawWeightUnit = if (rawGrams != null) rawWeightUnit else null,
+            rawWeightGrams = if (isInHouseProduced) rawGrams else null,
+            rawWeightUnit = if (isInHouseProduced && rawGrams != null) rawWeightUnit else null,
             shelfLife = shelfLife.toIntOrNull(),
             storageType = storageType.trim().ifEmpty { null },
+            unitsPerTray = if (isInHouseProduced) unitsPerTray.toIntOrNull()?.takeIf { it > 0 } ?: 0 else 0,
             notes = notes.trim().ifEmpty { null },
-            characteristics = ProductCharacteristics(
+            characteristics = if (isInHouseProduced) ProductCharacteristics(
                 crustColor = crustColor.trim().ifEmpty { null },
                 crumbColor = crumbColor.trim().ifEmpty { null },
                 texture = texture.trim().ifEmpty { null },
                 shape = shape.trim().ifEmpty { null },
                 aroma = aroma.trim().ifEmpty { null },
                 flavorProfile = flavorProfile.trim().ifEmpty { null }
-            ),
-            technicalSheet = BakingTechnicalSheet(
+            ) else ProductCharacteristics(),
+            technicalSheet = if (isInHouseProduced) BakingTechnicalSheet(
                 bakingTemperatureCelsius = bakingTemperature.toIntOrNull(),
                 bakingTimeMinutes = bakingTime.toIntOrNull(),
                 fermentationTimeHours = fermentationTime.toDoubleOrNull(),
@@ -247,9 +307,27 @@ fun ProductFormScreen(
                 hydrationPercentage = hydration.toDoubleOrNull(),
                 shapingNotes = shapingNotes.trim().ifEmpty { null },
                 bakingNotes = bakingNotes.trim().ifEmpty { null }
-            ),
-            decorations = decorations.filter { it.preparationId.isNotEmpty() && it.gramsPerUnit > 0.0 },
-            isInHouseProduced = isInHouseProduced
+            ) else BakingTechnicalSheet(),
+            decorations = if (isInHouseProduced)
+                decorations.filter {
+                    (it.preparationId.isNotEmpty() || it.ingredientId.isNotEmpty()) && it.gramsPerUnit > 0.0
+                }
+            else emptyList(),
+            doughFillings = if (isInHouseProduced)
+                doughFillings.filter { it.recipeId.isNotEmpty() && it.rawWeightGrams > 0.0 }
+            else emptyList(),
+            isInHouseProduced = isInHouseProduced,
+            supplierId = if (!isInHouseProduced) supplierId.ifBlank { null } else null,
+            supplierName = if (!isInHouseProduced) supplierName.ifBlank { null } else null,
+            purchaseCost = if (!isInHouseProduced) purchaseCost.toDoubleOrNull() else null,
+            barcode = barcode.trim(),
+            // El vínculo con un insumo solo tiene sentido en reventa: lo que producimos
+            // nosotros ya tiene su propio inventario de terminado.
+            linkedIngredientId = if (!isInHouseProduced) linkedIngredientId else "",
+            linkedIngredientName = if (!isInHouseProduced) linkedIngredientName else "",
+            ingredientUnitsPerSale = if (!isInHouseProduced && linkedIngredientId.isNotEmpty())
+                ingredientUnitsPerSale.replace(',', '.').toDoubleOrNull()?.takeIf { it > 0.0 } ?: 1.0
+            else 1.0
         )
     }
 
@@ -263,6 +341,22 @@ fun ProductFormScreen(
             // Si el error está en la pestaña General, llevamos al usuario allí.
             selectedTab = 0
             return
+        }
+        // Un adorno/relleno elegido sin gramos por unidad se descartaba en silencio
+        // al guardar (parecía que "no guardaba" el adorno). Ahora bloquea el guardado
+        // y avisa cuál falta, en vez de perderlo sin decir nada.
+        if (isInHouseProduced) {
+            val incomplete = decorations.filter {
+                (it.preparationId.isNotEmpty() || it.ingredientId.isNotEmpty()) && it.gramsPerUnit <= 0.0
+            }
+            if (incomplete.isNotEmpty()) {
+                val names = incomplete.joinToString(", ") {
+                    it.preparationName.ifEmpty { it.ingredientName }.ifEmpty { "(sin nombre)" }
+                }
+                formError = "Falta el peso por unidad en: $names"
+                selectedTab = 2
+                return
+            }
         }
         // Construir mapa de precios por lista. El campo `salePrice` de General es
         // la única fuente de verdad para la lista RETAIL default — sobrescribe lo
@@ -289,6 +383,7 @@ fun ProductFormScreen(
         )
     }
 
+    Box(Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -317,32 +412,23 @@ fun ProductFormScreen(
             maxContentWidth = 1100.dp
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
-                TabRow(selectedTabIndex = selectedTab) {
-                    Tab(
-                        selected = selectedTab == 0,
-                        onClick = { selectedTab = 0 },
-                        text = { Text("General") }
-                    )
-                    Tab(
-                        selected = selectedTab == 1,
-                        onClick = { selectedTab = 1 },
-                        text = { Text("Precios") }
-                    )
-                    Tab(
-                        selected = selectedTab == 2,
-                        onClick = { selectedTab = 2 },
-                        text = { Text("Adornos") }
-                    )
-                    Tab(
-                        selected = selectedTab == 3,
-                        onClick = { selectedTab = 3 },
-                        text = { Text("Organoléptico") }
-                    )
-                    Tab(
-                        selected = selectedTab == 4,
-                        onClick = { selectedTab = 4 },
-                        text = { Text("Ficha técnica") }
-                    )
+                // Tabs según el tipo: la reventa es simple (todo lo suyo —costo, proveedor,
+                // precio de venta— vive en General) más la cascada de Precios; producido en
+                // planta suma Adornos/Organoléptico/Ficha técnica.
+                val tabTitles = if (isInHouseProduced)
+                    listOf("General", "Precios", "Adornos", "Organoléptico", "Ficha técnica")
+                else
+                    listOf("General", "Precios")
+                val currentTab = selectedTab.coerceIn(0, tabTitles.lastIndex)
+
+                TabRow(selectedTabIndex = currentTab) {
+                    tabTitles.forEachIndexed { i, title ->
+                        Tab(
+                            selected = currentTab == i,
+                            onClick = { selectedTab = i },
+                            text = { Text(title) }
+                        )
+                    }
                 }
 
                 Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -353,13 +439,15 @@ fun ProductFormScreen(
                             .padding(horizontal = 16.dp, vertical = 12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        when (selectedTab) {
-                            0 -> {
+                        when (tabTitles[currentTab]) {
+                            "General" -> {
                                 GeneralTabContent(
+                                isInHouseProduced = isInHouseProduced,
                                 name = name, onNameChange = { name = it; nameError = false },
                                 nameError = nameError,
                                 description = description, onDescriptionChange = { description = it },
                                 category = category, onCategoryChange = { category = it },
+                                categoryOptions = PRODUCT_CATEGORIES,
                                 categoryExpanded = categoryExpanded,
                                 onCategoryExpandedChange = { categoryExpanded = it },
                                 active = active, onActiveChange = { active = it },
@@ -371,19 +459,37 @@ fun ProductFormScreen(
                                 unit = unit, onUnitChange = { unit = it },
                                 weightPerUnit = weightPerUnit, onWeightPerUnitChange = { weightPerUnit = it },
                                 shelfLife = shelfLife, onShelfLifeChange = { shelfLife = it },
+                                unitsPerTray = unitsPerTray, onUnitsPerTrayChange = { unitsPerTray = it },
                                 rawWeightInput = rawWeightInput, onRawWeightInputChange = { rawWeightInput = it },
                                 rawWeightUnit = rawWeightUnit, onRawWeightUnitChange = { rawWeightUnit = it },
                                 rawWeightUnitExpanded = rawWeightUnitExpanded,
                                 onRawWeightUnitExpandedChange = { rawWeightUnitExpanded = it },
                                 storageType = storageType, onStorageTypeChange = { storageType = it },
-                                notes = notes, onNotesChange = { notes = it }
+                                notes = notes, onNotesChange = { notes = it },
+                                purchaseCost = purchaseCost, onPurchaseCostChange = { purchaseCost = it },
+                                suppliers = supplierState.supplierList.filter { it.active },
+                                supplierId = supplierId, supplierName = supplierName,
+                                onSupplierChange = { id, nm -> supplierId = id; supplierName = nm },
+                                supplierExpanded = supplierExpanded,
+                                onSupplierExpandedChange = { supplierExpanded = it },
+                                barcode = barcode, onBarcodeChange = { barcode = it },
+                                // Solo materia prima: vincular una venta a un suministro de
+                                // limpieza no significa nada.
+                                ingredients = ingredientState.ingredientList.usableInRecipes(),
+                                linkedIngredientId = linkedIngredientId,
+                                linkedIngredientName = linkedIngredientName,
+                                onLinkedIngredientChange = { id, nm ->
+                                    linkedIngredientId = id; linkedIngredientName = nm
+                                },
+                                ingredientUnitsPerSale = ingredientUnitsPerSale,
+                                onIngredientUnitsPerSaleChange = { ingredientUnitsPerSale = it }
                             )
                                 ProductionRoutingSection(
                                     isInHouseProduced = isInHouseProduced,
                                     onIsInHouseChange = { isInHouseProduced = it }
                                 )
                             }
-                            1 -> PricesTabContent(
+                            "Precios" -> PricesTabContent(
                                 lists = activeLists,
                                 retailDefaultId = retailDefaultId,
                                 salePrice = salePrice,
@@ -393,14 +499,25 @@ fun ProductFormScreen(
                                     priceInputs = priceInputs + (listId to value)
                                 }
                             )
-                            2 -> DecorationsTabContent(
-                                decorations = decorations,
-                                onDecorationsChange = { decorations = it },
-                                availableDecorations = preparationState.preparationList.filter {
-                                    it.active && it.usage == PreparationUsage.DECORATION
-                                }
-                            )
-                            3 -> OrganolepticTabContent(
+                            "Adornos" -> {
+                                DecorationsTabContent(
+                                    decorations = decorations,
+                                    onDecorationsChange = { decorations = it },
+                                    availableDecorations = preparationState.preparationList.filter {
+                                        it.active && it.usage == PreparationUsage.DECORATION
+                                    },
+                                    availableIngredients = ingredientState.ingredientList.filter { it.active }
+                                )
+                                SectionDivider()
+                                DoughFillingsTabContent(
+                                    doughFillings = doughFillings,
+                                    onDoughFillingsChange = { doughFillings = it },
+                                    availableRecipes = recipeState.recipeList.filter {
+                                        it.active && it.id != ownRecipeId
+                                    }
+                                )
+                            }
+                            "Organoléptico" -> OrganolepticTabContent(
                                 crustColor = crustColor, onCrustColorChange = { crustColor = it },
                                 crumbColor = crumbColor, onCrumbColorChange = { crumbColor = it },
                                 texture = texture, onTextureChange = { texture = it },
@@ -408,7 +525,7 @@ fun ProductFormScreen(
                                 aroma = aroma, onAromaChange = { aroma = it },
                                 flavorProfile = flavorProfile, onFlavorProfileChange = { flavorProfile = it }
                             )
-                            else -> TechnicalSheetTabContent(
+                            "Ficha técnica" -> TechnicalSheetTabContent(
                                 bakingTemperature = bakingTemperature,
                                 onBakingTemperatureChange = { bakingTemperature = it },
                                 bakingTime = bakingTime, onBakingTimeChange = { bakingTime = it },
@@ -453,6 +570,154 @@ fun ProductFormScreen(
             }
         }
     }
+
+    // Al crear un producto nuevo, primero se elige el tipo (producido vs reventa).
+    if (!typeChosen) {
+        ProductTypeChoiceDialog(
+            onChoose = { inHouse ->
+                isInHouseProduced = inHouse
+                // La reventa tiene una sola categoría: no hay selector, se asigna aquí.
+                if (!inHouse) category = RESALE_CATEGORY
+                selectedTab = 0
+                typeChosen = true
+            },
+            onDismiss = onNavigateBack
+        )
+    }
+
+    LoadingOverlay(visible = state.isLoading)
+    }
+}
+
+// ── Diálogo: tipo de producto (al crear) ─────────────────────────────────────
+
+@Composable
+private fun ProductTypeChoiceDialog(
+    onChoose: (isInHouseProduced: Boolean) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            modifier = Modifier.fillMaxWidth().widthIn(max = 460.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "¿Qué tipo de producto vas a crear?",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                ProductTypeOption(
+                    title = "Producido en planta",
+                    description = "Lo horneamos/elaboramos nosotros. Lleva receta, adornos, características y ficha técnica.",
+                    onClick = { onChoose(true) }
+                )
+                ProductTypeOption(
+                    title = "Reventa",
+                    description = "Lo compramos a un proveedor y lo vendemos sin transformar (huevos, café en bolsa, tostadas…).",
+                    onClick = { onChoose(false) }
+                )
+                Spacer(Modifier.height(2.dp))
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Cancelar") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProductTypeOption(
+    title: String,
+    description: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+// ── Bloque: Proveedor (reventa) ──────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SupplierBlock(
+    suppliers: List<Supplier>,
+    supplierName: String,
+    onSupplierChange: (id: String, name: String) -> Unit,
+    supplierExpanded: Boolean,
+    onSupplierExpandedChange: (Boolean) -> Unit
+) {
+    SectionHeader("Proveedor")
+    Text(
+        "¿A quién le compras este producto? Opcional, pero ayuda a reponerlo más rápido.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+
+    ExposedDropdownMenuBox(
+        expanded = supplierExpanded,
+        onExpandedChange = onSupplierExpandedChange,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        OutlinedTextField(
+            value = supplierName,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Proveedor") },
+            placeholder = { Text("Selecciona un proveedor") },
+            trailingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+        )
+        ExposedDropdownMenu(
+            expanded = supplierExpanded,
+            onDismissRequest = { onSupplierExpandedChange(false) }
+        ) {
+            if (suppliers.isEmpty()) {
+                DropdownMenuItem(
+                    text = { Text("No hay proveedores registrados") },
+                    onClick = { onSupplierExpandedChange(false) },
+                    enabled = false
+                )
+            }
+            suppliers.forEach { s ->
+                DropdownMenuItem(
+                    text = { Text(s.company) },
+                    onClick = {
+                        onSupplierChange(s.id, s.company)
+                        onSupplierExpandedChange(false)
+                    },
+                    contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
+                )
+            }
+        }
+    }
 }
 
 // ── Tab: General ────────────────────────────────────────────────────────────
@@ -460,9 +725,11 @@ fun ProductFormScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun GeneralTabContent(
+    isInHouseProduced: Boolean,
     name: String, onNameChange: (String) -> Unit, nameError: Boolean,
     description: String, onDescriptionChange: (String) -> Unit,
     category: String, onCategoryChange: (String) -> Unit,
+    categoryOptions: List<String>,
     categoryExpanded: Boolean, onCategoryExpandedChange: (Boolean) -> Unit,
     active: Boolean, onActiveChange: (Boolean) -> Unit,
     existingImageUrl: String?,
@@ -472,12 +739,67 @@ private fun GeneralTabContent(
     unit: String, onUnitChange: (String) -> Unit,
     weightPerUnit: String, onWeightPerUnitChange: (String) -> Unit,
     shelfLife: String, onShelfLifeChange: (String) -> Unit,
+    unitsPerTray: String, onUnitsPerTrayChange: (String) -> Unit,
     rawWeightInput: String, onRawWeightInputChange: (String) -> Unit,
     rawWeightUnit: String, onRawWeightUnitChange: (String) -> Unit,
     rawWeightUnitExpanded: Boolean, onRawWeightUnitExpandedChange: (Boolean) -> Unit,
     storageType: String, onStorageTypeChange: (String) -> Unit,
-    notes: String, onNotesChange: (String) -> Unit
+    notes: String, onNotesChange: (String) -> Unit,
+    purchaseCost: String, onPurchaseCostChange: (String) -> Unit,
+    suppliers: List<Supplier>,
+    supplierId: String, supplierName: String,
+    onSupplierChange: (id: String, name: String) -> Unit,
+    supplierExpanded: Boolean, onSupplierExpandedChange: (Boolean) -> Unit,
+    barcode: String, onBarcodeChange: (String) -> Unit,
+    ingredients: List<Ingredient>,
+    linkedIngredientId: String, linkedIngredientName: String,
+    onLinkedIngredientChange: (id: String, name: String) -> Unit,
+    ingredientUnitsPerSale: String, onIngredientUnitsPerSaleChange: (String) -> Unit
 ) {
+    // ── Reventa: layout dedicado y simple ──
+    // Todo lo relevante (costo, precio, margen, proveedor) en una sola columna.
+    // No hay categoría (siempre "Reventa"), ni peso en crudo, ni costo calculado.
+    if (!isInHouseProduced) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            GeneralInfoBlock(
+                name, onNameChange, nameError,
+                description, onDescriptionChange,
+                category, onCategoryChange, categoryOptions,
+                categoryExpanded, onCategoryExpandedChange,
+                active, onActiveChange,
+                showCategory = false
+            )
+            SectionDivider()
+            ImageBlock(existingImageUrl, selectedImageBytes, onImageSelected)
+            SectionDivider()
+            ResaleCommercialBlock(
+                purchaseCost, onPurchaseCostChange,
+                salePrice, onSalePriceChange, salePriceError,
+                unit, onUnitChange
+            )
+            SectionDivider()
+            ResaleStockSourceBlock(
+                barcode = barcode, onBarcodeChange = onBarcodeChange,
+                ingredients = ingredients,
+                linkedIngredientId = linkedIngredientId,
+                linkedIngredientName = linkedIngredientName,
+                onLinkedIngredientChange = onLinkedIngredientChange,
+                unitsPerSale = ingredientUnitsPerSale,
+                onUnitsPerSaleChange = onIngredientUnitsPerSaleChange
+            )
+            SectionDivider()
+            SupplierBlock(
+                suppliers, supplierName, onSupplierChange,
+                supplierExpanded, onSupplierExpandedChange
+            )
+            SectionDivider()
+            ResaleDataBlock(shelfLife, onShelfLifeChange, storageType, onStorageTypeChange)
+            SectionDivider()
+            NotesBlock(notes, onNotesChange)
+        }
+        return
+    }
+
     BoxWithConstraints {
         val twoColumns = maxWidth >= 800.dp
 
@@ -493,7 +815,8 @@ private fun GeneralTabContent(
                     GeneralInfoBlock(
                         name, onNameChange, nameError,
                         description, onDescriptionChange,
-                        category, onCategoryChange, categoryExpanded, onCategoryExpandedChange,
+                        category, onCategoryChange, categoryOptions,
+                        categoryExpanded, onCategoryExpandedChange,
                         active, onActiveChange
                     )
                     SectionDivider()
@@ -508,8 +831,10 @@ private fun GeneralTabContent(
                     CommercialBlock(salePrice, onSalePriceChange, salePriceError, unit, onUnitChange)
                     SectionDivider()
                     ProductDataBlock(
+                        showRawWeight = true,
                         weightPerUnit, onWeightPerUnitChange,
                         shelfLife, onShelfLifeChange,
+                        unitsPerTray, onUnitsPerTrayChange,
                         rawWeightInput, onRawWeightInputChange,
                         rawWeightUnit, onRawWeightUnitChange,
                         rawWeightUnitExpanded, onRawWeightUnitExpandedChange,
@@ -522,7 +847,8 @@ private fun GeneralTabContent(
                 GeneralInfoBlock(
                     name, onNameChange, nameError,
                     description, onDescriptionChange,
-                    category, onCategoryChange, categoryExpanded, onCategoryExpandedChange,
+                    category, onCategoryChange, categoryOptions,
+                    categoryExpanded, onCategoryExpandedChange,
                     active, onActiveChange
                 )
                 SectionDivider()
@@ -531,8 +857,10 @@ private fun GeneralTabContent(
                 CommercialBlock(salePrice, onSalePriceChange, salePriceError, unit, onUnitChange)
                 SectionDivider()
                 ProductDataBlock(
+                    showRawWeight = true,
                     weightPerUnit, onWeightPerUnitChange,
                     shelfLife, onShelfLifeChange,
+                    unitsPerTray, onUnitsPerTrayChange,
                     rawWeightInput, onRawWeightInputChange,
                     rawWeightUnit, onRawWeightUnitChange,
                     rawWeightUnitExpanded, onRawWeightUnitExpandedChange,
@@ -551,8 +879,10 @@ private fun GeneralInfoBlock(
     name: String, onNameChange: (String) -> Unit, nameError: Boolean,
     description: String, onDescriptionChange: (String) -> Unit,
     category: String, onCategoryChange: (String) -> Unit,
+    categoryOptions: List<String>,
     categoryExpanded: Boolean, onCategoryExpandedChange: (Boolean) -> Unit,
-    active: Boolean, onActiveChange: (Boolean) -> Unit
+    active: Boolean, onActiveChange: (Boolean) -> Unit,
+    showCategory: Boolean = true
 ) {
     SectionHeader("General")
 
@@ -576,34 +906,36 @@ private fun GeneralInfoBlock(
         maxLines = 4
     )
 
-    ExposedDropdownMenuBox(
-        expanded = categoryExpanded,
-        onExpandedChange = onCategoryExpandedChange,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        OutlinedTextField(
-            value = category,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text("Categoría") },
-            trailingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-        )
-        ExposedDropdownMenu(
+    if (showCategory) {
+        ExposedDropdownMenuBox(
             expanded = categoryExpanded,
-            onDismissRequest = { onCategoryExpandedChange(false) }
+            onExpandedChange = onCategoryExpandedChange,
+            modifier = Modifier.fillMaxWidth()
         ) {
-            PRODUCT_CATEGORIES.forEach { option ->
-                DropdownMenuItem(
-                    text = { Text(option) },
-                    onClick = {
-                        onCategoryChange(option)
-                        onCategoryExpandedChange(false)
-                    },
-                    contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
-                )
+            OutlinedTextField(
+                value = category,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Categoría") },
+                trailingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+            )
+            ExposedDropdownMenu(
+                expanded = categoryExpanded,
+                onDismissRequest = { onCategoryExpandedChange(false) }
+            ) {
+                categoryOptions.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(option) },
+                        onClick = {
+                            onCategoryChange(option)
+                            onCategoryExpandedChange(false)
+                        },
+                        contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
+                    )
+                }
             }
         }
     }
@@ -687,11 +1019,100 @@ private fun CommercialBlock(
     )
 }
 
+// ── Bloque comercial para reventa: costo + precio + margen ───────────────────
+@Composable
+private fun ResaleCommercialBlock(
+    purchaseCost: String, onPurchaseCostChange: (String) -> Unit,
+    salePrice: String, onSalePriceChange: (String) -> Unit, salePriceError: Boolean,
+    unit: String, onUnitChange: (String) -> Unit
+) {
+    SectionHeader("Costo y precio")
+
+    OutlinedTextField(
+        value = purchaseCost,
+        onValueChange = onPurchaseCostChange,
+        label = { Text("Costo (a como te lo dejan)") },
+        modifier = Modifier.fillMaxWidth(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        singleLine = true,
+        prefix = { Text("Q ") },
+        supportingText = { Text("Lo que te cuesta comprarlo. Se usa para prellenar tus compras.") }
+    )
+
+    OutlinedTextField(
+        value = salePrice,
+        onValueChange = onSalePriceChange,
+        label = { Text("Precio de venta *") },
+        modifier = Modifier.fillMaxWidth(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        singleLine = true,
+        prefix = { Text("Q ") },
+        isError = salePriceError,
+        supportingText = {
+            if (salePriceError) Text("El precio de venta es requerido")
+            else Text("Precio al que lo vendes al cliente")
+        }
+    )
+
+    // Margen calculado en vivo — feedback inmediato de la ganancia.
+    val cost = purchaseCost.toDoubleOrNull()
+    val price = salePrice.toDoubleOrNull()
+    if (cost != null && cost > 0 && price != null && price > 0) {
+        val margin = price - cost
+        val marginPct = margin / price * 100
+        val positive = margin >= 0
+        Text(
+            text = "Margen: Q ${margin.fmt(2)} (${marginPct.fmt(1)}%)",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = if (positive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+        )
+    }
+
+    OutlinedTextField(
+        value = unit,
+        onValueChange = onUnitChange,
+        label = { Text("Presentación") },
+        placeholder = { Text("unidad, bolsa, caja, libra…") },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true
+    )
+}
+
+// ── Datos del producto para reventa: solo vida útil + almacenamiento ─────────
+@Composable
+private fun ResaleDataBlock(
+    shelfLife: String, onShelfLifeChange: (String) -> Unit,
+    storageType: String, onStorageTypeChange: (String) -> Unit
+) {
+    SectionHeader("Datos del Producto")
+
+    OutlinedTextField(
+        value = shelfLife,
+        onValueChange = onShelfLifeChange,
+        label = { Text("Vida útil (días)") },
+        modifier = Modifier.fillMaxWidth(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        singleLine = true
+    )
+
+    OutlinedTextField(
+        value = storageType,
+        onValueChange = onStorageTypeChange,
+        label = { Text("Tipo de almacenamiento") },
+        placeholder = { Text("temperatura ambiente, refrigerado…") },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ProductDataBlock(
+    showRawWeight: Boolean,
     weightPerUnit: String, onWeightPerUnitChange: (String) -> Unit,
     shelfLife: String, onShelfLifeChange: (String) -> Unit,
+    unitsPerTray: String, onUnitsPerTrayChange: (String) -> Unit,
     rawWeightInput: String, onRawWeightInputChange: (String) -> Unit,
     rawWeightUnit: String, onRawWeightUnitChange: (String) -> Unit,
     rawWeightUnitExpanded: Boolean, onRawWeightUnitExpandedChange: (Boolean) -> Unit,
@@ -722,46 +1143,65 @@ private fun ProductDataBlock(
         }
     )
 
-    Row(
+    OutlinedTextField(
+        value = unitsPerTray,
+        onValueChange = { txt -> if (txt.all { it.isDigit() }) onUnitsPerTrayChange(txt) },
+        label = { Text("Unidades por bandeja") },
+        placeholder = { Text("Ej. 40") },
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        OutlinedTextField(
-            value = rawWeightInput,
-            onValueChange = onRawWeightInputChange,
-            label = { Text("Peso en crudo") },
-            modifier = Modifier.weight(2f),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-            singleLine = true,
-            supportingText = { Text("Sin relleno ni adorno — divide la masa") }
-        )
-        ExposedDropdownMenuBox(
-            expanded = rawWeightUnitExpanded,
-            onExpandedChange = onRawWeightUnitExpandedChange,
-            modifier = Modifier.weight(1f)
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        singleLine = true,
+        supportingText = {
+            Text(
+                if (unitsPerTray.toIntOrNull()?.let { it > 0 } == true)
+                    "\"Registrar conteo\" va a poder contar en bandejas + sueltos"
+                else "Déjalo vacío si no aplica: el conteo se hará solo en unidades netas"
+            )
+        }
+    )
+
+    if (showRawWeight) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             OutlinedTextField(
-                value = if (rawWeightUnit == "oz") "Onzas" else "Gramos",
-                onValueChange = {},
-                readOnly = true,
-                label = { Text("Unidad") },
-                trailingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                value = rawWeightInput,
+                onValueChange = onRawWeightInputChange,
+                label = { Text("Peso en crudo") },
+                modifier = Modifier.weight(2f),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                singleLine = true,
+                supportingText = { Text("Sin relleno ni adorno — divide la masa") }
             )
-            ExposedDropdownMenu(
+            ExposedDropdownMenuBox(
                 expanded = rawWeightUnitExpanded,
-                onDismissRequest = { onRawWeightUnitExpandedChange(false) }
+                onExpandedChange = onRawWeightUnitExpandedChange,
+                modifier = Modifier.weight(1f)
             ) {
-                DropdownMenuItem(
-                    text = { Text("Gramos (g)") },
-                    onClick = { onRawWeightUnitChange("g"); onRawWeightUnitExpandedChange(false) }
+                OutlinedTextField(
+                    value = if (rawWeightUnit == "oz") "Onzas" else "Gramos",
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Unidad") },
+                    trailingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor(MenuAnchorType.PrimaryNotEditable)
                 )
-                DropdownMenuItem(
-                    text = { Text("Onzas (oz)") },
-                    onClick = { onRawWeightUnitChange("oz"); onRawWeightUnitExpandedChange(false) }
-                )
+                ExposedDropdownMenu(
+                    expanded = rawWeightUnitExpanded,
+                    onDismissRequest = { onRawWeightUnitExpandedChange(false) }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Gramos (g)") },
+                        onClick = { onRawWeightUnitChange("g"); onRawWeightUnitExpandedChange(false) }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Onzas (oz)") },
+                        onClick = { onRawWeightUnitChange("oz"); onRawWeightUnitExpandedChange(false) }
+                    )
+                }
             }
         }
     }
@@ -932,6 +1372,104 @@ private fun SectionHeader(title: String) {
     )
 }
 
+/**
+ * De dónde sale el stock de un producto de reventa, y con qué código se le encuentra.
+ *
+ * El caso que resuelve es el huevo: se compra una vez como insumo, entra a las recetas y
+ * además se vende por docena en el mostrador. Vincularlo hace que sea UN solo inventario —
+ * es una sola caja de huevos, y comprarla dos veces para tenerla en dos inventarios es lo
+ * que dejaba los conteos sin cuadrar.
+ */
+@Composable
+private fun ResaleStockSourceBlock(
+    barcode: String, onBarcodeChange: (String) -> Unit,
+    ingredients: List<Ingredient>,
+    linkedIngredientId: String,
+    linkedIngredientName: String,
+    onLinkedIngredientChange: (id: String, name: String) -> Unit,
+    unitsPerSale: String, onUnitsPerSaleChange: (String) -> Unit
+) {
+    var showPicker by remember { mutableStateOf(false) }
+    val linked = linkedIngredientId.isNotEmpty()
+    val ingredient = remember(linkedIngredientId, ingredients) {
+        ingredients.find { it.id == linkedIngredientId }
+    }
+    val baseUnit = ingredient?.effectiveBaseUnit.orEmpty()
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Identificación e inventario", style = MaterialTheme.typography.titleSmall)
+
+        BarcodeField(
+            value = barcode,
+            onValueChange = onBarcodeChange,
+            supportingText = "Opcional. El mismo código del empaque sirve para comprarlo y para cobrarlo."
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("También se compra como insumo", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    text = if (linked)
+                        "Vende del stock de ${linkedIngredientName.ifEmpty { "un insumo" }}"
+                    else "Actívalo si es algo que ya entra a tus recetas (huevo, azúcar por libra).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = linked,
+                onCheckedChange = { on ->
+                    if (on) showPicker = true else onLinkedIngredientChange("", "")
+                }
+            )
+        }
+
+        if (linked) {
+            OutlinedButton(onClick = { showPicker = true }, modifier = Modifier.fillMaxWidth()) {
+                Text(linkedIngredientName.ifEmpty { "Elegir insumo" })
+            }
+            // Sin este número la venta no sabe cuánto bajar: una docena son 12 unidades del
+            // insumo, y descontar 1 dejaría el inventario contando docenas que no existen.
+            OutlinedTextField(
+                value = unitsPerSale,
+                onValueChange = onUnitsPerSaleChange,
+                label = { Text("${baseUnit.ifEmpty { "unidades" }} por cada venta *") },
+                placeholder = { Text("Ej: 12 si vendes por docena") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                supportingText = {
+                    Text(
+                        "Cuánto se descuenta de «${linkedIngredientName.ifEmpty { "el insumo" }}» " +
+                            "al vender una unidad de este producto."
+                    )
+                }
+            )
+            Text(
+                text = "Este producto no lleva inventario de tienda propio: el mostrador y la " +
+                    "producción salen del mismo stock.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+
+    if (showPicker) {
+        IngredientPickerDialog(
+            ingredients = ingredients,
+            onPick = { ing ->
+                onLinkedIngredientChange(ing.id, ing.name)
+                if (unitsPerSale.isBlank()) onUnitsPerSaleChange("1")
+                showPicker = false
+            },
+            onDismiss = { showPicker = false }
+        )
+    }
+}
+
 @Composable
 private fun SectionDivider() {
     HorizontalDivider(
@@ -971,7 +1509,8 @@ private fun TextFieldInput(label: String, value: String, onValueChange: (String)
 private fun DecorationsTabContent(
     decorations: List<ProductDecoration>,
     onDecorationsChange: (List<ProductDecoration>) -> Unit,
-    availableDecorations: List<Preparation>
+    availableDecorations: List<Preparation>,
+    availableIngredients: List<Ingredient>
 ) {
     var showPicker by remember { mutableStateOf(false) }
 
@@ -980,7 +1519,10 @@ private fun DecorationsTabContent(
             preparations = availableDecorations.filter { p ->
                 decorations.none { it.preparationId == p.id }
             },
-            onPick = { prep ->
+            ingredients = availableIngredients.filter { i ->
+                decorations.none { it.ingredientId == i.id }
+            },
+            onPickPreparation = { prep ->
                 onDecorationsChange(
                     decorations + ProductDecoration(
                         preparationId = prep.id,
@@ -990,24 +1532,35 @@ private fun DecorationsTabContent(
                 )
                 showPicker = false
             },
+            onPickIngredient = { ing ->
+                onDecorationsChange(
+                    decorations + ProductDecoration(
+                        ingredientId = ing.id,
+                        ingredientName = ing.name,
+                        gramsPerUnit = 0.0
+                    )
+                )
+                showPicker = false
+            },
             onDismiss = { showPicker = false }
         )
     }
 
-    SectionHeader("Adornos del producto")
+    SectionHeader("Adornos y rellenos del producto")
     Text(
-        "Preparaciones tipo \"adorno\" que se aplican al producto terminado (ej. concha). " +
-            "Indica los gramos por unidad — al producir, el sistema descontará automáticamente del lote " +
-            "correspondiente.",
+        "Lo que se aplica al producto terminado, además de la masa. Puede ser algo que " +
+            "preparamos nosotros (concha, relleno de esponja) o un insumo que ya compramos " +
+            "hecho (relleno de higo en manga, mermelada). Indica los gramos por unidad — " +
+            "al producir, el sistema descuenta automáticamente.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
 
-    if (availableDecorations.isEmpty()) {
+    if (availableDecorations.isEmpty() && availableIngredients.isEmpty()) {
         Spacer(Modifier.height(8.dp))
         Text(
-            "No hay preparaciones tipo \"adorno\" registradas. Crea una en el módulo Preparaciones " +
-                "(eligiendo \"Para adorno\") para poder usarla aquí.",
+            "No hay preparaciones tipo \"adorno\" ni insumos registrados. Crea una preparación " +
+                "(eligiendo \"Para adorno\") o un insumo para poder usarlo aquí.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error
         )
@@ -1017,7 +1570,7 @@ private fun DecorationsTabContent(
 
     if (decorations.isEmpty()) {
         Text(
-            "Sin adornos registrados.",
+            "Sin adornos ni rellenos registrados.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.outline
         )
@@ -1028,7 +1581,11 @@ private fun DecorationsTabContent(
                 onGramsChange = { grams ->
                     onDecorationsChange(
                         decorations.mapIndexed { i, d ->
-                            if (i == idx) d.copy(gramsPerUnit = grams.toDoubleOrNull() ?: 0.0) else d
+                            // Coma o punto: el resto de los campos numéricos del formulario
+                            // ya aceptan ambos. Sin este replace, escribir "40,5" resetea
+                            // el campo a 0 y el adorno se descarta en silencio al guardar.
+                            if (i == idx) d.copy(gramsPerUnit = grams.replace(',', '.').toDoubleOrNull() ?: 0.0)
+                            else d
                         }
                     )
                 },
@@ -1044,12 +1601,13 @@ private fun DecorationsTabContent(
 
     OutlinedButton(
         onClick = { showPicker = true },
-        enabled = availableDecorations.any { p -> decorations.none { it.preparationId == p.id } },
+        enabled = availableDecorations.any { p -> decorations.none { it.preparationId == p.id } } ||
+            availableIngredients.any { i -> decorations.none { it.ingredientId == i.id } },
         modifier = Modifier.fillMaxWidth()
     ) {
         Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(6.dp))
-        Text("Agregar adorno")
+        Text("Agregar adorno o relleno")
     }
 }
 
@@ -1073,12 +1631,20 @@ private fun DecorationRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(
-                text = decoration.preparationName.ifEmpty { "Sin nombre" },
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f)
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = decoration.preparationName.ifEmpty { decoration.ingredientName }.ifEmpty { "Sin nombre" },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = if (decoration.isIngredientSourced)
+                        "Insumo — se compra ya hecho, se descuenta de Compras"
+                    else "Preparación — hay que producir su lote antes",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             OutlinedTextField(
                 value = gramsText,
                 onValueChange = onGramsChange,
@@ -1099,14 +1665,301 @@ private fun DecorationRow(
     }
 }
 
+/**
+ * Selector combinado de adornos: preparaciones (las hacemos nosotros, requieren
+ * producir un lote antes) e insumos (se compran ya hechos — relleno de higo,
+ * queso crema, mermeladas). Ambas listas comparten un solo buscador.
+ */
 @Composable
 private fun DecorationPickerDialog(
     preparations: List<Preparation>,
-    onPick: (Preparation) -> Unit,
+    ingredients: List<Ingredient>,
+    onPickPreparation: (Preparation) -> Unit,
+    onPickIngredient: (Ingredient) -> Unit,
     onDismiss: () -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
-    val sorted = remember(preparations) { preparations.sortedBy { it.name.lowercase() } }
+    val sortedPreps = remember(preparations) { preparations.sortedBy { it.name.lowercase() } }
+    val sortedIngredients = remember(ingredients) { ingredients.sortedBy { it.name.lowercase() } }
+    val filteredPreps = remember(searchQuery, sortedPreps) {
+        if (searchQuery.isBlank()) sortedPreps
+        else sortedPreps.filter { it.name.contains(searchQuery, ignoreCase = true) }
+    }
+    val filteredIngredients = remember(searchQuery, sortedIngredients) {
+        if (searchQuery.isBlank()) sortedIngredients
+        else sortedIngredients.filter { it.name.contains(searchQuery, ignoreCase = true) }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            modifier = Modifier.fillMaxWidth().widthIn(max = 480.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "Seleccionar adorno o relleno",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+
+                if (preparations.isEmpty() && ingredients.isEmpty()) {
+                    Text(
+                        "Ya agregaste todos los adornos e insumos disponibles.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        label = { Text("Buscar") },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    LazyColumn(modifier = Modifier.height(320.dp)) {
+                        if (filteredPreps.isNotEmpty()) {
+                            item {
+                                Text(
+                                    "Preparaciones — las hacemos nosotros",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                )
+                            }
+                            items(filteredPreps, key = { "p_" + it.id }) { prep ->
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onPickPreparation(prep) }
+                                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                                ) {
+                                    Text(
+                                        text = prep.name,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    if (prep.description?.isNotBlank() == true) {
+                                        Text(
+                                            text = prep.description,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                            }
+                        }
+                        if (filteredIngredients.isNotEmpty()) {
+                            item {
+                                Text(
+                                    "Insumos — se compran ya hechos",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                )
+                            }
+                            items(filteredIngredients, key = { "i_" + it.id }) { ing ->
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onPickIngredient(ing) }
+                                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                                ) {
+                                    Text(
+                                        text = ing.name,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    if (ing.category.isNotBlank()) {
+                                        Text(
+                                            text = ing.category,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                            }
+                        }
+                        if (filteredPreps.isEmpty() && filteredIngredients.isEmpty()) {
+                            item {
+                                Text(
+                                    "Sin resultados para \"$searchQuery\"",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.outline,
+                                    modifier = Modifier.padding(vertical = 12.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("Cerrar") }
+                }
+            }
+        }
+    }
+}
+
+// ── Tab: Relleno de otra masa ───────────────────────────────────────────────
+
+/**
+ * Distinto de [DecorationsTabContent]: acá el "relleno" no es una preparación
+ * con su propio lote — es masa cruda de OTRA receta (ver [DoughFilling]), la
+ * misma que también se usa para hornear los productos propios de esa receta.
+ * Por eso se elige una RECETA, no una preparación, y el peso declarado se
+ * suma a la demanda de esa masa en producción en vez de descontarse de un
+ * batch aparte.
+ */
+@Composable
+private fun DoughFillingsTabContent(
+    doughFillings: List<DoughFilling>,
+    onDoughFillingsChange: (List<DoughFilling>) -> Unit,
+    availableRecipes: List<Recipe>
+) {
+    var showPicker by remember { mutableStateOf(false) }
+
+    if (showPicker) {
+        DoughFillingRecipePickerDialog(
+            recipes = availableRecipes.filter { r -> doughFillings.none { it.recipeId == r.id } },
+            onPick = { recipe ->
+                onDoughFillingsChange(
+                    doughFillings + DoughFilling(recipeId = recipe.id, recipeName = recipe.name, rawWeightGrams = 0.0)
+                )
+                showPicker = false
+            },
+            onDismiss = { showPicker = false }
+        )
+    }
+
+    SectionHeader("Relleno de otra masa")
+    Text(
+        "Para productos como el Pan de Capa: una bolita de masa Suave va adentro, sacada de " +
+            "la MISMA amasada que también da los Pan Suave normales — no un lote aparte. Elegí " +
+            "la receta y el peso en crudo de esa porción; el sistema lo suma a la masa de esa " +
+            "receta cuando se pida este producto (mínimo de amasada, receta escalada e insumos).",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+
+    if (availableRecipes.isEmpty() && doughFillings.isEmpty()) {
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "No hay otras recetas activas todavía.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error
+        )
+    }
+
+    Spacer(Modifier.height(8.dp))
+
+    if (doughFillings.isEmpty()) {
+        Text(
+            "Sin relleno de otra masa.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline
+        )
+    } else {
+        doughFillings.forEachIndexed { idx, filling ->
+            DoughFillingRow(
+                filling = filling,
+                onGramsChange = { grams ->
+                    onDoughFillingsChange(
+                        doughFillings.mapIndexed { i, f ->
+                            if (i == idx) f.copy(rawWeightGrams = grams.replace(',', '.').toDoubleOrNull() ?: 0.0)
+                            else f
+                        }
+                    )
+                },
+                onRemove = {
+                    onDoughFillingsChange(doughFillings.filterIndexed { i, _ -> i != idx })
+                }
+            )
+            Spacer(Modifier.height(6.dp))
+        }
+    }
+
+    Spacer(Modifier.height(4.dp))
+
+    OutlinedButton(
+        onClick = { showPicker = true },
+        enabled = availableRecipes.any { r -> doughFillings.none { it.recipeId == r.id } },
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp))
+        Text("Agregar relleno de otra masa")
+    }
+}
+
+@Composable
+private fun DoughFillingRow(
+    filling: DoughFilling,
+    onGramsChange: (String) -> Unit,
+    onRemove: () -> Unit
+) {
+    val gramsText = if (filling.rawWeightGrams > 0.0)
+        if (filling.rawWeightGrams == filling.rawWeightGrams.toLong().toDouble())
+            filling.rawWeightGrams.toLong().toString()
+        else filling.rawWeightGrams.toString()
+    else ""
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = filling.recipeName.ifEmpty { "Sin nombre" },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "Masa de otra receta — se suma a su total, no a un lote aparte",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            OutlinedTextField(
+                value = gramsText,
+                onValueChange = onGramsChange,
+                label = { Text("g crudo") },
+                modifier = Modifier.width(110.dp),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                singleLine = true
+            )
+            IconButton(onClick = onRemove, modifier = Modifier.size(36.dp)) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = "Quitar",
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DoughFillingRecipePickerDialog(
+    recipes: List<Recipe>,
+    onPick: (Recipe) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var searchQuery by remember { mutableStateOf("") }
+    val sorted = remember(recipes) { recipes.sortedBy { it.name.lowercase() } }
     val filtered = remember(searchQuery, sorted) {
         if (searchQuery.isBlank()) sorted
         else sorted.filter { it.name.contains(searchQuery, ignoreCase = true) }
@@ -1123,14 +1976,14 @@ private fun DecorationPickerDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    text = "Seleccionar adorno",
+                    text = "Seleccionar receta",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold
                 )
 
-                if (preparations.isEmpty()) {
+                if (recipes.isEmpty()) {
                     Text(
-                        "Ya agregaste todos los adornos disponibles.",
+                        "Ya agregaste todas las recetas disponibles, o no hay otras recetas activas.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1143,28 +1996,31 @@ private fun DecorationPickerDialog(
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
-                    LazyColumn(modifier = Modifier.height(300.dp)) {
-                        items(filtered, key = { it.id }) { prep ->
+                    LazyColumn(modifier = Modifier.height(320.dp)) {
+                        items(filtered, key = { it.id }) { recipe ->
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable { onPick(prep) }
+                                    .clickable { onPick(recipe) }
                                     .padding(horizontal = 12.dp, vertical = 10.dp)
                             ) {
                                 Text(
-                                    text = prep.name,
+                                    text = recipe.name,
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = FontWeight.Medium
                                 )
-                                if (prep.description?.isNotBlank() == true) {
-                                    Text(
-                                        text = prep.description,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
                             }
                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                        }
+                        if (filtered.isEmpty()) {
+                            item {
+                                Text(
+                                    "Sin resultados para \"$searchQuery\"",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.outline,
+                                    modifier = Modifier.padding(vertical = 12.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -1270,7 +2126,7 @@ private fun PricesTabContent(
                     Text(
                         "Al guardar se borrará el precio fijo anterior y volverá a aplicarse el factor.",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFFD9A441),
+                        color = BrandColors.AccentDeep,
                         modifier = Modifier.padding(top = 2.dp)
                     )
                 }
@@ -1285,7 +2141,7 @@ private fun ProductionRoutingSection(
     isInHouseProduced: Boolean,
     onIsInHouseChange: (Boolean) -> Unit
 ) {
-    val PrimaryBlue = Color(0xFF005B8D)
+    val PrimaryBlue = BrandColors.Primary
     Spacer(Modifier.height(8.dp))
     HorizontalDivider()
     Spacer(Modifier.height(12.dp))

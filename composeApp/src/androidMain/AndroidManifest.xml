@@ -10,6 +10,18 @@
     <!-- Android 12+ (API 31): permiso runtime para conectar a paired devices. -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
+    <!-- Push de pedidos. Android 13+ (API 33) lo pide en runtime; en versiones
+         anteriores se concede al instalar. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Ubicación de la sucursal, capturada una sola vez al crear su primer
+         pedido (ver ProductionOrderFormScreen / LocationRequester). Permiso
+         runtime "mientras se usa la app" en todas las versiones soportadas
+         (minSdk 24); si se niega, la encargada vuelve a Inicio y no puede
+         crear el pedido para esa sucursal. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
     <application
         android:name=".BakeryApp"
         android:allowBackup="true"
@@ -20,13 +32,38 @@
         android:theme="@style/Theme.BakeOS.Splash">
         <activity
             android:exported="true"
-            android:name=".MainActivity">
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|navigation|uiMode|density|fontScale|locale|layoutDirection">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Canal por defecto de FCM. Sin esto, un push que llegue con la app
+             cerrada cae en un canal "Miscellaneous" silencioso. El id debe
+             coincidir con ORDERS_NOTIFICATION_CHANNEL_ID y con functions/index.js. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="bakeos_pedidos" />
+        <!-- Entrega a la app de camara la Uri del archivo destino. Desde Android 7 pasar
+             una Uri "file://" a otra app lanza FileUriExposedException. No se declara el
+             permiso CAMERA a proposito: con ACTION_IMAGE_CAPTURE via FileProvider no hace
+             falta, y declararlo obligaria a pedirlo en tiempo de ejecucion. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/notification_accent" />
     </application>
 
 </manifest>

@@ -60,6 +60,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import com.bakery.erp.model.ProductionShift
 import com.bakery.erp.model.canAccessBranch
 import com.bakery.erp.presentation.auth.AuthViewModel
+import com.bakery.erp.ui.theme.BrandColors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -138,7 +139,7 @@ fun ProductionShiftListScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF005B8D),
+                    containerColor = BrandColors.Primary,
                     titleContentColor = Color.White,
                     navigationIconContentColor = Color.White
                 )
@@ -148,11 +149,11 @@ fun ProductionShiftListScreen(
             selectedBranch?.let { branch ->
                 FloatingActionButton(
                     onClick = { onNavigateToForm(branch.id, null) },
-                    containerColor = Color(0xFF005B8D)
+                    containerColor = BrandColors.Primary
                 ) { Icon(Icons.Default.Add, "Nuevo turno", tint = Color.White) }
             }
         },
-        containerColor = Color(0xFFFDFBF7)
+        containerColor = BrandColors.Ivory
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
 
@@ -254,7 +255,7 @@ private fun ShiftCard(shift: ProductionShift, onEdit: () -> Unit, onDelete: () -
                 Text(
                     shift.name,
                     fontWeight = FontWeight.SemiBold,
-                    color = Color(0xFF005B8D),
+                    color = BrandColors.Primary,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -326,7 +327,7 @@ private fun ShiftTableRow(shift: ProductionShift, onEdit: () -> Unit, onDelete: 
             shift.name,
             style = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.SemiBold,
-            color = Color(0xFF005B8D),
+            color = BrandColors.Primary,
             modifier = Modifier.weight(0.3f),
             maxLines = 2,
             overflow = TextOverflow.Ellipsis

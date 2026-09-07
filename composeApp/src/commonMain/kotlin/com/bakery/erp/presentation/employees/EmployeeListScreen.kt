@@ -76,7 +76,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.Employee
 import com.bakery.erp.presentation.auth.AuthViewModel
+import com.bakery.erp.ui.LoadingOverlay
 import com.bakery.erp.ui.ProductImage
+import com.bakery.erp.ui.theme.BrandColors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -116,6 +118,7 @@ fun EmployeeListScreen(
 
     val hasFilters = state.searchQuery.isNotBlank() || state.branchFilter != null
 
+    Box(Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -131,7 +134,7 @@ fun EmployeeListScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF005B8D),
+                    containerColor = BrandColors.Primary,
                     titleContentColor = Color.White,
                     navigationIconContentColor = Color.White
                 )
@@ -140,11 +143,11 @@ fun EmployeeListScreen(
         floatingActionButton = {
             FloatingActionButton(
                 onClick = { onNavigateToForm(null) },
-                containerColor = Color(0xFF005B8D)
+                containerColor = BrandColors.Primary
             ) { Icon(Icons.Default.Add, "Nuevo colaborador", tint = Color.White) }
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
-        containerColor = Color(0xFFFDFBF7)
+        containerColor = BrandColors.Ivory
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
 
@@ -341,6 +344,8 @@ fun EmployeeListScreen(
             }
         }
     }
+    LoadingOverlay(visible = state.isLoading)
+    }
 }
 
 // ── Detalle (reutilizado en panel ancho y en EmployeeDetailScreen) ────────────
@@ -369,7 +374,7 @@ internal fun EmployeeDetailContent(
                     employee.name,
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFF005B8D)
+                    color = BrandColors.Primary
                 )
                 if (employee.positionTitle.isNotEmpty()) {
                     Text(
@@ -385,7 +390,7 @@ internal fun EmployeeDetailContent(
                 }
                 Button(
                     onClick = onEdit,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF005B8D))
+                    colors = ButtonDefaults.buttonColors(containerColor = BrandColors.Primary)
                 ) { Text("Editar") }
             }
         }
@@ -422,7 +427,7 @@ private fun EmployeeDetailRow(icon: ImageVector, label: String, value: String) {
         verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Icon(icon, null, modifier = Modifier.size(20.dp).padding(top = 2.dp), tint = Color(0xFF005B8D))
+        Icon(icon, null, modifier = Modifier.size(20.dp).padding(top = 2.dp), tint = BrandColors.Primary)
         Column {
             Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
             Text(value, style = MaterialTheme.typography.bodyMedium)
@@ -459,10 +464,10 @@ private fun EmployeeCard(employee: Employee, onClick: () -> Unit) {
                     modifier = Modifier
                         .size(48.dp)
                         .clip(CircleShape)
-                        .background(Color(0xFF005B8D).copy(alpha = 0.10f)),
+                        .background(BrandColors.Primary.copy(alpha = 0.10f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Default.AccountCircle, null, modifier = Modifier.size(32.dp), tint = Color(0xFF005B8D).copy(alpha = 0.5f))
+                    Icon(Icons.Default.AccountCircle, null, modifier = Modifier.size(32.dp), tint = BrandColors.Primary.copy(alpha = 0.5f))
                 }
             }
 
@@ -564,10 +569,10 @@ private fun EmployeeTableRow(employee: Employee, isSelected: Boolean, onClick: (
                 }
             } else {
                 Box(
-                    modifier = Modifier.size(32.dp).clip(CircleShape).background(Color(0xFF005B8D).copy(alpha = 0.10f)),
+                    modifier = Modifier.size(32.dp).clip(CircleShape).background(BrandColors.Primary.copy(alpha = 0.10f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Default.AccountCircle, null, modifier = Modifier.size(20.dp), tint = Color(0xFF005B8D).copy(alpha = 0.5f))
+                    Icon(Icons.Default.AccountCircle, null, modifier = Modifier.size(20.dp), tint = BrandColors.Primary.copy(alpha = 0.5f))
                 }
             }
             Text(

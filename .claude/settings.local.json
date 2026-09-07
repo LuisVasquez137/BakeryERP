@@ -100,7 +100,30 @@
       "Bash(unzip *)",
       "Bash(xargs grep -l \"punto de venta\\\\|POS\\\\|venta implementado\")",
       "Bash(git -C \"C:\\\\Users\\\\DELL\\\\AndroidStudioProjects\\\\BakeryERP\" log --oneline --all)",
-      "Bash(git -C \"C:\\\\Users\\\\DELL\\\\AndroidStudioProjects\\\\BakeryERP\" show --name-status 0b34627)"
+      "Bash(git -C \"C:\\\\Users\\\\DELL\\\\AndroidStudioProjects\\\\BakeryERP\" show --name-status 0b34627)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(gh auth *)",
+      "Bash(gh api *)",
+      "WebFetch(domain:luisvasquez137.github.io)",
+      "Bash(grep -ioE \"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\\\.[a-zA-Z]{2,}|[a-z0-9-]+\\\\.github\\\\.io[a-zA-Z0-9/_.-]*\" \"C:/Users/DELL/AndroidStudioProjects/BakeryERP/docs/index.html\" \"C:/Users/DELL/AndroidStudioProjects/BakeryERP/docs/privacy-policy.html\")",
+      "Bash(git -C \"C:/Users/DELL/AndroidStudioProjects/BakeryERP\" remote -v)",
+      "Bash(python *)",
+      "Bash(cd *)",
+      "Bash(./gradlew composeApp:compileDebugKotlin -q)",
+      "Bash(./gradlew composeApp:compileKotlinJs -q)",
+      "Bash(./gradlew composeApp:processDebugMainManifest)",
+      "PowerShell(./gradlew composeApp:compileDebugKotlin -q 2>&1 | Select-Object -Last 60)",
+      "PowerShell(./gradlew composeApp:compileKotlinJs -q 2>&1 | Select-Object -Last 60)",
+      "PowerShell(./gradlew composeApp:compileDebugKotlin composeApp:compileKotlinJs -q 2>&1 | Select-Object -Last 60)",
+      "PowerShell(./gradlew composeApp:jsBrowserDevelopmentRun)",
+      "Bash(seq 1 240)",
+      "Bash(grep -qE 'Project is running at|webpack.*compiled|FAILURE:|error:|BUILD FAILED' C:/Users/DELL/AppData/Local/Temp/claude/C--Users-DELL-AndroidStudioProjects-BakeryERP/c439a55b-5857-4968-8026-8331531fded7/tasks/b4x5l0olm.output)",
+      "Bash(grep -hE 'Project is running at|Loopback|webpack.*compiled|FAILURE:|error:|BUILD FAILED' C:/Users/DELL/AppData/Local/Temp/claude/C--Users-DELL-AndroidStudioProjects-BakeryERP/c439a55b-5857-4968-8026-8331531fded7/tasks/b4x5l0olm.output)",
+      "Bash(curl *)",
+      "PowerShell($env:JAVA_HOME; \\(Get-Command java -ErrorAction SilentlyContinue\\).Source)",
+      "Bash(adb devices *)"
     ]
   }
 }

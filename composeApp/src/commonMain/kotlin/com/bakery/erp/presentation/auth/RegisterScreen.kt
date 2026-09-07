@@ -31,11 +31,13 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.remember
+import com.bakery.erp.ui.LoadingOverlay
 
 @Composable
 fun RegisterScreen(
     onNavigateToLogin: () -> Unit,
-    viewModel: AuthViewModel
+    viewModel: AuthViewModel,
+    onNavigateBack: () -> Unit = {}
 ) {
     val state by viewModel.uiState.collectAsState()
     val isGoogleUser = state.user != null
@@ -75,6 +77,18 @@ fun RegisterScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+
+            // Confirmación de la cuenta de Google con la que se está registrando.
+            val googleEmail = state.user?.email
+            if (!googleEmail.isNullOrBlank()) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = "Cuenta de Google: $googleEmail",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+
             Spacer(Modifier.height(32.dp))
 
             OutlinedTextField(
@@ -120,6 +134,10 @@ fun RegisterScreen(
                 } else {
                     Text("Crear panadería")
                 }
+            }
+            Spacer(Modifier.height(12.dp))
+            TextButton(onClick = onNavigateBack) {
+                Text("Atrás")
             }
 
         } else {
@@ -260,5 +278,11 @@ fun RegisterScreen(
             }
         }
     }
+
+    // Overlay de carga a pantalla completa mientras se crea la organización / cuenta.
+    LoadingOverlay(
+        visible = state.isLoading,
+        message = if (isGoogleUser) "Creando tu panadería" else "Procesando..."
+    )
     }
 }

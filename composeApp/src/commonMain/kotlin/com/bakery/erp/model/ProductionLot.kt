@@ -19,6 +19,20 @@ data class ProductionLot(
     val lineCount: Int = 0,
     val sourceOrderIds: List<String> = emptyList(),
     /**
+     * `true` cuando este lote nació de un reparto por turnos
+     * (`ProductionViewModel.saveShiftSplitLots`): dos lotes hermanos comparten
+     * [sourceOrderIds], y cada uno produce solo una porción de cada pedido.
+     *
+     * Es el dato que le dice a `createDispatchNotesForLot` que debe despachar el
+     * desglose de [ProductionLotLine.sourceOrderAllocations] y NO la cantidad
+     * pedida completa. Antes eso se deducía mirando si alguna línea traía
+     * desglose, y esa heurística fallaba justo en el peor sentido: un lote
+     * repartido cuyas líneas perdieron el desglose (recomputadas al editar un
+     * pedido, o creadas después) se trataba como lote normal y **cada turno
+     * despachaba el pedido entero** — el pan salía duplicado en las dos notas.
+     */
+    val isShiftSplit: Boolean = false,
+    /**
      * IDs de [CustomerOrder] consolidados en este lote (revendedor / encargo retail / pastel).
      * Lista separada de [sourceOrderIds] para mantener retrocompatibilidad y permitir
      * queries `where-in` específicas por canal.

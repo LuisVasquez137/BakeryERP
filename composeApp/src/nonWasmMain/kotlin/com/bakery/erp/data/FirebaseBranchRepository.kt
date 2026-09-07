@@ -36,6 +36,47 @@ class FirebaseBranchRepository(
         col(companyId).document(branchId).delete()
     }
 
+    override suspend fun updateProductSortOrder(
+        companyId: String,
+        branchId: String,
+        productIds: List<String>
+    ) {
+        col(companyId).document(branchId).update(
+            firestoreSafeOf(
+                "productSortOrder" to productIds,
+                "updatedAt" to Clock.System.now().toEpochMilliseconds()
+            )
+        )
+    }
+
+    override suspend fun updateProductionSortOrder(
+        companyId: String,
+        branchId: String,
+        productIds: List<String>
+    ) {
+        col(companyId).document(branchId).update(
+            firestoreSafeOf(
+                "productionSortOrder" to productIds,
+                "updatedAt" to Clock.System.now().toEpochMilliseconds()
+            )
+        )
+    }
+
+    override suspend fun updateLocation(
+        companyId: String,
+        branchId: String,
+        latitude: Double,
+        longitude: Double
+    ) {
+        col(companyId).document(branchId).update(
+            firestoreSafeOf(
+                "latitude" to latitude,
+                "longitude" to longitude,
+                "updatedAt" to Clock.System.now().toEpochMilliseconds()
+            )
+        )
+    }
+
     // ── Serialization ────────────────────────────────────────────────────────
 
     private fun Branch.toMap(): Map<String, Any?> = firestoreSafeOf(
@@ -49,6 +90,12 @@ class FirebaseBranchRepository(
         "capabilities" to capabilities.map { it.name },
         "assignedProductIds" to assignedProductIds,
         "defaultPriceListId" to defaultPriceListId,
+        "productSortOrder" to productSortOrder,
+        "productionSortOrder" to productionSortOrder,
+        "closedWeekdays" to closedWeekdays,
+        "receivesOnlyInTrip" to receivesOnlyInTrip,
+        "latitude" to latitude,
+        "longitude" to longitude,
         "active" to active,
         "createdAt" to if (createdAt == 0L) Clock.System.now().toEpochMilliseconds() else createdAt,
         "updatedAt" to Clock.System.now().toEpochMilliseconds()
@@ -71,6 +118,20 @@ class FirebaseBranchRepository(
             get<List<String>?>("assignedProductIds") ?: emptyList()
         }.getOrElse { emptyList() },
         defaultPriceListId = get<String?>("defaultPriceListId") ?: "",
+        productSortOrder = runCatching {
+            get<List<String>?>("productSortOrder") ?: emptyList()
+        }.getOrElse { emptyList() },
+        productionSortOrder = runCatching {
+            get<List<String>?>("productionSortOrder") ?: emptyList()
+        }.getOrElse { emptyList() },
+        closedWeekdays = runCatching {
+            get<List<Long>?>("closedWeekdays")?.map { it.toInt() } ?: emptyList()
+        }.getOrElse { emptyList() },
+        receivesOnlyInTrip = runCatching {
+            get<Long?>("receivesOnlyInTrip")?.toInt()
+        }.getOrNull() ?: 0,
+        latitude = runCatching { get<Double?>("latitude") }.getOrNull(),
+        longitude = runCatching { get<Double?>("longitude") }.getOrNull(),
         active = get<Boolean?>("active") ?: true,
         createdAt = readTimestampAsMillis("createdAt"),
         updatedAt = readTimestampAsMillis("updatedAt")

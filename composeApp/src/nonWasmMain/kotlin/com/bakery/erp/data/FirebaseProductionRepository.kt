@@ -6,6 +6,13 @@ import com.bakery.erp.domain.report.ProductProductionStat
 import com.bakery.erp.domain.report.ProductionSummary
 import com.bakery.erp.domain.report.ShiftProductionStat
 import com.bakery.erp.model.CustomerLineSpec
+import com.bakery.erp.model.DoughFilling
+import com.bakery.erp.model.OrderPattern
+import com.bakery.erp.model.SourceOrderAllocation
+import com.bakery.erp.model.isoWeekdayOf
+import com.bakery.erp.model.orderPatternId
+import com.bakery.erp.model.withOrder
+import com.bakery.erp.model.withoutOrder
 import com.bakery.erp.model.ProductionLot
 import com.bakery.erp.model.ProductionLotDecoration
 import com.bakery.erp.model.ProductionLotLine
@@ -19,6 +26,7 @@ import dev.gitlive.firebase.firestore.DocumentSnapshot
 import dev.gitlive.firebase.firestore.FirebaseFirestore
 import dev.gitlive.firebase.firestore.Timestamp
 import dev.gitlive.firebase.firestore.toMilliseconds
+import dev.gitlive.firebase.firestore.where
 import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlinx.coroutines.async
@@ -49,12 +57,25 @@ class FirebaseProductionRepository(
     private fun lotLinesCol(companyId: String, lotId: String) =
         firestore.collection("companies/$companyId/productionLots/$lotId/lines")
 
+    private fun orderPatternsCol(companyId: String) =
+        firestore.collection("companies/$companyId/orderPatterns")
+
     // ── Turnos ────────────────────────────────────────────────────────────────
 
+    /**
+     * Orden estable por viaje de despacho (ver [ProductionShift.dispatchOrder]): los
+     * turnos sin configurar (`0`) van al final, alfabéticos. Antes salían en el orden
+     * que devolviera Firestore, así que cuál turno era la columna izquierda del
+     * reparto podía cambiar entre cargas.
+     */
     override suspend fun getShiftsForBranch(companyId: String, branchId: String): List<ProductionShift> =
         shiftsCol(companyId).get().documents
             .map { it.toShift() }
             .filter { it.branchId == branchId && it.active }
+            .sortedWith(
+                compareBy<ProductionShift> { if (it.dispatchOrder <= 0) Int.MAX_VALUE else it.dispatchOrder }
+                    .thenBy { it.name }
+            )
 
     override suspend fun saveShift(companyId: String, shift: ProductionShift) {
         val docRef = if (shift.id.isEmpty()) shiftsCol(companyId).document
@@ -188,6 +209,7 @@ class FirebaseProductionRepository(
                           else orderLinesCol(companyId, docRef.id).document(line.id)
             lineDoc.set(line.copy(id = lineDoc.id).toOrderLineMap())
         }
+        recordOrderInPattern(companyId, final, lines)
     }
 
     override suspend fun updateOrder(
@@ -218,6 +240,7 @@ class FirebaseProductionRepository(
         (existingIds - keptIds).forEach { obsoleteId ->
             runCatching { orderLinesCol(companyId, order.id).document(obsoleteId).delete() }
         }
+        recordOrderInPattern(companyId, final, lines)
     }
 
     override suspend fun updateOrderStatus(companyId: String, orderId: String, newStatus: String) {
@@ -225,6 +248,69 @@ class FirebaseProductionRepository(
         ordersCol(companyId).document(orderId).set(
             order.copy(status = newStatus, updatedAt = Clock.System.now().toEpochMilliseconds()).toOrderMap()
         )
+        // Un pedido cancelado no debe seguir alimentando las cantidades sugeridas.
+        if (newStatus == ProductionOrderStatus.CANCELLED) {
+            runCatching {
+                val patternId = orderPatternId(
+                    order.sellingBranchId,
+                    order.producingBranchId,
+                    order.shiftId,
+                    isoWeekdayOf(order.requestedDate)
+                )
+                val current = getOrderPattern(companyId, patternId) ?: return@runCatching
+                saveOrderPattern(companyId, current.withoutOrder(orderId))
+            }
+        }
+    }
+
+    override suspend fun deleteOrder(companyId: String, orderId: String) {
+        // Se lee ANTES de borrar: el patrón se localiza con los datos del pedido
+        // (sucursal + planta + turno + día de la semana), y después ya no están.
+        val order = getOrder(companyId, orderId)
+        orderLinesCol(companyId, orderId).get().documents.forEach { line ->
+            runCatching { orderLinesCol(companyId, orderId).document(line.id).delete() }
+        }
+        ordersCol(companyId).document(orderId).delete()
+        // Un pedido borrado tampoco debe seguir alimentando las cantidades
+        // sugeridas — mismo criterio que updateOrderStatus(CANCELLED).
+        if (order != null) {
+            runCatching {
+                val patternId = orderPatternId(
+                    order.sellingBranchId,
+                    order.producingBranchId,
+                    order.shiftId,
+                    isoWeekdayOf(order.requestedDate)
+                )
+                val current = getOrderPattern(companyId, patternId) ?: return@runCatching
+                saveOrderPattern(companyId, current.withoutOrder(orderId))
+            }
+        }
+    }
+
+    override suspend fun deleteLot(companyId: String, lotId: String) {
+        lotLinesCol(companyId, lotId).get().documents.forEach { line ->
+            runCatching { lotLinesCol(companyId, lotId).document(line.id).delete() }
+        }
+        lotsCol(companyId).document(lotId).delete()
+    }
+
+    override suspend fun excludeOrdersFromLotPlanning(companyId: String, orderIds: List<String>) {
+        if (orderIds.isEmpty()) return
+        // Escritura parcial: no se toca el resto del pedido ni su estado.
+        coroutineScope {
+            orderIds.map { orderId ->
+                async {
+                    runCatching {
+                        ordersCol(companyId).document(orderId).update(
+                            firestoreSafeOf(
+                                "excludedFromLotPlanning" to true,
+                                "updatedAt" to Clock.System.now().toEpochMilliseconds()
+                            )
+                        )
+                    }
+                }
+            }.awaitAll()
+        }
     }
 
     override suspend fun addOrderToLot(
@@ -243,10 +329,18 @@ class FirebaseProductionRepository(
         for (incoming in newLines) {
             val match = byProduct[incoming.productId]
             if (match != null) {
-                // Suma cantidades a la línea existente y persiste.
+                // Suma cantidades a la línea existente y combina sourceOrderAllocations
+                // (sin duplicar el mismo orderId) — si la línea ya traía desglose por
+                // sucursal (lote de reparto por turnos), el pedido tardío necesita su
+                // propia entrada o createDispatchNotesForLot lo trataría como 0 en este turno.
+                val mergedAllocations = match.sourceOrderAllocations +
+                    incoming.sourceOrderAllocations.filter { alloc ->
+                        match.sourceOrderAllocations.none { it.orderId == alloc.orderId }
+                    }
                 val merged = match.copy(
                     plannedQuantity = match.plannedQuantity + incoming.plannedQuantity,
-                    producedQuantity = match.producedQuantity + incoming.producedQuantity
+                    producedQuantity = match.producedQuantity + incoming.producedQuantity,
+                    sourceOrderAllocations = mergedAllocations
                 )
                 lotLinesCol(companyId, lotId).document(match.id).set(merged.toLotLineMap())
                 byProduct[incoming.productId] = merged
@@ -287,14 +381,25 @@ class FirebaseProductionRepository(
 
         for (toRemove in orderLines) {
             val match = byProduct[toRemove.productId] ?: continue
-            val newPlanned = (match.plannedQuantity - toRemove.requestedQuantity).coerceAtLeast(0.0)
-            val newProduced = (match.producedQuantity - toRemove.requestedQuantity).coerceAtLeast(0.0)
+            // En un lote de reparto por turnos la línea solo tiene la PORCIÓN de este
+            // pedido que produce este turno, no lo pedido completo. Restar la cantidad
+            // completa vaciaba la línea y borraba de un turno el pan de todas las demás
+            // sucursales — se resta el desglose de este pedido y se lo saca de la lista.
+            val allocated = match.sourceOrderAllocations.find { it.orderId == orderId }
+            val delta = allocated?.quantity ?: toRemove.requestedQuantity
+            val remainingAllocations = match.sourceOrderAllocations.filter { it.orderId != orderId }
+            val newPlanned = (match.plannedQuantity - delta).coerceAtLeast(0.0)
+            val newProduced = (match.producedQuantity - delta).coerceAtLeast(0.0)
             if (newPlanned <= 0.0) {
                 // Sin demanda restante: eliminar la línea.
                 runCatching { lotLinesCol(companyId, lotId).document(match.id).delete() }
                 byProduct.remove(toRemove.productId)
             } else {
-                val updated = match.copy(plannedQuantity = newPlanned, producedQuantity = newProduced)
+                val updated = match.copy(
+                    plannedQuantity = newPlanned,
+                    producedQuantity = newProduced,
+                    sourceOrderAllocations = remainingAllocations
+                )
                 lotLinesCol(companyId, lotId).document(match.id).set(updated.toLotLineMap())
                 byProduct[toRemove.productId] = updated
             }
@@ -396,6 +501,155 @@ class FirebaseProductionRepository(
         lotsCol(companyId).document(lotId).set(updatedLot.toLotMap())
     }
 
+    // ── Patrones de pedido (cantidades sugeridas) ─────────────────────────────
+
+    override suspend fun getOrderPattern(companyId: String, patternId: String): OrderPattern? =
+        runCatching {
+            val doc = orderPatternsCol(companyId).document(patternId).get()
+            if (!doc.exists) null else doc.toOrderPattern()
+        }.getOrNull()
+
+    override suspend fun rebuildOrderPatternFromHistory(
+        companyId: String,
+        sellingBranchId: String,
+        producingBranchId: String,
+        shiftId: String,
+        weekday: Int
+    ): OrderPattern {
+        val patternId = orderPatternId(sellingBranchId, producingBranchId, shiftId, weekday)
+        val empty = OrderPattern(
+            id = patternId,
+            sellingBranchId = sellingBranchId,
+            producingBranchId = producingBranchId,
+            shiftId = shiftId,
+            weekday = weekday
+        )
+        if (sellingBranchId.isEmpty() || producingBranchId.isEmpty()) return empty
+
+        // Filtro por igualdad simple (no requiere índice compuesto); el resto se
+        // acota en cliente y solo leemos las líneas de los MAX_SAMPLES pedidos
+        // que realmente alimentan la sugerencia.
+        val candidates = runCatching {
+            ordersCol(companyId)
+                .where { "sellingBranchId" equalTo sellingBranchId }
+                .get().documents.map { it.toOrder() }
+        }.getOrElse { return empty }
+            .filter {
+                it.producingBranchId == producingBranchId &&
+                    // Un shiftId objetivo vacío significa "planta sin selector de turno"
+                    // (0 turnos, o 2 turnos con reparto automático). En ese caso el
+                    // historial puede tener shiftId real de ANTES de que existiera el
+                    // reparto automático — se toma como muestra igual, si no el patrón
+                    // queda huérfano y la sugerencia nunca se rellena.
+                    (shiftId.isEmpty() || it.shiftId == shiftId) &&
+                    it.status != ProductionOrderStatus.CANCELLED &&
+                    isoWeekdayOf(it.requestedDate) == weekday
+            }
+            .sortedByDescending { it.requestedDate }
+            .take(OrderPattern.MAX_SAMPLES)
+
+        var pattern = empty
+        // Del más viejo al más reciente para que `recentOrderIds` quede ordenado.
+        candidates.reversed().forEach { order ->
+            val lines = runCatching { getOrderLines(companyId, order.id) }.getOrElse { emptyList() }
+            if (lines.isEmpty()) return@forEach
+            pattern = pattern.withOrder(
+                order.id,
+                // Los pedidos especiales no entran al patrón: son piezas de un
+                // solo día con un productId sintético e irrepetible. Sumarlos
+                // llenaría la sugerencia de productos fantasma que ya no existen.
+                lines.filter { !it.isSpecial }
+                    .associate { it.productId to it.requestedQuantity }
+            )
+        }
+        runCatching { saveOrderPattern(companyId, pattern) }
+        return pattern
+    }
+
+    /**
+     * Persiste el patrón (con `updatedAt` fresco). Documento plano; las
+     * cantidades van como mapa anidado `orderId → productId → cantidad`.
+     */
+    private suspend fun saveOrderPattern(companyId: String, pattern: OrderPattern) {
+        orderPatternsCol(companyId).document(pattern.id).set(pattern.toPatternMap())
+    }
+
+    /**
+     * Mantiene al día el patrón de la combinación del pedido. Se llama desde
+     * [saveOrder] y [updateOrder]; nunca hace fallar la operación principal —
+     * una sugerencia desactualizada no debe impedir guardar un pedido.
+     */
+    private suspend fun recordOrderInPattern(
+        companyId: String,
+        order: ProductionOrder,
+        lines: List<ProductionOrderLine>
+    ) {
+        if (order.id.isEmpty() || order.sellingBranchId.isEmpty()) return
+        if (order.status == ProductionOrderStatus.CANCELLED) return
+        runCatching {
+            val weekday = isoWeekdayOf(order.requestedDate)
+            val patternId = orderPatternId(
+                order.sellingBranchId, order.producingBranchId, order.shiftId, weekday
+            )
+            val current = getOrderPattern(companyId, patternId) ?: OrderPattern(
+                id = patternId,
+                sellingBranchId = order.sellingBranchId,
+                producingBranchId = order.producingBranchId,
+                shiftId = order.shiftId,
+                weekday = weekday
+            )
+            saveOrderPattern(
+                companyId,
+                current.withOrder(
+                    order.id,
+                    // Se resta rainBumpUnits para que la muestra histórica quede
+                    // "limpia" de lluvia — si no, el ajuste automático se vuelve
+                    // la nueva normalidad y se acumula semana tras semana (ver
+                    // com.bakery.erp.model.withRainBump).
+                    // Sin los especiales, por la misma razón que en
+                    // `rebuildOrderPatternFromHistory`: su productId es sintético
+                    // y no se repite nunca.
+                    lines.filter { !it.isSpecial }.associate {
+                        it.productId to (it.requestedQuantity - it.rainBumpUnits).coerceAtLeast(0.0)
+                    }
+                )
+            )
+        }
+    }
+
+    private fun OrderPattern.toPatternMap(): Map<String, Any?> = firestoreSafeOf(
+        "id" to id,
+        "sellingBranchId" to sellingBranchId,
+        "producingBranchId" to producingBranchId,
+        "shiftId" to shiftId,
+        "weekday" to weekday,
+        "recentOrderIds" to recentOrderIds,
+        "quantitiesByOrder" to quantitiesByOrder,
+        "updatedAt" to Clock.System.now().toEpochMilliseconds()
+    )
+
+    @Suppress("UNCHECKED_CAST")
+    private fun DocumentSnapshot.toOrderPattern(): OrderPattern = OrderPattern(
+        id = id,
+        sellingBranchId = get<String?>("sellingBranchId") ?: "",
+        producingBranchId = get<String?>("producingBranchId") ?: "",
+        shiftId = get<String?>("shiftId") ?: "",
+        weekday = runCatching { get<Long?>("weekday")?.toInt() }.getOrNull() ?: 1,
+        recentOrderIds = runCatching { get<List<String>?>("recentOrderIds") }.getOrNull()
+            ?: emptyList(),
+        // `get<Map<String, Any?>>` no funciona: kotlinx.serialization no tiene
+        // serializer para `Any` (falla con "Serializer for class 'Any' is not
+        // found", capturado en silencio por el runCatching y el patrón siempre
+        // volvía con quantitiesByOrder vacío aunque recentOrderIds sí llegaba
+        // bien). Como todos los valores guardados son String→Double concretos
+        // (firestoreSafeOf convierte Long a Double al escribir), pedirle el tipo
+        // anidado exacto sí tiene serializer y decodifica bien.
+        quantitiesByOrder = runCatching {
+            get<Map<String, Map<String, Double>>?>("quantitiesByOrder") ?: emptyMap()
+        }.getOrElse { emptyMap() },
+        updatedAt = readMillis("updatedAt")
+    )
+
     // ── Lotes ─────────────────────────────────────────────────────────────────
 
     override suspend fun getLotsForBranch(companyId: String, branchId: String): List<ProductionLot> =
@@ -432,6 +686,22 @@ class FirebaseProductionRepository(
                 it.status != ProductionLotStatus.CANCELLED &&
                     it.producingBranchId == producingBranchId &&
                     it.shiftId == shiftId &&
+                    Instant.fromEpochMilliseconds(it.productionDate).toLocalDateTime(tz).date == targetDay
+            }
+    }
+
+    override suspend fun getActiveLotsForBranchDate(
+        companyId: String,
+        producingBranchId: String,
+        productionDate: Long
+    ): List<ProductionLot> {
+        val tz = TimeZone.currentSystemDefault()
+        val targetDay = Instant.fromEpochMilliseconds(productionDate).toLocalDateTime(tz).date
+        return lotsCol(companyId).get().documents
+            .map { it.toLot() }
+            .filter {
+                it.status != ProductionLotStatus.CANCELLED &&
+                    it.producingBranchId == producingBranchId &&
                     Instant.fromEpochMilliseconds(it.productionDate).toLocalDateTime(tz).date == targetDay
             }
     }
@@ -631,6 +901,8 @@ class FirebaseProductionRepository(
         "startTime" to startTime,
         "endTime" to endTime,
         "active" to active,
+        "excludedProductIds" to excludedProductIds,
+        "dispatchOrder" to dispatchOrder,
         "createdByUserId" to createdByUserId,
         "createdByUserName" to createdByUserName,
         "createdAt" to createdAt,
@@ -645,6 +917,8 @@ class FirebaseProductionRepository(
         startTime = get<String?>("startTime") ?: "",
         endTime = get<String?>("endTime") ?: "",
         active = runCatching { get<Boolean?>("active") }.getOrNull() ?: true,
+        excludedProductIds = runCatching { get<List<String>?>("excludedProductIds") }.getOrNull() ?: emptyList(),
+        dispatchOrder = runCatching { get<Long?>("dispatchOrder")?.toInt() }.getOrNull() ?: 0,
         createdByUserId = get<String?>("createdByUserId") ?: "",
         createdByUserName = get<String?>("createdByUserName") ?: "",
         createdAt = readMillis("createdAt"),
@@ -664,6 +938,7 @@ class FirebaseProductionRepository(
         "requestedDate" to requestedDate,
         "status" to status,
         "isLateOrder" to isLateOrder,
+        "excludedFromLotPlanning" to excludedFromLotPlanning,
         "notes" to notes,
         "createdByUserId" to createdByUserId,
         "createdByUserName" to createdByUserName,
@@ -679,6 +954,15 @@ class FirebaseProductionRepository(
         "productName" to productName,
         "requestedQuantity" to requestedQuantity,
         "productUnit" to productUnit,
+        "rainBumpUnits" to rainBumpUnits,
+        "earlyShiftQuantity" to earlyShiftQuantity,
+        "earlyShiftNote" to earlyShiftNote,
+        "isSpecial" to isSpecial,
+        "specialRecipeId" to specialRecipeId,
+        "specialRecipeName" to specialRecipeName,
+        "specialRawWeightGrams" to specialRawWeightGrams,
+        "specialPhotoUrl" to specialPhotoUrl,
+        "specialUnitPrice" to specialUnitPrice,
         "customerLineRefs" to customerLineRefs.map {
             mapOf(
                 "customerOrderId" to it.customerOrderId,
@@ -701,6 +985,9 @@ class FirebaseProductionRepository(
         requestedDate = readMillis("requestedDate"),
         status = get<String?>("status") ?: ProductionOrderStatus.PENDING,
         isLateOrder = runCatching { get<Boolean?>("isLateOrder") }.getOrNull() ?: false,
+        excludedFromLotPlanning = runCatching {
+            get<Boolean?>("excludedFromLotPlanning")
+        }.getOrNull() ?: false,
         notes = get<String?>("notes"),
         createdByUserId = get<String?>("createdByUserId") ?: "",
         createdByUserName = get<String?>("createdByUserName") ?: "",
@@ -718,6 +1005,17 @@ class FirebaseProductionRepository(
         productName = get<String?>("productName") ?: "",
         requestedQuantity = runCatching { get<Double?>("requestedQuantity") }.getOrNull() ?: 0.0,
         productUnit = get<String?>("productUnit") ?: "",
+        rainBumpUnits = runCatching { get<Long?>("rainBumpUnits")?.toInt() }.getOrNull() ?: 0,
+        earlyShiftQuantity = runCatching { get<Double?>("earlyShiftQuantity") }.getOrNull(),
+        earlyShiftNote = get<String?>("earlyShiftNote") ?: "",
+        isSpecial = runCatching { get<Boolean?>("isSpecial") }.getOrNull() ?: false,
+        specialRecipeId = get<String?>("specialRecipeId") ?: "",
+        specialRecipeName = get<String?>("specialRecipeName") ?: "",
+        specialRawWeightGrams = runCatching {
+            get<Double?>("specialRawWeightGrams")
+        }.getOrNull() ?: 0.0,
+        specialPhotoUrl = get<String?>("specialPhotoUrl") ?: "",
+        specialUnitPrice = runCatching { get<Double?>("specialUnitPrice") }.getOrNull() ?: 0.0,
         customerLineRefs = runCatching {
             @Suppress("UNCHECKED_CAST")
             (get<List<Map<String, Any?>>?>("customerLineRefs") ?: emptyList()).map {
@@ -753,6 +1051,7 @@ class FirebaseProductionRepository(
         "stockDeducted" to stockDeducted,
         "lineCount" to lineCount,
         "sourceOrderIds" to sourceOrderIds,
+        "isShiftSplit" to isShiftSplit,
         "customerOrderIds" to customerOrderIds
     )
 
@@ -764,29 +1063,40 @@ class FirebaseProductionRepository(
         "rawWeightGrams" to rawWeightGrams,
         "plannedQuantity" to plannedQuantity,
         "producedQuantity" to producedQuantity,
+        "producedCountConfirmed" to producedCountConfirmed,
         "recipeId" to recipeId,
         "recipeName" to recipeName,
+        "plantRetainedQuantity" to plantRetainedQuantity,
         "spongeBatchId" to spongeBatchId,
         "spongeBatchName" to spongeBatchName,
         "spongeGramsUsed" to spongeGramsUsed,
-        "decorationsSnapshot" to decorationsSnapshot.map {
-            mapOf(
-                "preparationId" to it.preparationId,
-                "preparationName" to it.preparationName,
-                "gramsPerUnit" to it.gramsPerUnit,
-                "batchId" to it.batchId,
-                "batchName" to it.batchName
-            )
-        },
-        "customerSpecs" to customerSpecs.map {
-            mapOf(
-                "customerOrderId" to it.customerOrderId,
-                "customerName" to it.customerName,
-                "quantity" to it.quantity,
-                "customSpec" to it.customSpec,
-                "customerType" to it.customerType
-            )
-        }
+        "spongeConsumed" to spongeConsumed,
+        // Arreglos paralelos en vez de List<Map<String, Any?>>: GitLive no tiene
+        // serializer para `Any` (ver feedback_gitlive_any_serializer) — con el
+        // formato anterior decorationsSnapshot/customerSpecs siempre volvían
+        // vacíos al releer el lote (recargar la pantalla, abrir desde otro
+        // dispositivo), así que los adornos comprados nunca se descontaban en
+        // `completeLot` y las notas de cliente desaparecían del detalle.
+        "decoPreparationIds" to decorationsSnapshot.map { it.preparationId },
+        "decoPreparationNames" to decorationsSnapshot.map { it.preparationName },
+        "decoIngredientIds" to decorationsSnapshot.map { it.ingredientId },
+        "decoIngredientNames" to decorationsSnapshot.map { it.ingredientName },
+        "decoGramsPerUnit" to decorationsSnapshot.map { it.gramsPerUnit },
+        "decoBatchIds" to decorationsSnapshot.map { it.batchId },
+        "decoBatchNames" to decorationsSnapshot.map { it.batchName },
+        "doughFillingRecipeIds" to doughFillingsSnapshot.map { it.recipeId },
+        "doughFillingRecipeNames" to doughFillingsSnapshot.map { it.recipeName },
+        "doughFillingRawWeightGrams" to doughFillingsSnapshot.map { it.rawWeightGrams },
+        "csOrderIds" to customerSpecs.map { it.customerOrderId },
+        "csCustomerNames" to customerSpecs.map { it.customerName },
+        "csQuantities" to customerSpecs.map { it.quantity },
+        "csCustomSpecs" to customerSpecs.map { it.customSpec },
+        "csCustomerTypes" to customerSpecs.map { it.customerType },
+        "soaOrderIds" to sourceOrderAllocations.map { it.orderId },
+        "soaBranchNames" to sourceOrderAllocations.map { it.branchName },
+        "soaQuantities" to sourceOrderAllocations.map { it.quantity },
+        "isSpecial" to isSpecial,
+        "specialPhotoUrl" to specialPhotoUrl
     )
 
     @Suppress("UNCHECKED_CAST")
@@ -808,6 +1118,7 @@ class FirebaseProductionRepository(
         stockDeducted = runCatching { get<Boolean?>("stockDeducted") }.getOrNull() ?: false,
         lineCount = runCatching { get<Long?>("lineCount")?.toInt() }.getOrNull() ?: 0,
         sourceOrderIds = runCatching { get<List<String>?>("sourceOrderIds") }.getOrNull() ?: emptyList(),
+        isShiftSplit = runCatching { get<Boolean?>("isShiftSplit") }.getOrNull() ?: false,
         customerOrderIds = runCatching { get<List<String>?>("customerOrderIds") }.getOrNull() ?: emptyList()
     )
 
@@ -819,35 +1130,78 @@ class FirebaseProductionRepository(
         rawWeightGrams = runCatching { get<Double?>("rawWeightGrams") }.getOrNull(),
         plannedQuantity = runCatching { get<Double?>("plannedQuantity") }.getOrNull() ?: 0.0,
         producedQuantity = runCatching { get<Double?>("producedQuantity") }.getOrNull() ?: 0.0,
+        producedCountConfirmed = runCatching { get<Boolean?>("producedCountConfirmed") }.getOrNull() ?: false,
         recipeId = get<String?>("recipeId") ?: "",
         recipeName = get<String?>("recipeName") ?: "",
+        plantRetainedQuantity = runCatching {
+            get<Double?>("plantRetainedQuantity")
+        }.getOrNull() ?: 0.0,
         spongeBatchId = get<String?>("spongeBatchId") ?: "",
         spongeBatchName = get<String?>("spongeBatchName") ?: "",
         spongeGramsUsed = runCatching { get<Double?>("spongeGramsUsed") }.getOrNull() ?: 0.0,
+        spongeConsumed = runCatching { get<Boolean?>("spongeConsumed") }.getOrNull() ?: false,
         decorationsSnapshot = runCatching {
-            @Suppress("UNCHECKED_CAST")
-            (get<List<Map<String, Any?>>?>("decorationsSnapshot") ?: emptyList()).map {
+            val preparationIds = get<List<String>?>("decoPreparationIds") ?: emptyList()
+            val preparationNames = get<List<String>?>("decoPreparationNames") ?: emptyList()
+            val ingredientIds = get<List<String>?>("decoIngredientIds") ?: emptyList()
+            val ingredientNames = get<List<String>?>("decoIngredientNames") ?: emptyList()
+            val gramsPerUnit = get<List<Double>?>("decoGramsPerUnit") ?: emptyList()
+            val batchIds = get<List<String>?>("decoBatchIds") ?: emptyList()
+            val batchNames = get<List<String>?>("decoBatchNames") ?: emptyList()
+            preparationIds.indices.map { i ->
                 ProductionLotDecoration(
-                    preparationId = it["preparationId"] as? String ?: "",
-                    preparationName = it["preparationName"] as? String ?: "",
-                    gramsPerUnit = (it["gramsPerUnit"] as? Number)?.toDouble() ?: 0.0,
-                    batchId = it["batchId"] as? String ?: "",
-                    batchName = it["batchName"] as? String ?: ""
+                    preparationId = preparationIds[i],
+                    preparationName = preparationNames.getOrElse(i) { "" },
+                    ingredientId = ingredientIds.getOrElse(i) { "" },
+                    ingredientName = ingredientNames.getOrElse(i) { "" },
+                    gramsPerUnit = gramsPerUnit.getOrElse(i) { 0.0 },
+                    batchId = batchIds.getOrElse(i) { "" },
+                    batchName = batchNames.getOrElse(i) { "" }
+                )
+            }
+        }.getOrElse { emptyList() },
+        doughFillingsSnapshot = runCatching {
+            val recipeIds = get<List<String>?>("doughFillingRecipeIds") ?: emptyList()
+            val recipeNames = get<List<String>?>("doughFillingRecipeNames") ?: emptyList()
+            val rawWeightGrams = get<List<Double>?>("doughFillingRawWeightGrams") ?: emptyList()
+            recipeIds.indices.map { i ->
+                DoughFilling(
+                    recipeId = recipeIds[i],
+                    recipeName = recipeNames.getOrElse(i) { "" },
+                    rawWeightGrams = rawWeightGrams.getOrElse(i) { 0.0 }
                 )
             }
         }.getOrElse { emptyList() },
         customerSpecs = runCatching {
-            @Suppress("UNCHECKED_CAST")
-            (get<List<Map<String, Any?>>?>("customerSpecs") ?: emptyList()).map {
+            val orderIds = get<List<String>?>("csOrderIds") ?: emptyList()
+            val customerNames = get<List<String>?>("csCustomerNames") ?: emptyList()
+            val quantities = get<List<Double>?>("csQuantities") ?: emptyList()
+            val customSpecs = get<List<String>?>("csCustomSpecs") ?: emptyList()
+            val customerTypes = get<List<String>?>("csCustomerTypes") ?: emptyList()
+            orderIds.indices.map { i ->
                 CustomerLineSpec(
-                    customerOrderId = it["customerOrderId"] as? String ?: "",
-                    customerName = it["customerName"] as? String ?: "",
-                    quantity = (it["quantity"] as? Number)?.toDouble() ?: 0.0,
-                    customSpec = it["customSpec"] as? String ?: "",
-                    customerType = it["customerType"] as? String ?: ""
+                    customerOrderId = orderIds[i],
+                    customerName = customerNames.getOrElse(i) { "" },
+                    quantity = quantities.getOrElse(i) { 0.0 },
+                    customSpec = customSpecs.getOrElse(i) { "" },
+                    customerType = customerTypes.getOrElse(i) { "" }
                 )
             }
-        }.getOrElse { emptyList() }
+        }.getOrElse { emptyList() },
+        sourceOrderAllocations = runCatching {
+            val orderIds = get<List<String>?>("soaOrderIds") ?: emptyList()
+            val branchNames = get<List<String>?>("soaBranchNames") ?: emptyList()
+            val quantities = get<List<Double>?>("soaQuantities") ?: emptyList()
+            orderIds.indices.map { i ->
+                SourceOrderAllocation(
+                    orderId = orderIds[i],
+                    branchName = branchNames.getOrElse(i) { "" },
+                    quantity = quantities.getOrElse(i) { 0.0 }
+                )
+            }
+        }.getOrElse { emptyList() },
+        isSpecial = runCatching { get<Boolean?>("isSpecial") }.getOrNull() ?: false,
+        specialPhotoUrl = get<String?>("specialPhotoUrl") ?: ""
     )
 
     // ── Utilidad ──────────────────────────────────────────────────────────────

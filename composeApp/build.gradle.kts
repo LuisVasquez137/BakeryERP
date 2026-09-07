@@ -15,6 +15,7 @@ plugins {
     alias(libs.plugins.composeMultiplatform)
     alias(libs.plugins.composeCompiler)
     alias(libs.plugins.googleServices)
+    alias(libs.plugins.kotlinSerialization)
 }
 
 kotlin {
@@ -84,6 +85,15 @@ kotlin {
             implementation(libs.googleid)
             implementation("androidx.biometric:biometric:1.1.0")
             implementation("androidx.core:core-splashscreen:1.0.1")
+            // Push. El SDK de GitLive no cubre Messaging, así que en Android se usa
+            // el SDK nativo directamente detrás de la interfaz PushTokenProvider.
+            implementation("com.google.firebase:firebase-messaging:24.1.0")
+            // Escáner de códigos de barras de Play Services. Se prefiere al de ML Kit con
+            // CameraX porque NO requiere declarar ni pedir el permiso de cámara —el escaneo
+            // corre en la UI de Google Play Services, no en la nuestra— y el módulo se
+            // descarga bajo demanda en vez de sumar ~3 MB al APK. Mismo criterio que la
+            // foto de factura, que usa ACTION_IMAGE_CAPTURE en vez de abrir la cámara.
+            implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
         }
         commonMain.dependencies {
             implementation(libs.compose.runtime)
@@ -97,6 +107,7 @@ kotlin {
             implementation(libs.androidx.lifecycle.runtimeCompose)
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.datetime)
+            implementation(libs.kotlinx.serialization.json)
             implementation(libs.navigation.compose)
         }
         commonTest.dependencies {
@@ -113,8 +124,8 @@ android {
         applicationId = "com.bakery.erp"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 16
+        versionName = "16"
     }
     packaging {
         resources {

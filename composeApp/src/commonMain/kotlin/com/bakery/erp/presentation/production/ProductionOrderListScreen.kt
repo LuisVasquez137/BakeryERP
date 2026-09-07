@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -14,13 +15,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -32,6 +37,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.BranchCapability
 import com.bakery.erp.model.Permission
+import com.bakery.erp.model.Product
 import com.bakery.erp.model.ProductionLotStatus
 import com.bakery.erp.model.ProductionOrder
 import com.bakery.erp.model.ProductionOrderLine
@@ -39,16 +45,30 @@ import com.bakery.erp.model.ProductionOrderStatus
 import com.bakery.erp.model.canAccessBranch
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.presentation.auth.AuthViewModel
+import com.bakery.erp.presentation.products.ProductViewModel
+import com.bakery.erp.ui.LoadingOverlay
 import kotlin.time.Clock
 import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
+import com.bakery.erp.ui.theme.BrandChip
+import com.bakery.erp.ui.theme.BrandColors
+import com.bakery.erp.ui.theme.ChipTone
 
 private data class ConsolidatedRow(
     val productId: String,
     val productName: String,
     val quantitiesByBranch: Map<String, Double>,
-    val total: Double
+    val total: Double,
+    /**
+     * Masa declarada en la línea, solo para los pedidos especiales: su
+     * `productId` es sintético y no aparece en el mapa producto→masa, así que
+     * sin esto caerían en "Otros productos" — justo lejos de la masa con la que
+     * se van a hornear, que es lo que la encargada necesita ver junto.
+     */
+    val specialRecipeId: String = "",
+    val specialRecipeName: String = "",
+    val isSpecial: Boolean = false
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -60,10 +80,13 @@ fun ProductionOrderListScreen(
     onNavigateToEditOrder: (orderId: String) -> Unit = {},
     onNavigateToLotForm: (branchId: String?, shiftId: String?, date: Long?) -> Unit,
     onNavigateToLotDetail: (lotId: String) -> Unit = {},
+    onNavigateToShiftSplit: (branchId: String, date: Long) -> Unit = { _, _ -> },
     authViewModel: AuthViewModel,
-    viewModel: ProductionViewModel
+    viewModel: ProductionViewModel,
+    productViewModel: ProductViewModel
 ) {
     val state by viewModel.uiState.collectAsState()
+    val productState by productViewModel.uiState.collectAsState()
     val authState by authViewModel.uiState.collectAsState()
     val user = authState.user
     val companyId = user?.orgId ?: ""
@@ -90,6 +113,13 @@ fun ProductionOrderListScreen(
     LaunchedEffect(companyId) {
         if (companyId.isNotEmpty() && user != null) {
             viewModel.loadOrderFormData(companyId, user)
+        }
+    }
+    // El catálogo solo se necesita en el tab Consolidado (para configurar el
+    // orden de horneado); se carga al entrar ahí, no al abrir la pantalla.
+    LaunchedEffect(companyId, selectedTab) {
+        if (companyId.isNotEmpty() && selectedTab == 2 && productState.productList.isEmpty()) {
+            productViewModel.loadProducts(companyId)
         }
     }
     LaunchedEffect(state.error) {
@@ -135,6 +165,7 @@ fun ProductionOrderListScreen(
         else receivedOrdersAll.filter { it.shiftId == receivedShiftFilter }
     }
 
+    Box(Modifier.fillMaxSize()) {
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
@@ -146,7 +177,7 @@ fun ProductionOrderListScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF005B8D),
+                    containerColor = BrandColors.Primary,
                     titleContentColor = Color.White,
                     navigationIconContentColor = Color.White
                 )
@@ -156,11 +187,11 @@ fun ProductionOrderListScreen(
             if (canSend && selectedTab == 0) {
                 FloatingActionButton(
                     onClick = onNavigateToForm,
-                    containerColor = Color(0xFF005B8D)
+                    containerColor = BrandColors.Primary
                 ) { Icon(Icons.Default.Add, "Nuevo pedido", tint = Color.White) }
             }
         },
-        containerColor = Color(0xFFFDFBF7)
+        containerColor = BrandColors.Ivory
     ) { padding ->
         BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(padding)) {
             val isWide = maxWidth >= 1000.dp
@@ -238,6 +269,10 @@ fun ProductionOrderListScreen(
                             state = state,
                             user = user,
                             canManageLots = canManageLots,
+                            products = productState.productList,
+                            onSaveSortOrder = { branchId, ids ->
+                                viewModel.saveProductSortOrder(companyId, branchId, ids)
+                            },
                             onLoadShifts = { branchId ->
                                 viewModel.loadShiftsForProducingBranch(companyId, branchId)
                             },
@@ -245,7 +280,8 @@ fun ProductionOrderListScreen(
                                 viewModel.loadConsolidatedView(companyId, branchId, date, shiftId)
                             },
                             onNavigateToLotForm = onNavigateToLotForm,
-                            onNavigateToLotDetail = onNavigateToLotDetail
+                            onNavigateToLotDetail = onNavigateToLotDetail,
+                            onNavigateToShiftSplit = onNavigateToShiftSplit
                         )
                     }
                 }
@@ -269,6 +305,8 @@ fun ProductionOrderListScreen(
                 }
             }
         }
+    }
+    LoadingOverlay(visible = state.isLoading)
     }
 }
 
@@ -337,7 +375,7 @@ private fun OrdersTab(
                     onClick = { onShiftFilterChange("") },
                     label = { Text("Todos los turnos") },
                     colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = Color(0xFF005B8D),
+                        selectedContainerColor = BrandColors.Primary,
                         selectedLabelColor = Color.White
                     )
                 )
@@ -347,7 +385,7 @@ private fun OrdersTab(
                         onClick = { onShiftFilterChange(id) },
                         label = { Text(name) },
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0xFF005B8D),
+                            selectedContainerColor = BrandColors.Primary,
                             selectedLabelColor = Color.White
                         )
                     )
@@ -421,7 +459,7 @@ private fun MonthHeader(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onPrev) {
-                Icon(Icons.Default.ChevronLeft, "Mes anterior", tint = Color(0xFF005B8D))
+                Icon(Icons.Default.ChevronLeft, "Mes anterior", tint = BrandColors.Primary)
             }
             Row(
                 modifier = Modifier.weight(1f).clickable(onClick = onTap),
@@ -431,19 +469,19 @@ private fun MonthHeader(
                 Icon(
                     Icons.Default.CalendarMonth,
                     contentDescription = null,
-                    tint = Color(0xFF005B8D),
+                    tint = BrandColors.Primary,
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
                     "${monthName(month)} $year",
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFF005B8D),
+                    color = BrandColors.Primary,
                     style = MaterialTheme.typography.titleMedium
                 )
             }
             IconButton(onClick = onNext) {
-                Icon(Icons.Default.ChevronRight, "Mes siguiente", tint = Color(0xFF005B8D))
+                Icon(Icons.Default.ChevronRight, "Mes siguiente", tint = BrandColors.Primary)
             }
         }
     }
@@ -471,17 +509,17 @@ private fun MonthPickerDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = { year -= 1 }) {
-                        Icon(Icons.Default.ChevronLeft, "Año anterior", tint = Color(0xFF005B8D))
+                        Icon(Icons.Default.ChevronLeft, "Año anterior", tint = BrandColors.Primary)
                     }
                     Text(
                         "$year",
                         fontWeight = FontWeight.Bold,
                         style = MaterialTheme.typography.titleLarge,
-                        color = Color(0xFF005B8D),
+                        color = BrandColors.Primary,
                         modifier = Modifier.padding(horizontal = 24.dp)
                     )
                     IconButton(onClick = { year += 1 }) {
-                        Icon(Icons.Default.ChevronRight, "Año siguiente", tint = Color(0xFF005B8D))
+                        Icon(Icons.Default.ChevronRight, "Año siguiente", tint = BrandColors.Primary)
                     }
                 }
                 // Grid 4x3 de meses.
@@ -493,7 +531,7 @@ private fun MonthPickerDialog(
                                 Surface(
                                     modifier = Modifier.weight(1f).clickable { month = m },
                                     shape = RoundedCornerShape(8.dp),
-                                    color = if (selected) Color(0xFF005B8D) else Color.Transparent,
+                                    color = if (selected) BrandColors.Primary else Color.Transparent,
                                     border = if (selected) null
                                              else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                                 ) {
@@ -501,7 +539,7 @@ private fun MonthPickerDialog(
                                         monthShort(m),
                                         modifier = Modifier.padding(vertical = 10.dp),
                                         textAlign = TextAlign.Center,
-                                        color = if (selected) Color.White else Color(0xFF005B8D),
+                                        color = if (selected) Color.White else BrandColors.Primary,
                                         fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                                         style = MaterialTheme.typography.bodyMedium
                                     )
@@ -569,23 +607,14 @@ private fun ProductionOrderTable(
                         Box(modifier = Modifier.weight(0.9f)) {
                             StatusChip(order.status, lotStatusByOrderId[order.id], order.isLateOrder)
                         }
-                        // Sucursal solicitante resaltada con chip azul del tema (letras
-                        // blancas) — la encargada de planta identifica rápido el origen.
+                        // Origen y destino con chips de colores distintos: de un vistazo
+                        // se lee "quién pide" (azul) y "quién produce" (dorado).
                         Box(modifier = Modifier.weight(1.2f).padding(horizontal = 4.dp)) {
-                            Surface(
-                                shape = RoundedCornerShape(6.dp),
-                                color = Color(0xFF005B8D)
-                            ) {
-                                Text(
-                                    order.sellingBranchName.ifBlank { "—" },
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = Color.White
-                                )
-                            }
+                            BranchChip(order.sellingBranchName, BranchChipRole.REQUESTING)
                         }
-                        TableCell(order.producingBranchName, Modifier.weight(1.2f))
+                        Box(modifier = Modifier.weight(1.2f).padding(horizontal = 4.dp)) {
+                            BranchChip(order.producingBranchName, BranchChipRole.PRODUCING)
+                        }
                         TableCell(
                             order.shiftName.ifBlank { "—" },
                             Modifier.weight(0.9f),
@@ -625,7 +654,7 @@ private fun TableHeaderCell(
         modifier = modifier.padding(horizontal = 4.dp),
         style = MaterialTheme.typography.labelLarge,
         fontWeight = FontWeight.Bold,
-        color = Color(0xFF005B8D),
+        color = BrandColors.Primary,
         textAlign = textAlign
     )
 }
@@ -661,41 +690,59 @@ internal fun effectiveOrderDisplay(
     orderStatus: String,
     lotStatus: String?,
     isLateOrder: Boolean = false
-): Triple<String, Color, Color> {
+): Pair<String, ChipTone> {
     if (orderStatus == ProductionOrderStatus.CANCELLED) {
-        return Triple("Cancelado", Color.Gray, Color(0xFFF5F5F5))
+        return "Cancelado" to ChipTone.NEUTRAL
     }
     if (orderStatus == ProductionOrderStatus.CONFIRMED) {
-        return Triple("Confirmado", Color(0xFF2E7D32), Color(0xFFE8F5E9))
+        return "Confirmado" to ChipTone.SUCCESS
     }
     // PENDING. Si es tardío y aún no fue incorporado a un lote, marcar explícitamente.
     if (isLateOrder && lotStatus == null) {
-        return Triple("Pedido tardío · pend. aprobar", Color(0xFFC62828), Color(0xFFFFEBEE))
+        return "Pedido tardío · pend. aprobar" to ChipTone.DANGER
     }
     return when (lotStatus) {
-        ProductionLotStatus.OPEN ->
-            Triple("Lote abierto", Color(0xFF1565C0), Color(0xFFE3F2FD))
-        ProductionLotStatus.IN_PROGRESS ->
-            Triple("En producción", Color(0xFF6A1B9A), Color(0xFFF3E5F5))
-        ProductionLotStatus.COMPLETED ->
-            Triple("Producción terminada", Color(0xFF2E7D32), Color(0xFFE8F5E9))
-        else ->
-            Triple("Pendiente", Color(0xFFF57C00), Color(0xFFFFF3E0))
+        ProductionLotStatus.OPEN -> "Lote abierto" to ChipTone.INFO
+        ProductionLotStatus.IN_PROGRESS -> "En producción" to ChipTone.PROGRESS
+        ProductionLotStatus.COMPLETED -> "Producción terminada" to ChipTone.SUCCESS
+        else -> "Pendiente" to ChipTone.ATTENTION
+    }
+}
+
+/**
+ * Rol de la sucursal dentro del pedido. Cada rol tiene su propio color de chip
+ * para que en una tabla con muchas filas el ojo distinga origen de destino sin
+ * leer el encabezado de la columna.
+ */
+private enum class BranchChipRole { REQUESTING, PRODUCING }
+
+@Composable
+private fun BranchChip(
+    name: String,
+    role: BranchChipRole,
+    modifier: Modifier = Modifier
+) {
+    // Azul del tema para quien pide; naranja de marca para quien produce. El naranja
+    // lleva tinta azul marino (OnAccent) y no blanco: sobre #FF9800 el blanco da 2.2:1.
+    val (bg, fg) = when (role) {
+        BranchChipRole.REQUESTING -> BrandColors.Primary to Color.White
+        BranchChipRole.PRODUCING -> BrandColors.Accent to BrandColors.OnAccent
+    }
+    Surface(modifier = modifier, shape = RoundedCornerShape(6.dp), color = bg) {
+        Text(
+            name.ifBlank { "—" },
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = fg
+        )
     }
 }
 
 @Composable
 private fun StatusChip(status: String, lotStatus: String? = null, isLateOrder: Boolean = false) {
-    val (label, color, bg) = effectiveOrderDisplay(status, lotStatus, isLateOrder)
-    Surface(shape = RoundedCornerShape(20.dp), color = bg) {
-        Text(
-            label,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
-            style = MaterialTheme.typography.labelSmall,
-            color = color,
-            fontWeight = FontWeight.SemiBold
-        )
-    }
+    val (label, tone) = effectiveOrderDisplay(status, lotStatus, isLateOrder)
+    BrandChip(label, tone)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -704,10 +751,14 @@ private fun ConsolidatedTab(
     state: ProductionUiState,
     user: com.bakery.erp.model.User?,
     canManageLots: Boolean,
+    /** Catálogo completo, para poder ordenar productos que hoy no se pidieron. */
+    products: List<Product>,
+    onSaveSortOrder: (branchId: String, productIds: List<String>) -> Unit,
     onLoadShifts: (branchId: String) -> Unit,
     onLoadConsolidated: (branchId: String, date: Long, shiftId: String) -> Unit,
     onNavigateToLotForm: (branchId: String?, shiftId: String?, date: Long?) -> Unit,
-    onNavigateToLotDetail: (lotId: String) -> Unit
+    onNavigateToLotDetail: (lotId: String) -> Unit,
+    onNavigateToShiftSplit: (branchId: String, date: Long) -> Unit
 ) {
     val producingBranches = remember(state.producingBranches, user) {
         state.producingBranches.filter {
@@ -716,12 +767,29 @@ private fun ConsolidatedTab(
         }
     }
 
-    var selectedBranch by remember(producingBranches) {
-        mutableStateOf(producingBranches.firstOrNull())
+    // Se persiste el id (no la instancia): al guardar el orden de productos la
+    // lista de sucursales se recrea y con la instancia se perdía la selección.
+    var selectedBranchId by rememberSaveable { mutableStateOf<String?>(null) }
+    val selectedBranch = remember(producingBranches, selectedBranchId) {
+        producingBranches.find { it.id == selectedBranchId } ?: producingBranches.firstOrNull()
     }
     var selectedDate by remember { mutableStateOf(startOfNextDay()) }
     var branchDropdownExpanded by remember { mutableStateOf(false) }
     var selectedShiftId by rememberSaveable { mutableStateOf("") }
+    var showSortDialog by remember { mutableStateOf(false) }
+
+    // Orden configurado por la planta (secuencia de horneado). Los productos que
+    // no estén en la lista caen al final, alfabéticamente.
+    val sortIndex = remember(selectedBranch?.productSortOrder) {
+        selectedBranch?.productSortOrder.orEmpty()
+            .withIndex().associate { (i, id) -> id to i }
+    }
+    // El orden se guarda por producto; acá se traduce a orden de masas.
+    val recipeOrderIndex = remember(selectedBranch?.productSortOrder, state.recipeRefByProductId) {
+        recipeOrderIndexFrom(selectedBranch?.productSortOrder.orEmpty()) { productId ->
+            state.recipeRefByProductId[productId]?.id
+        }
+    }
 
     // Al cambiar de planta: cargar sus turnos.
     LaunchedEffect(selectedBranch?.id) {
@@ -729,18 +797,21 @@ private fun ConsolidatedTab(
         onLoadShifts(branchId)
     }
 
-    // Resolver el turno por defecto al cargar los turnos: el primero activo. Si la planta
-    // no tiene turnos configurados, dejamos shiftId = "" (pedidos sin turno).
+    // Resolver el turno por defecto al cargar los turnos: el primero activo. Si la
+    // planta no tiene turnos, o tiene exactamente 2 (reparto automático — ver
+    // ProductionShiftSplitScreen), dejamos shiftId = "" (pedidos sin turno).
     LaunchedEffect(state.shiftsForSelectedProducingBranch) {
         val shifts = state.shiftsForSelectedProducingBranch
-        if (shifts.isEmpty()) {
+        if (shifts.isEmpty() || shifts.size == 2) {
             selectedShiftId = ""
         } else if (shifts.none { it.id == selectedShiftId }) {
             selectedShiftId = shifts.first().id
         }
     }
 
-    LaunchedEffect(selectedBranch, selectedDate, selectedShiftId) {
+    // Se observa el id (no la instancia): guardar el orden de productos crea un
+    // Branch nuevo y recargaría el consolidado sin necesidad.
+    LaunchedEffect(selectedBranch?.id, selectedDate, selectedShiftId) {
         val branchId = selectedBranch?.id ?: return@LaunchedEffect
         onLoadConsolidated(branchId, selectedDate, selectedShiftId)
     }
@@ -773,7 +844,7 @@ private fun ConsolidatedTab(
                     producingBranches.forEach { branch ->
                         DropdownMenuItem(
                             text = { Text(branch.name) },
-                            onClick = { selectedBranch = branch; branchDropdownExpanded = false }
+                            onClick = { selectedBranchId = branch.id; branchDropdownExpanded = false }
                         )
                     }
                 }
@@ -804,7 +875,22 @@ private fun ConsolidatedTab(
 
         // ── Selector de turno ─────────────────────────────────────────────
         val shifts = state.shiftsForSelectedProducingBranch
-        if (shifts.size > 1) {
+        if (shifts.size == 2) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFFEAF3F8), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "${selectedBranch?.name.orEmpty()} reparte automático entre " +
+                        shifts.joinToString(" y ") { it.name },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = BrandColors.Primary
+                )
+            }
+        } else if (shifts.size > 1) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
                     "Turno de producción",
@@ -819,7 +905,7 @@ private fun ConsolidatedTab(
                             onClick = { selectedShiftId = shift.id },
                             label = { Text(shift.name, fontWeight = FontWeight.SemiBold) },
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = Color(0xFF005B8D),
+                                selectedContainerColor = BrandColors.Primary,
                                 selectedLabelColor = Color.White
                             )
                         )
@@ -844,7 +930,7 @@ private fun ConsolidatedTab(
                     Text(
                         shifts.first().name,
                         fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF005B8D)
+                        color = BrandColors.Primary
                     )
                 }
             }
@@ -882,6 +968,61 @@ private fun ConsolidatedTab(
             }
         }
 
+        // ── Orden de horneado ─────────────────────────────────────────────
+        // El orden en que la planta quiere ver los productos (no alfabético,
+        // sino la secuencia real del horno). Se guarda en la sucursal.
+        if (canManageLots && selectedBranch != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (selectedBranch!!.productSortOrder.isEmpty()) {
+                    Text(
+                        "Orden alfabético",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    Text(
+                        "Orden personalizado de ${selectedBranch!!.name}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BrandColors.AccentDeep,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                TextButton(onClick = { showSortDialog = true }) {
+                    Icon(
+                        Icons.Default.SwapVert,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = BrandColors.Primary
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text("Ordenar productos", color = BrandColors.Primary, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+
+        if (showSortDialog && selectedBranch != null) {
+            ProductSortOrderDialog(
+                title = "Orden del consolidado · ${selectedBranch!!.name}",
+                description = "El consolidado se muestra agrupado por masa. Al subir un " +
+                    "producto sube toda su masa, y dentro de ella los productos quedan en " +
+                    "el orden que definas acá. Se guarda en la sucursal, así que lo verán " +
+                    "igual todos sus dispositivos. La orden de producción del panadero " +
+                    "tiene su propio orden, aparte de este.",
+                products = products,
+                assignedProductIds = selectedBranch!!.assignedProductIds,
+                currentOrder = selectedBranch!!.productSortOrder,
+                onDismiss = { showSortDialog = false },
+                onSave = { ids ->
+                    onSaveSortOrder(selectedBranch!!.id, ids)
+                    showSortDialog = false
+                }
+            )
+        }
+
         // ── Tabla consolidada ─────────────────────────────────────────────
         if (state.isConsolidatedLoading) {
             Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
@@ -907,31 +1048,52 @@ private fun ConsolidatedTab(
                 order.sellingBranchId to order.sellingBranchName
             }.distinct().sortedBy { it.second }
 
-            val rows = remember(ordersWithLines) {
+            val rows = remember(ordersWithLines, sortIndex) {
                 ordersWithLines
                     .flatMap { (order, lines) ->
-                        lines.map { line ->
-                            Triple(
-                                line.productId,
-                                line.productName,
-                                order.sellingBranchId to line.requestedQuantity
-                            )
-                        }
+                        lines.map { line -> line to order.sellingBranchId }
                     }
-                    .groupBy { it.first }
+                    .groupBy { it.first.productId }
                     .map { (productId, entries) ->
-                        val productName = entries.first().second
-                        val byBranch = entries.groupBy { it.third.first }
-                            .mapValues { (_, v) -> v.sumOf { it.third.second } }
-                        ConsolidatedRow(productId, productName, byBranch, byBranch.values.sum())
+                        val sample = entries.first().first
+                        val byBranch = entries.groupBy { it.second }
+                            .mapValues { (_, v) -> v.sumOf { it.first.requestedQuantity } }
+                        ConsolidatedRow(
+                            productId = productId,
+                            productName = sample.productName,
+                            quantitiesByBranch = byBranch,
+                            total = byBranch.values.sum(),
+                            specialRecipeId = sample.specialRecipeId,
+                            specialRecipeName = sample.specialRecipeName,
+                            isSpecial = sample.isSpecial
+                        )
                     }
-                    .sortedBy { it.productName }
+            }
+
+            // Agrupado por masa, igual que el formulario de pedido. El orden
+            // configurado sigue mandando, pero ahora manda sobre las masas: subir
+            // un producto sube toda su masa (ver recipeOrderIndexFrom).
+            val groups = remember(rows, sortIndex, recipeOrderIndex, state.recipeRefByProductId) {
+                groupByMasa(
+                    items = rows,
+                    recipeIdOf = { row ->
+                        if (row.isSpecial) row.specialRecipeId.takeIf { it.isNotEmpty() }
+                        else state.recipeRefByProductId[row.productId]?.id
+                    },
+                    recipeNameOf = { row ->
+                        if (row.isSpecial) row.specialRecipeName.takeIf { it.isNotBlank() }
+                        else state.recipeRefByProductId[row.productId]?.name
+                    },
+                    nameOf = { it.productName },
+                    groupOrderIndex = { recipeOrderIndex[it] ?: Int.MAX_VALUE },
+                    itemOrderIndex = { sortIndex[it.productId] ?: Int.MAX_VALUE }
+                )
             }
 
             // Card principal: vertical en móvil, tabla en tablet/PC
             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
                 if (maxWidth >= 600.dp) {
-                    ConsolidatedTable(rows = rows, branches = branches)
+                    ConsolidatedTable(groups = groups, branches = branches)
                 } else {
                     Card(
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -962,14 +1124,21 @@ private fun ConsolidatedTab(
 
                             Spacer(Modifier.height(12.dp))
 
-                            rows.forEachIndexed { index, row ->
-                                ConsolidatedProductRow(row = row, branches = branches)
-                                if (index < rows.lastIndex) {
-                                    HorizontalDivider(
-                                        modifier = Modifier.padding(vertical = 10.dp),
-                                        color = MaterialTheme.colorScheme.outlineVariant
-                                    )
+                            groups.forEach { group ->
+                                MasaSectionLabel(
+                                    title = group.title,
+                                    units = group.items.sumOf { it.total }
+                                )
+                                group.items.forEachIndexed { index, row ->
+                                    ConsolidatedProductRow(row = row, branches = branches)
+                                    if (index < group.items.lastIndex) {
+                                        HorizontalDivider(
+                                            modifier = Modifier.padding(vertical = 10.dp),
+                                            color = MaterialTheme.colorScheme.outlineVariant
+                                        )
+                                    }
                                 }
+                                Spacer(Modifier.height(10.dp))
                             }
                         }
                     }
@@ -1049,6 +1218,17 @@ private fun ConsolidatedTab(
                         }
                     }
                 }
+            } else if (canManageLots && shifts.size == 2) {
+                Button(
+                    onClick = {
+                        val branchId = selectedBranch?.id ?: return@Button
+                        onNavigateToShiftSplit(branchId, selectedDate)
+                    },
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = BrandColors.Primary)
+                ) {
+                    Text("Repartir turnos y crear lotes →", fontWeight = FontWeight.Bold)
+                }
             } else if (canManageLots) {
                 Button(
                     onClick = {
@@ -1059,7 +1239,7 @@ private fun ConsolidatedTab(
                         )
                     },
                     modifier = Modifier.fillMaxWidth().height(52.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF005B8D))
+                    colors = ButtonDefaults.buttonColors(containerColor = BrandColors.Primary)
                 ) {
                     Text("Crear lote de producción →", fontWeight = FontWeight.Bold)
                 }
@@ -1083,9 +1263,10 @@ private fun ConsolidatedProductRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                row.productName,
+                if (row.isSpecial) "★ ${row.productName}" else row.productName,
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
+                color = if (row.isSpecial) BrandColors.AccentDeep else Color.Unspecified,
                 modifier = Modifier.weight(1f)
             )
             Surface(
@@ -1131,13 +1312,37 @@ private fun ConsolidatedProductRow(
     }
 }
 
+/** Separador de masa en el listado vertical (móvil). */
+@Composable
+private fun MasaSectionLabel(title: String, units: Double) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            title.uppercase(),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFF7A8B96)
+        )
+        Text(
+            "${formatQty(units)} u.",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFF7A8B96)
+        )
+    }
+}
+
 @Composable
 private fun ConsolidatedTable(
-    rows: List<ConsolidatedRow>,
+    groups: List<MasaGroup<ConsolidatedRow>>,
     branches: List<Pair<String, String>>
 ) {
     val productColWidth = 160.dp
     val qtyColWidth = 80.dp
+    val rows = remember(groups) { groups.flatMap { it.items } }
 
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -1187,7 +1392,7 @@ private fun ConsolidatedTable(
                             modifier = Modifier.width(productColWidth).padding(horizontal = 6.dp),
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF005B8D)
+                            color = BrandColors.Primary
                         )
                         branches.forEach { (_, branchName) ->
                             Text(
@@ -1195,7 +1400,7 @@ private fun ConsolidatedTable(
                                 modifier = Modifier.width(qtyColWidth).padding(horizontal = 6.dp),
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = Color(0xFF005B8D),
+                                color = BrandColors.Primary,
                                 textAlign = TextAlign.End
                             )
                         }
@@ -1204,25 +1409,68 @@ private fun ConsolidatedTable(
                             modifier = Modifier.width(qtyColWidth).padding(horizontal = 6.dp),
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF005B8D),
+                            color = BrandColors.Primary,
                             textAlign = TextAlign.End
                         )
                     }
                     HorizontalDivider(color = lineColor, thickness = 1.dp)
 
-                    // Data rows (alternating bg + dividers entre filas).
-                    rows.forEachIndexed { index, row ->
+                    // Filas agrupadas por masa. El índice para el fondo alternado
+                    // corre a través de todos los grupos para que la lectura en
+                    // zigzag no se reinicie en cada encabezado.
+                    var rowIndex = 0
+                    groups.forEach { group ->
+                        Row(
+                            modifier = Modifier
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f))
+                                .padding(vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                group.title.uppercase(),
+                                modifier = Modifier.width(productColWidth).padding(horizontal = 6.dp),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF7A8B96)
+                            )
+                            branches.forEach { (branchId, _) ->
+                                Text(
+                                    formatQty(group.items.sumOf { it.quantitiesByBranch[branchId] ?: 0.0 }),
+                                    modifier = Modifier.width(qtyColWidth).padding(horizontal = 6.dp),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF7A8B96),
+                                    textAlign = TextAlign.End
+                                )
+                            }
+                            Text(
+                                formatQty(group.items.sumOf { it.total }),
+                                modifier = Modifier.width(qtyColWidth).padding(horizontal = 6.dp),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF7A8B96),
+                                textAlign = TextAlign.End
+                            )
+                        }
+                        HorizontalDivider(color = lineColor, thickness = 0.6.dp)
+                        group.items.forEach { row ->
+                        val index = rowIndex++
                         Row(
                             modifier = Modifier
                                 .background(if (index % 2 == 1) altRowBg else Color.Transparent)
                                 .padding(vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            // El "★" delante marca el pedido especial en la tabla sin
+                            // gastar una columna: es un pan de encargo, no el de todos
+                            // los días, y la planta lo tiene que ver al consolidar.
                             Text(
-                                row.productName,
+                                if (row.isSpecial) "★ ${row.productName}" else row.productName,
                                 modifier = Modifier.width(productColWidth).padding(horizontal = 6.dp),
                                 style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium
+                                fontWeight = FontWeight.Medium,
+                                color = if (row.isSpecial) BrandColors.AccentDeep
+                                        else MaterialTheme.colorScheme.onSurface
                             )
                             branches.forEach { (branchId, _) ->
                                 val qty = row.quantitiesByBranch[branchId] ?: 0.0
@@ -1245,6 +1493,7 @@ private fun ConsolidatedTable(
                             )
                         }
                         HorizontalDivider(color = lineColor, thickness = 0.6.dp)
+                        }
                     }
 
                     // Totals row.
@@ -1259,7 +1508,7 @@ private fun ConsolidatedTable(
                             modifier = Modifier.width(productColWidth).padding(horizontal = 6.dp),
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF005B8D)
+                            color = BrandColors.Primary
                         )
                         branches.forEach { (branchId, _) ->
                             val branchTotal = rows.sumOf { it.quantitiesByBranch[branchId] ?: 0.0 }
@@ -1268,7 +1517,7 @@ private fun ConsolidatedTable(
                                 modifier = Modifier.width(qtyColWidth).padding(horizontal = 6.dp),
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = Color(0xFF005B8D),
+                                color = BrandColors.Primary,
                                 textAlign = TextAlign.End
                             )
                         }
@@ -1277,7 +1526,7 @@ private fun ConsolidatedTable(
                             modifier = Modifier.width(qtyColWidth).padding(horizontal = 6.dp),
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF005B8D),
+                            color = BrandColors.Primary,
                             textAlign = TextAlign.End
                         )
                     }
@@ -1302,7 +1551,7 @@ private fun ProductionOrderCard(
         ),
         shape = RoundedCornerShape(12.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        border = if (isSelected) BorderStroke(1.5.dp, Color(0xFF005B8D)) else null
+        border = if (isSelected) BorderStroke(1.5.dp, BrandColors.Primary) else null
     ) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             // Fila superior: estado + #productos
@@ -1321,13 +1570,45 @@ private fun ProductionOrderCard(
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF005B8D)
+                        color = BrandColors.Primary
                     )
                 }
             }
 
-            CardInfoRow("Sucursal solicitante", order.sellingBranchName.ifBlank { "—" })
-            CardInfoRow("Sucursal productora", order.producingBranchName.ifBlank { "—" })
+            // Origen → destino con los mismos chips de color que la tabla, para
+            // que la lectura sea idéntica en teléfono y en tablet.
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Solicita",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(3.dp))
+                    BranchChip(order.sellingBranchName, BranchChipRole.REQUESTING)
+                }
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowForward,
+                    contentDescription = "hacia",
+                    modifier = Modifier.size(16.dp).padding(horizontal = 2.dp),
+                    tint = MaterialTheme.colorScheme.outline
+                )
+                Column(
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.End
+                ) {
+                    Text(
+                        "Produce",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(3.dp))
+                    BranchChip(order.producingBranchName, BranchChipRole.PRODUCING)
+                }
+            }
             CardInfoRow("Turno", order.shiftName.ifBlank { "—" })
             CardInfoRow("Para el día", formatProductionDate(order.requestedDate))
             CardInfoRow(
@@ -1350,7 +1631,7 @@ private fun CardInfoRow(label: String, value: String) {
             value,
             style = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.SemiBold,
-            color = Color(0xFF005B8D),
+            color = BrandColors.Primary,
             textAlign = TextAlign.End,
             modifier = Modifier.padding(start = 12.dp)
         )

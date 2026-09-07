@@ -29,18 +29,61 @@ import com.bakery.erp.model.Product
 import com.bakery.erp.model.ProductionLotDecoration
 import com.bakery.erp.model.ProductionLotLine
 import com.bakery.erp.model.ProductionShift
+import com.bakery.erp.model.RecipeBatchCheck
+import com.bakery.erp.model.flourGramsAsPounds
+import com.bakery.erp.model.flourGramsForLines
 import com.bakery.erp.model.canAccessBranch
 import com.bakery.erp.model.toBaseUnit
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.presentation.products.ProductViewModel
+import com.bakery.erp.ui.LoadingOverlay
 import com.bakery.erp.util.fmt
 import kotlinx.datetime.DateTimeUnit
 import kotlinx.datetime.plus
 import kotlinx.datetime.toInstant
 import kotlinx.datetime.toLocalDateTime
+import com.bakery.erp.ui.theme.BrandColors
 
 private const val GRAMS_PER_LB = 453.592
 private fun Double.gramsToLb(): Double = this / GRAMS_PER_LB
+
+/** Banda de masa dentro de la lista consolidada del lote. */
+@Composable
+private fun MasaBandLabel(title: String, units: Double, flourLabel: String? = null) {
+    Surface(
+        color = Color(0xFFEAF3F8),
+        shape = RoundedCornerShape(6.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                title.uppercase(),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = BrandColors.Primary
+            )
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    "${units.toInt()} u.",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = BrandColors.Primary
+                )
+                if (flourLabel != null) {
+                    Text(
+                        flourLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BrandColors.Primary.copy(alpha = 0.7f)
+                    )
+                }
+            }
+        }
+    }
+}
 
 // ── Tabla consolidada para pantallas anchas (tablet/PC) ────────────────────────
 
@@ -55,13 +98,13 @@ private fun ConsolidatedTableHeader() {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("#", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
-                color = Color(0xFF005B8D), modifier = Modifier.width(36.dp))
+                color = BrandColors.Primary, modifier = Modifier.width(36.dp))
             Text("Producto", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
-                color = Color(0xFF005B8D), modifier = Modifier.weight(2f))
+                color = BrandColors.Primary, modifier = Modifier.weight(2f))
             Text("Receta", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
-                color = Color(0xFF005B8D), modifier = Modifier.weight(1.5f))
+                color = BrandColors.Primary, modifier = Modifier.weight(1.5f))
             Text("Unidades", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
-                color = Color(0xFF005B8D), modifier = Modifier.width(110.dp))
+                color = BrandColors.Primary, modifier = Modifier.width(110.dp))
         }
     }
 }
@@ -87,11 +130,18 @@ private fun ConsolidatedTableRow(
                     "$index",
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFFD9A441),
+                    color = BrandColors.AccentDeep,
                     modifier = Modifier.width(36.dp)
                 )
                 Column(modifier = Modifier.weight(2f)) {
-                    Text(line.productName, fontWeight = FontWeight.SemiBold, color = Color(0xFF005B8D))
+                    // El "★" delante marca el pedido especial: la encargada lo
+                    // tiene que ver al consolidar, porque es el que puede tener
+                    // una figura o un peso que nadie más va a revisar.
+                    Text(
+                        if (line.isSpecial) "★ ${line.productName}" else line.productName,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (line.isSpecial) BrandColors.AccentDeep else BrandColors.Primary
+                    )
                     if (line.productUnit.isNotEmpty())
                         Text(line.productUnit, style = MaterialTheme.typography.labelSmall, color = Color.Gray)
                 }
@@ -105,7 +155,7 @@ private fun ConsolidatedTableRow(
                     "${line.plannedQuantity.toInt()}",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.ExtraBold,
-                    color = Color(0xFFD9A441),
+                    color = BrandColors.AccentDeep,
                     modifier = Modifier.width(110.dp)
                 )
             }
@@ -144,6 +194,7 @@ fun ProductionLotFormScreen(
     presetShiftId: String? = null,
     presetDate: Long? = null,
     onNavigateBack: () -> Unit,
+    onNavigateToShiftSplit: (branchId: String, date: Long) -> Unit = { _, _ -> },
     authViewModel: AuthViewModel,
     viewModel: ProductionViewModel,
     productViewModel: ProductViewModel
@@ -166,6 +217,65 @@ fun ProductionLotFormScreen(
     // Default a "mañana" para coincidir con la fecha por defecto del form de pedido.
     var productionDate by remember { mutableStateOf(presetDate ?: startOfNextDayMillis()) }
     var notesText by rememberSaveable { mutableStateOf("") }
+
+    // Recetas cuyo pedido no alcanza el mínimo de la amasadora. Se recalcula con
+    // cada cambio del borrador porque resolver una masa puede afectar a otra que
+    // comparta productos.
+    val underMinimum = remember(state.draftLotLines, state.recipesById, state.productsById) {
+        viewModel.underMinimumRecipes()
+    }
+    var pendingMinimumCheck by remember { mutableStateOf<RecipeBatchCheck?>(null) }
+    // Masa que nadie pidió directamente (solo relleno de otro producto, ver
+    // DoughFilling) y que además no llega al mínimo: no hay pedido/producto
+    // propio al que subirle cantidad, así que MinimumBatchDecisionDialog no
+    // aplica — solo se avisa para que la encargada decida a mano (agregar Pan
+    // Suave al pedido de alguna sucursal, o ajustar el producto que rellena).
+    var pendingFillingOnlyCheck by remember { mutableStateOf<RecipeBatchCheck?>(null) }
+    var showDismissOtherDates by remember { mutableStateOf(false) }
+
+    // La línea del lote ya trae recipeId/recipeName, así que el agrupado no
+    // depende del catálogo de recetas — sale de la propia consolidación.
+    val draftGroups = remember(state.draftLotLines, selectedBranch?.productSortOrder) {
+        val order = selectedBranch?.productSortOrder.orEmpty()
+        val itemIndex = order.withIndex().associate { (i, id) -> id to i }
+        val recipeIndex = recipeOrderIndexFrom(order) { productId ->
+            state.draftLotLines.find { it.productId == productId }?.recipeId
+        }
+        groupByMasa(
+            items = state.draftLotLines,
+            recipeIdOf = { it.recipeId },
+            recipeNameOf = { it.recipeName },
+            nameOf = { it.productName },
+            groupOrderIndex = { recipeIndex[it] ?: Int.MAX_VALUE },
+            itemOrderIndex = { itemIndex[it.productId] ?: Int.MAX_VALUE }
+        )
+    }
+
+    if (showDismissOtherDates) {
+        val total = state.otherDatePendingOrderIds.size
+        AlertDialog(
+            onDismissRequest = { showDismissOtherDates = false },
+            title = { Text("¿Omitir estos pedidos?") },
+            text = {
+                Text(
+                    "Se van a quitar $total pedido${if (total != 1) "s" else ""} de otras fechas " +
+                        "de esta pantalla y no van a volver a aparecer acá.\n\n" +
+                        "No se cancelan ni se borran: siguen pendientes y se pueden ver en la " +
+                        "lista de pedidos, en la fecha a la que pertenecen. Solo dejan de " +
+                        "estorbar al armar lotes nuevos."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.dismissOtherDatePendingOrders(companyId)
+                    showDismissOtherDates = false
+                }) { Text("Sí, omitir", fontWeight = FontWeight.Bold, color = BrandColors.AccentDeep) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDismissOtherDates = false }) { Text("Cancelar") }
+            }
+        )
+    }
 
     LaunchedEffect(companyId) {
         if (companyId.isNotEmpty()) {
@@ -193,6 +303,62 @@ fun ProductionLotFormScreen(
             val accessible = state.producingBranches.filter { user?.canAccessBranch(it.id) == true }
             if (accessible.size == 1) selectedBranch = accessible.first()
         }
+    }
+
+    pendingMinimumCheck?.let { check ->
+        MinimumBatchDecisionDialog(
+            check = check,
+            orders = state.pendingOrdersForDate,
+            linesByOrder = state.pendingOrderLinesMap,
+            onDismiss = { pendingMinimumCheck = null },
+            onBakeMinimum = { totals, retained, extras ->
+                viewModel.resolveMinimumBatchByBaking(
+                    companyId = companyId,
+                    totalByProduct = totals,
+                    retainedByProduct = retained,
+                    extraByOrder = extras.entries
+                        .groupBy { it.key.orderId }
+                        .mapValues { (_, entries) ->
+                            entries.associate { it.key.productId to it.value }
+                        }
+                )
+                pendingMinimumCheck = null
+            },
+            onCancelProducts = { productIds, orderIds ->
+                viewModel.resolveMinimumBatchByCancelling(
+                    companyId = companyId,
+                    currentUser = user,
+                    recipeName = check.recipeName,
+                    productIds = productIds,
+                    affectedOrderIds = orderIds
+                )
+                pendingMinimumCheck = null
+            }
+        )
+    }
+
+    pendingFillingOnlyCheck?.let { check ->
+        AlertDialog(
+            onDismissRequest = { pendingFillingOnlyCheck = null },
+            title = { Text("«${check.recipeName}» no llega al mínimo") },
+            text = {
+                Text(
+                    "Ninguna sucursal pidió ${check.recipeName} directamente — esta masa solo se " +
+                        "necesita como relleno de otro producto. Con eso se mojarían " +
+                        check.currentFlourGrams.flourGramsAsPounds() +
+                        " de harina, y la amasadora necesita al menos " +
+                        check.minFlourGrams.flourGramsAsPounds() + ".\n\n" +
+                        "No hay un pedido propio de ${check.recipeName} al que subirle cantidad, así " +
+                        "que hay que decidir a mano: agrega ${check.recipeName} al pedido de alguna " +
+                        "sucursal, o ajusta el producto que lleva el relleno."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { pendingFillingOnlyCheck = null }) {
+                    Text("Entendido", fontWeight = FontWeight.Bold, color = BrandColors.Primary)
+                }
+            }
+        )
     }
 
     // Llama loadLotFormData cuando hay branch seleccionada. Si todavía no hay turno
@@ -228,6 +394,7 @@ fun ProductionLotFormScreen(
         state.error?.let { snackbarHostState.showSnackbar(it); viewModel.clearError() }
     }
 
+    Box(Modifier.fillMaxSize()) {
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
@@ -239,13 +406,13 @@ fun ProductionLotFormScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF005B8D),
+                    containerColor = BrandColors.Primary,
                     titleContentColor = Color.White,
                     navigationIconContentColor = Color.White
                 )
             )
         },
-        containerColor = Color(0xFFFDFBF7)
+        containerColor = BrandColors.Ivory
     ) { padding ->
         BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(padding)) {
             val isWide = maxWidth >= 1000.dp
@@ -311,6 +478,35 @@ fun ProductionLotFormScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = Color(0xFFF57C00)
                     )
+                } else if (state.shifts.size == 2 && selectedBranch != null) {
+                    // Planta de 2 turnos: no hay nada que elegir acá, el reparto es
+                    // automático — reemplaza el dropdown por un botón hacia esa pantalla.
+                    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFEAF3F8))) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                "${selectedBranch!!.name} reparte automático entre sus 2 turnos",
+                                fontWeight = FontWeight.Bold,
+                                color = BrandColors.Primary,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                "Usá el reparto de turnos para ver cómo queda cada uno y crear " +
+                                    "los dos lotes de una vez.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = BrandColors.Primary
+                            )
+                            Button(
+                                onClick = { onNavigateToShiftSplit(selectedBranch!!.id, productionDate) },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = BrandColors.Primary)
+                            ) {
+                                Text("Ir al reparto de turnos →", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
                 } else {
                     ExposedDropdownMenuBox(
                         expanded = shiftDropdownExpanded,
@@ -364,7 +560,7 @@ fun ProductionLotFormScreen(
                             }
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text("Fecha de producción", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                                Text(formatDate(productionDate), fontWeight = FontWeight.SemiBold, color = Color(0xFF005B8D), style = MaterialTheme.typography.titleMedium)
+                                Text(formatDate(productionDate), fontWeight = FontWeight.SemiBold, color = BrandColors.Primary, style = MaterialTheme.typography.titleMedium)
                             }
                             IconButton(onClick = { productionDate += 86_400_000L }) {
                                 Icon(Icons.Default.ChevronRight, "Día siguiente")
@@ -387,7 +583,7 @@ fun ProductionLotFormScreen(
                                 "Hay pedidos pendientes en otras fechas para esta planta:",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFF8A6420)
+                                color = BrandColors.AccentDeep
                             )
                             state.pendingOrdersInOtherDates.entries
                                 .sortedBy { it.key }
@@ -412,6 +608,18 @@ fun ProductionLotFormScreen(
                                         )
                                     }
                                 }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                TextButton(onClick = { showDismissOtherDates = true }) {
+                                    Text(
+                                        "Omitir",
+                                        color = BrandColors.AccentDeep,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -423,7 +631,7 @@ fun ProductionLotFormScreen(
                     Text(
                         "Pedidos pendientes (${state.pendingOrdersForDate.size})",
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFF005B8D)
+                        color = BrandColors.Primary
                     )
                 }
                 items(state.pendingOrdersForDate) { order ->
@@ -434,7 +642,7 @@ fun ProductionLotFormScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(Modifier.weight(1f)) {
-                                Text(order.sellingBranchName, fontWeight = FontWeight.SemiBold, color = Color(0xFF005B8D))
+                                Text(order.sellingBranchName, fontWeight = FontWeight.SemiBold, color = BrandColors.Primary)
                                 Text(
                                     "${formatDate(order.requestedDate)} · ${order.lineCount} productos",
                                     style = MaterialTheme.typography.labelSmall,
@@ -454,30 +662,117 @@ fun ProductionLotFormScreen(
                 }
             }
 
+            // ── Recetas bajo el mínimo de la amasadora ────────────────────────
+            // Se resuelve ANTES de crear el lote: es el único momento en que la
+            // encargada ve toda la demanda del día junta y todavía puede decidir.
+            if (underMinimum.isNotEmpty()) {
+                item {
+                    Spacer(Modifier.height(4.dp))
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8E1)),
+                        border = BorderStroke(1.dp, Color(0xFFFFCC80)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                "⚠  ${underMinimum.size} masa(s) no llegan al mínimo de la amasadora",
+                                fontWeight = FontWeight.Bold,
+                                color = BrandColors.AccentDeep
+                            )
+                            Text(
+                                "Con lo que pidieron no hay suficiente harina para que la máquina " +
+                                    "amase. Decide si horneas el mínimo o anulas el producto.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = BrandColors.AccentDeep
+                            )
+                            underMinimum.forEach { check ->
+                                Surface(
+                                    color = Color.White,
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(10.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(Modifier.weight(1f)) {
+                                            Text(
+                                                check.recipeName,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = BrandColors.Primary
+                                            )
+                                            Text(
+                                                check.currentFlourGrams.flourGramsAsPounds() +
+                                                    " de " + check.minFlourGrams.flourGramsAsPounds() +
+                                                    " · " + check.lines.joinToString(", ") { it.productName }
+                                                        .ifEmpty { "nadie pidió esta masa directamente — solo relleno de otro producto" },
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        TextButton(
+                                            onClick = {
+                                                if (check.lines.isEmpty()) pendingFillingOnlyCheck = check
+                                                else pendingMinimumCheck = check
+                                            }
+                                        ) {
+                                            Text(
+                                                "Resolver",
+                                                fontWeight = FontWeight.Bold,
+                                                color = BrandColors.Primary
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // ── Lista consolidada ─────────────────────────────────────────────
             if (state.draftLotLines.isNotEmpty()) {
                 item {
                     HorizontalDivider()
                     Spacer(Modifier.height(4.dp))
-                    Text("Lista consolidada", fontWeight = FontWeight.Bold, color = Color(0xFF005B8D))
+                    Text("Lista consolidada", fontWeight = FontWeight.Bold, color = BrandColors.Primary)
                 }
-                if (isWide) {
-                    item { ConsolidatedTableHeader() }
-                    itemsIndexed(state.draftLotLines) { index, line ->
-                        ConsolidatedTableRow(
-                            index = index + 1,
-                            line = line,
-                            decorationBatchesByPrep = state.availableDecorationBatchesByPreparation,
-                            onUpdate = { updated -> viewModel.updateDraftLotLine(updated) }
+                if (isWide) item { ConsolidatedTableHeader() }
+                // Agrupado por masa, con el mismo orden que el resto del flujo:
+                // la secuencia configurada por la planta manda sobre las masas.
+                var rowNumber = 0
+                draftGroups.forEach { group ->
+                    item(key = "lotgroup_${group.key}") {
+                        val flourGrams = state.recipesById[group.key]?.flourGramsForLines(
+                            lines = group.items,
+                            quantityOf = { it.plannedQuantity },
+                            rawWeightResolver = { it.rawWeightGrams ?: state.productsById[it.productId]?.rawWeightGrams }
+                        )
+                        MasaBandLabel(
+                            title = group.title,
+                            units = group.items.sumOf { it.plannedQuantity },
+                            flourLabel = flourGrams?.let { "${it.flourGramsAsPounds()} harina" }
                         )
                     }
-                } else {
-                    items(state.draftLotLines) { line ->
-                        LotLineEditRow(
-                            line = line,
-                            decorationBatchesByPrep = state.availableDecorationBatchesByPreparation,
-                            onUpdate = { updated -> viewModel.updateDraftLotLine(updated) }
-                        )
+                    group.items.forEach { line ->
+                        rowNumber += 1
+                        val number = rowNumber
+                        item(key = "lotline_${line.productId}") {
+                            if (isWide) {
+                                ConsolidatedTableRow(
+                                    index = number,
+                                    line = line,
+                                    decorationBatchesByPrep = state.availableDecorationBatchesByPreparation,
+                                    onUpdate = { updated -> viewModel.updateDraftLotLine(updated) }
+                                )
+                            } else {
+                                LotLineEditRow(
+                                    line = line,
+                                    decorationBatchesByPrep = state.availableDecorationBatchesByPreparation,
+                                    onUpdate = { updated -> viewModel.updateDraftLotLine(updated) }
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -503,7 +798,7 @@ fun ProductionLotFormScreen(
                         viewModel.saveLot(companyId, currentUser, branch, shift, productionDate, notesText)
                     },
                     modifier = Modifier.fillMaxWidth().height(52.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF005B8D)),
+                    colors = ButtonDefaults.buttonColors(containerColor = BrandColors.Primary),
                     enabled = selectedBranch != null && selectedShift != null && !state.isLoading
                 ) {
                     if (state.isLoading) CircularProgressIndicator(Modifier.size(20.dp), color = Color.White)
@@ -512,6 +807,8 @@ fun ProductionLotFormScreen(
             }
         }
         } // BoxWithConstraints
+    }
+    LoadingOverlay(visible = state.isLoading)
     }
 }
 
@@ -530,7 +827,11 @@ private fun LotLineEditRow(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text(line.productName, fontWeight = FontWeight.SemiBold, color = Color(0xFF005B8D))
+                    Text(
+                        if (line.isSpecial) "★ ${line.productName}" else line.productName,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (line.isSpecial) BrandColors.AccentDeep else BrandColors.Primary
+                    )
                     Text(line.productUnit, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                     if (line.recipeId.isNotEmpty())
                         Text(line.recipeName, style = MaterialTheme.typography.labelSmall, color = Color(0xFF1565C0))
@@ -539,7 +840,7 @@ private fun LotLineEditRow(
                     "${line.plannedQuantity.toInt()}",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.ExtraBold,
-                    color = Color(0xFFD9A441),
+                    color = BrandColors.AccentDeep,
                     modifier = Modifier.width(90.dp)
                 )
             }
@@ -551,7 +852,7 @@ private fun LotLineEditRow(
                     "Adornos del producto",
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.SemiBold,
-                    color = Color(0xFF005B8D)
+                    color = BrandColors.Primary
                 )
                 line.decorationsSnapshot.forEachIndexed { idx, deco ->
                     DecorationRow(
@@ -587,7 +888,8 @@ private fun DecorationRow(
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "${decoration.preparationName} · ${decoration.gramsPerUnit.fmt(1)} g/u",
+                "${decoration.preparationName.ifEmpty { decoration.ingredientName }} · " +
+                    "${decoration.gramsPerUnit.fmt(1)} g/u",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.weight(1f)
             )
@@ -597,7 +899,16 @@ private fun DecorationRow(
                 color = if (insufficient) Color(0xFFD32F2F) else Color.Gray
             )
         }
-        if (candidateBatches.isEmpty()) {
+        // Insumo comprado ya hecho: no hay batch que elegir, se descuenta del
+        // BranchStock junto con la receta. El selector de lote solo aplica a lo
+        // que preparamos nosotros.
+        if (decoration.isIngredientSourced) {
+            Text(
+                "Insumo — se descuenta del stock junto con la receta",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.Gray
+            )
+        } else if (candidateBatches.isEmpty()) {
             Text(
                 "Sin batches activos de ${decoration.preparationName} en esta sucursal — produce uno primero.",
                 style = MaterialTheme.typography.labelSmall,
@@ -650,7 +961,7 @@ private fun InfoLabelCard(label: String, value: String) {
                 value,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
-                color = Color(0xFF005B8D)
+                color = BrandColors.Primary
             )
         }
     }

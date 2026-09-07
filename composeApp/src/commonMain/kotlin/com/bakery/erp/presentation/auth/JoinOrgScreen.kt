@@ -35,6 +35,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.bakery.erp.ui.LoadingOverlay
 
 @Composable
 fun JoinOrgScreen(
@@ -244,5 +245,8 @@ fun JoinOrgScreen(
         Spacer(Modifier.height(12.dp))
         TextButton(onClick = onNavigateBack) { Text("Volver") }
     }
+
+    // Overlay de carga a pantalla completa mientras se procesa la solicitud de unirse.
+    LoadingOverlay(visible = state.isLoading)
     }
 }

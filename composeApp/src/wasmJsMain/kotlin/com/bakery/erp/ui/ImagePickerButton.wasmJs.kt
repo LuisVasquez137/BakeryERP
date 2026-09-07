@@ -10,7 +10,8 @@ actual fun ImagePickerButton(
     currentImageUrl: String?,
     selectedBytes: ByteArray?,
     onImageSelected: (ByteArray) -> Unit,
-    modifier: Modifier
+    modifier: Modifier,
+    @Suppress("UNUSED_PARAMETER") allowCamera: Boolean
 ) {
     OutlinedButton(onClick = {}, enabled = false, modifier = modifier) {
         Text("Imagen: no disponible en Wasm aún")

@@ -35,6 +35,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.TriStateCheckbox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -44,6 +45,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.Permission
@@ -170,13 +173,49 @@ fun UserPermissionsScreen(
 
                         val groups = Permission.entries.groupBy { it.group }
                         groups.forEach { (groupName, perms) ->
-                            Text(
-                                text = groupName,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)
-                            )
+                            // Estado del "maestro" del módulo: On (todos), Off (ninguno) o
+                            // Indeterminate (algunos). Un tap habilita/deshabilita el grupo completo.
+                            // El maestro del grupo NO toca los permisos sensibles (ver
+                            // dinero): se marcan uno por uno, con intención. Antes
+                            // "Habilitar todos" en Distribución le daba a cualquiera que
+                            // empaca el valor de cada nota de despacho, de regalo.
+                            val groupPermNames = perms.filterNot { it.isSensitive }.map { it.name }
+                            val selectedInGroup = groupPermNames.count { it in selectedPermissions }
+                            val groupTriState = when (selectedInGroup) {
+                                0 -> ToggleableState.Off
+                                groupPermNames.size -> ToggleableState.On
+                                else -> ToggleableState.Indeterminate
+                            }
+                            val toggleGroup = {
+                                selectedPermissions = if (selectedInGroup == groupPermNames.size)
+                                    selectedPermissions - groupPermNames.toSet()
+                                else
+                                    selectedPermissions + groupPermNames.toSet()
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { toggleGroup() }
+                                    .padding(top = 8.dp, bottom = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = groupName,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    text = "Habilitar todos",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                TriStateCheckbox(
+                                    state = groupTriState,
+                                    onClick = { toggleGroup() }
+                                )
+                            }
                             perms.forEach { perm ->
                                 Row(
                                     modifier = Modifier
@@ -207,6 +246,17 @@ fun UserPermissionsScreen(
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
+                                        // Se avisa en la fila, no solo en la lógica: quien
+                                        // reparte permisos tiene que ver que éste muestra
+                                        // dinero antes de marcarlo.
+                                        if (perm.isSensitive) {
+                                            Text(
+                                                "Muestra dinero · queda fuera de \"Habilitar todos\"",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = Color(0xFFB26A00)
+                                            )
+                                        }
                                     }
                                 }
                             }

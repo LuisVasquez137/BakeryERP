@@ -29,6 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
+import com.bakery.erp.model.NotificationTarget
 import com.bakery.erp.model.Permission
 import com.bakery.erp.model.User
 import com.bakery.erp.model.hasPermission
@@ -74,6 +75,7 @@ import com.bakery.erp.presentation.products.ProductDetailScreen
 import com.bakery.erp.presentation.products.ProductFormScreen
 import com.bakery.erp.presentation.products.ProductListScreen
 import com.bakery.erp.presentation.products.ProductViewModel
+import com.bakery.erp.presentation.products.ProductWeightsScreen
 import com.bakery.erp.presentation.preparationbatches.PreparationBatchFormScreen
 import com.bakery.erp.presentation.preparationbatches.PreparationBatchListScreen
 import com.bakery.erp.presentation.preparations.PreparationDetailScreen
@@ -130,6 +132,7 @@ import com.bakery.erp.presentation.expenses.FixedBudgetViewModel
 import com.bakery.erp.presentation.production.ProductionLotCompleteScreen
 import com.bakery.erp.presentation.production.ProductionLotDetailScreen
 import com.bakery.erp.presentation.production.ProductionLotFormScreen
+import com.bakery.erp.presentation.production.ProductionShiftSplitScreen
 import com.bakery.erp.presentation.production.ProductionLotListScreen
 import com.bakery.erp.presentation.production.ProductionOrderDetailScreen
 import com.bakery.erp.presentation.production.ProductionOrderFormScreen
@@ -148,6 +151,7 @@ import com.bakery.erp.presentation.production.ProductionShiftFormScreen
 import com.bakery.erp.presentation.production.ProductionShiftListScreen
 import com.bakery.erp.presentation.production.ProductionViewModel
 import com.bakery.erp.presentation.purchases.PurchaseDetailScreen
+import com.bakery.erp.presentation.purchases.MarketRunFormScreen
 import com.bakery.erp.presentation.purchases.PurchaseFormScreen
 import com.bakery.erp.presentation.purchases.PurchaseListScreen
 import com.bakery.erp.presentation.purchases.PurchaseViewModel
@@ -170,6 +174,7 @@ sealed class Screen(val route: String) {
     object JoinOrg : Screen("join_org")
     object Home : Screen("home")
     object ProductList : Screen("products")
+    object ProductWeights : Screen("products/weights")
     object ProductDetail : Screen("products/detail/{productId}") {
         fun route(productId: String) = "products/detail/$productId"
     }
@@ -224,6 +229,10 @@ sealed class Screen(val route: String) {
     }
     object PurchaseList : Screen("purchases")
     object PurchaseForm : Screen("purchases/form")
+    object MarketRunForm : Screen("purchases/marketrun")
+    object PurchaseEdit : Screen("purchases/form/{purchaseId}") {
+        fun route(purchaseId: String) = "purchases/form/$purchaseId"
+    }
     object PurchaseDetail : Screen("purchases/detail/{purchaseId}") {
         fun route(purchaseId: String) = "purchases/detail/$purchaseId"
     }
@@ -283,6 +292,9 @@ sealed class Screen(val route: String) {
     }
     object ProductionLotComplete : Screen("production/lots/complete/{lotId}") {
         fun route(lotId: String) = "production/lots/complete/$lotId"
+    }
+    object ProductionShiftSplit : Screen("production/lots/split?branchId={branchId}&date={date}") {
+        fun route(branchId: String, date: Long) = "production/lots/split?branchId=$branchId&date=$date"
     }
     object ProductionShiftList : Screen("production/shifts")
     object ProductionShiftForm : Screen("production/shifts/form?branchId={branchId}&shiftId={shiftId}") {
@@ -486,6 +498,7 @@ fun AppNavigation(
     val dailyCashCloseViewModel = vms.dailyCashClose
     val spotCashCheckViewModel = vms.spotCashCheck
     val homeViewModel = vms.home
+    val notificationViewModel = vms.notification
     val salesReportViewModel = vms.salesReport
     val productionReportViewModel = vms.productionReport
     val financialReportViewModel = vms.financialReport
@@ -493,6 +506,7 @@ fun AppNavigation(
     val externalCustomerViewModel = vms.externalCustomer
     val organizationSettingsViewModel = vms.organizationSettings
     val bluetoothPrinterManager = vms.bluetoothPrinterManager
+    val documentPrinter = vms.documentPrinter
 
     val state by viewModel.uiState.collectAsState()
     val purchaseState by purchaseViewModel.uiState.collectAsState()
@@ -530,6 +544,8 @@ fun AppNavigation(
                 state.needsResellerSetup -> navController.navigate(Screen.ResellerSetup.route) { popUpTo(0) { inclusive = true } }
                 state.isAuthenticated -> navController.navigate(authenticatedHomeRoute()) { popUpTo(0) { inclusive = true } }
                 state.isPendingApproval -> navController.navigate(Screen.PendingApproval.route) { popUpTo(0) { inclusive = true } }
+                // Usuario autenticado (p.ej. Google) pero sin organización → pantalla de
+                // elección: crear nueva panadería o unirse a una existente.
                 state.needsOnboarding -> navController.navigate(Screen.AuthChoice.route) { popUpTo(0) { inclusive = true } }
                 else -> navController.navigate(Screen.Login.route) { popUpTo(0) { inclusive = true } }
             }
@@ -543,11 +559,52 @@ fun AppNavigation(
         } else if (state.isPendingApproval && !state.isAuthenticated) {
             // Transición ResellerSetup → PendingApproval tras completar perfil.
             navController.navigate(Screen.PendingApproval.route) { popUpTo(0) { inclusive = true } }
+        } else if (state.needsOnboarding) {
+            // Google Sign-In de un usuario NO registrado: authState/onSuccess dispara
+            // needsOnboarding después de la navegación inicial. Sin esta rama el usuario
+            // se quedaba varado en el Login. Lo llevamos a la pantalla de elección.
+            navController.navigate(Screen.AuthChoice.route) { popUpTo(0) { inclusive = true } }
         } else if (!state.isAuthenticated && !state.needsOnboarding && !state.isPendingApproval) {
             // Sesión cerrada mientras la app estaba abierta
             initialNavigationDone = false
             navController.navigate(Screen.Login.route) { popUpTo(0) { inclusive = true } }
         }
+    }
+
+    /**
+     * Resuelve el destino simbólico de un aviso a una ruta real. Vive acá y no en
+     * `model/` para no acoplar el modelo con la navegación (mismo criterio que
+     * `AlertTarget`). Lo usan tanto la campana in-app como el tap sobre el push.
+     */
+    fun navigateToNotificationTarget(targetScreen: String, targetId: String) {
+        when (targetScreen) {
+            NotificationTarget.PRODUCTION_ORDER_DETAIL ->
+                if (targetId.isNotEmpty())
+                    navController.navigate(Screen.ProductionOrderDetail.route(targetId))
+                else navController.navigate(Screen.ProductionOrderList.route)
+            NotificationTarget.PRODUCTION_ORDER_LIST ->
+                navController.navigate(Screen.ProductionOrderList.route)
+            NotificationTarget.PRODUCTION_LOT_DETAIL ->
+                if (targetId.isNotEmpty())
+                    navController.navigate(Screen.ProductionLotDetail.route(targetId))
+            NotificationTarget.DISPATCH_NOTE_DETAIL ->
+                if (targetId.isNotEmpty())
+                    navController.navigate(Screen.DispatchDetail.route(targetId))
+                else navController.navigate(Screen.DispatchList.route)
+            else -> Unit
+        }
+    }
+
+    // Tap sobre un push del sistema. Se espera a que haya sesión y a que la
+    // navegación inicial haya corrido: si se navegara antes, el redirect al home
+    // que hace el efecto de arriba (con popUpTo(0)) se llevaría la pantalla por
+    // delante y el usuario terminaría en el home sin entender por qué.
+    val pendingDeepLink by PendingDeepLink.target.collectAsState()
+    LaunchedEffect(pendingDeepLink, state.isAuthenticated, initialNavigationDone) {
+        val target = pendingDeepLink ?: return@LaunchedEffect
+        if (!state.isAuthenticated || !initialNavigationDone) return@LaunchedEffect
+        navigateToNotificationTarget(target.targetScreen, target.targetId)
+        PendingDeepLink.consume()
     }
 
     var showSplash by rememberSaveable { mutableStateOf(true) }
@@ -620,13 +677,15 @@ fun AppNavigation(
             AuthChoiceScreen(
                 onNavigateToRegister = { navController.navigate(Screen.Register.route) },
                 onNavigateToJoinOrg = { navController.navigate(Screen.JoinOrg.route) },
-                onNavigateToLogin = { navController.popBackStack(Screen.Login.route, inclusive = false) }
+                onNavigateToLogin = { navController.popBackStack(Screen.Login.route, inclusive = false) },
+                viewModel = viewModel
             )
         }
         composable(Screen.Register.route) {
             RegisterScreen(
                 onNavigateToLogin = { navController.popBackStack(Screen.Login.route, inclusive = false) },
-                viewModel = viewModel
+                viewModel = viewModel,
+                onNavigateBack = { navController.popBackStack() }
             )
         }
         composable(Screen.JoinOrg.route) {
@@ -671,8 +730,10 @@ fun AppNavigation(
                 onNavigateToCustomerOrders = { navController.navigate(Screen.CustomerOrderList.route) },
                 onNavigateToOrganizationSettings = { navController.navigate(Screen.OrganizationSettings.route) },
                 onNavigateToResellerApproval = { navController.navigate(Screen.ResellerApproval.route) },
+                onNavigateToNotificationTarget = ::navigateToNotificationTarget,
                 viewModel = viewModel,
-                homeViewModel = homeViewModel
+                homeViewModel = homeViewModel,
+                notificationViewModel = notificationViewModel
             )
         }
 
@@ -683,8 +744,19 @@ fun AppNavigation(
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToDetail = { id -> navController.navigate(Screen.ProductDetail.route(id)) },
                     onNavigateToForm = { navController.navigate(Screen.ProductForm.route()) },
+                    onNavigateToWeights = { navController.navigate(Screen.ProductWeights.route) },
                     authViewModel = viewModel,
                     viewModel = productViewModel
+                )
+            }
+        }
+        composable(Screen.ProductWeights.route) {
+            RequirePermission(state.user, Permission.EDIT_PRODUCTS, onBack = { navController.popBackStack() }) {
+                ProductWeightsScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = productViewModel,
+                    productionViewModel = productionViewModel
                 )
             }
         }
@@ -698,7 +770,8 @@ fun AppNavigation(
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToEdit = { id -> navController.navigate(Screen.ProductForm.route(id)) },
                 authViewModel = viewModel,
-                viewModel = productViewModel
+                viewModel = productViewModel,
+                priceListViewModel = priceListViewModel
             )
         }
         composable(
@@ -713,7 +786,10 @@ fun AppNavigation(
                     authViewModel = viewModel,
                     viewModel = productViewModel,
                     preparationViewModel = preparationViewModel,
-                    priceListViewModel = priceListViewModel
+                    priceListViewModel = priceListViewModel,
+                    supplierViewModel = supplierViewModel,
+                    ingredientViewModel = ingredientViewModel,
+                    recipeViewModel = recipeViewModel
                 )
             }
         }
@@ -798,7 +874,13 @@ fun AppNavigation(
                     authViewModel = viewModel,
                     viewModel = recipeViewModel,
                     ingredientViewModel = ingredientViewModel,
-                    productViewModel = productViewModel
+                    productViewModel = productViewModel,
+                    onNavigateToProducts = {
+                        // Va directo al form de creación de un nuevo producto (no a la lista vacía).
+                        navController.navigate(Screen.ProductForm.route()) {
+                            popUpTo(Screen.RecipeList.route) { inclusive = false }
+                        }
+                    }
                 )
             }
         }
@@ -876,14 +958,26 @@ fun AppNavigation(
 
         // ── Despacho ─────────────────────────────────────────────────────────
         composable(Screen.DispatchList.route) {
-            RequirePermission(state.user, Permission.VIEW_PRODUCTION, onBack = { navController.popBackStack() }) {
+            // Los tres permisos, no solo VIEW_PRODUCTION: es exactamente la misma
+            // condición con la que HomeScreen decide mostrar el módulo "Despacho".
+            // Cuando pedía solo VIEW_PRODUCTION, quien empaca o recibe (DISPATCH_PACK
+            // / RECEIVE_DISPATCH) veía el botón y al tocarlo lo rebotaba con "no
+            // tienes permiso" — parecía un problema de la cuenta y era del guard.
+            RequirePermission(
+                state.user,
+                Permission.VIEW_PRODUCTION,
+                Permission.DISPATCH_PACK,
+                Permission.RECEIVE_DISPATCH,
+                onBack = { navController.popBackStack() }
+            ) {
                 DispatchNoteListScreen(
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToPack = { noteId -> navController.navigate(Screen.DispatchPack.route(noteId)) },
                     onNavigateToReceive = { noteId -> navController.navigate(Screen.DispatchReceive.route(noteId)) },
                     onNavigateToDetail = { noteId -> navController.navigate(Screen.DispatchDetail.route(noteId)) },
                     authViewModel = viewModel,
-                    viewModel = dispatchViewModel
+                    viewModel = dispatchViewModel,
+                    productionViewModel = productionViewModel
                 )
             }
         }
@@ -897,7 +991,8 @@ fun AppNavigation(
                     noteId = noteId,
                     onNavigateBack = { navController.popBackStack() },
                     authViewModel = viewModel,
-                    viewModel = dispatchViewModel
+                    viewModel = dispatchViewModel,
+                    productionViewModel = productionViewModel
                 )
             }
         }
@@ -911,7 +1006,8 @@ fun AppNavigation(
                     noteId = noteId,
                     onNavigateBack = { navController.popBackStack() },
                     authViewModel = viewModel,
-                    viewModel = dispatchViewModel
+                    viewModel = dispatchViewModel,
+                    productionViewModel = productionViewModel
                 )
             }
         }
@@ -926,7 +1022,8 @@ fun AppNavigation(
                 onNavigateToPack = { id -> navController.navigate(Screen.DispatchPack.route(id)) },
                 onNavigateToReceive = { id -> navController.navigate(Screen.DispatchReceive.route(id)) },
                 authViewModel = viewModel,
-                viewModel = dispatchViewModel
+                viewModel = dispatchViewModel,
+                productionViewModel = productionViewModel
             )
         }
 
@@ -1115,13 +1212,15 @@ fun AppNavigation(
             arguments = listOf(navArgument("sessionId") { type = NavType.StringType })
         ) { backStackEntry ->
             val sessionId = backStackEntry.stringArg("sessionId") ?: return@composable
-            CashSessionDetailScreen(
-                sessionId = sessionId,
-                onNavigateBack = { navController.popBackStack() },
-                onNavigateToClose = { sid -> navController.navigate(Screen.CashSessionClose.route(sid)) },
-                authViewModel = viewModel,
-                viewModel = cashSessionViewModel
-            )
+            RequirePermission(state.user, Permission.OPERATE_POS, onBack = { navController.popBackStack() }) {
+                CashSessionDetailScreen(
+                    sessionId = sessionId,
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToClose = { sid -> navController.navigate(Screen.CashSessionClose.route(sid)) },
+                    authViewModel = viewModel,
+                    viewModel = cashSessionViewModel
+                )
+            }
         }
 
         // ── Historial de ventas ──────────────────────────────────────────────
@@ -1428,9 +1527,35 @@ fun AppNavigation(
                 PurchaseListScreen(
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToForm = { navController.navigate(Screen.PurchaseForm.route) },
+                    onNavigateToMarketRun = { navController.navigate(Screen.MarketRunForm.route) },
                     onNavigateToDetail = { id -> navController.navigate(Screen.PurchaseDetail.route(id)) },
+                    onNavigateToEdit = { id -> navController.navigate(Screen.PurchaseEdit.route(id)) },
                     authViewModel = viewModel,
                     viewModel = purchaseViewModel
+                )
+            }
+        }
+        composable(Screen.MarketRunForm.route) {
+            RequirePermission(state.user, Permission.RECEIVE_STOCK, onBack = { navController.popBackStack() }) {
+                MarketRunFormScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = purchaseViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.PurchaseEdit.route,
+            arguments = listOf(navArgument("purchaseId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val editId = backStackEntry.stringArg("purchaseId") ?: return@composable
+            RequirePermission(state.user, Permission.EDIT_PURCHASES, onBack = { navController.popBackStack() }) {
+                PurchaseFormScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToSuppliers = { navController.navigate(Screen.SupplierList.route) },
+                    authViewModel = viewModel,
+                    viewModel = purchaseViewModel,
+                    purchaseId = editId
                 )
             }
         }
@@ -1453,6 +1578,7 @@ fun AppNavigation(
                 PurchaseDetailScreen(
                     purchaseId = purchaseId,
                     onNavigateBack = { navController.popBackStack() },
+                    onNavigateToEdit = { id -> navController.navigate(Screen.PurchaseEdit.route(id)) },
                     authViewModel = viewModel,
                     viewModel = purchaseViewModel
                 )
@@ -1471,8 +1597,12 @@ fun AppNavigation(
                         navController.navigate(Screen.ProductionLotForm.route(branchId, shiftId, date))
                     },
                     onNavigateToLotDetail = { id -> navController.navigate(Screen.ProductionLotDetail.route(id)) },
+                    onNavigateToShiftSplit = { branchId, date ->
+                        navController.navigate(Screen.ProductionShiftSplit.route(branchId, date))
+                    },
                     authViewModel = viewModel,
-                    viewModel = productionViewModel
+                    viewModel = productionViewModel,
+                    productViewModel = productViewModel
                 )
             }
         }
@@ -1490,6 +1620,13 @@ fun AppNavigation(
                         // regrese a la lista, no al form de creación.
                         navController.navigate(Screen.ProductionOrderForm.route(id)) {
                             popUpTo(Screen.ProductionOrderForm.route) { inclusive = true }
+                        }
+                    },
+                    onLocationDenied = {
+                        // Sin ubicación no se puede armar el pedido para esta
+                        // sucursal — reset duro a Home, no un simple "volver".
+                        navController.navigate(Screen.Home.route) {
+                            popUpTo(Screen.Home.route) { inclusive = false }
                         }
                     },
                     authViewModel = viewModel,
@@ -1545,6 +1682,34 @@ fun AppNavigation(
                     presetShiftId = shiftId,
                     presetDate = date,
                     onNavigateBack = { navController.popBackStack() },
+                    onNavigateToShiftSplit = { splitBranchId, splitDate ->
+                        // Reemplaza la entrada actual: "volver" desde el reparto no debe
+                        // regresar a un form de lote a medio configurar sin turno posible.
+                        navController.navigate(Screen.ProductionShiftSplit.route(splitBranchId, splitDate)) {
+                            popUpTo(Screen.ProductionLotForm.route) { inclusive = true }
+                        }
+                    },
+                    authViewModel = viewModel,
+                    viewModel = productionViewModel,
+                    productViewModel = productViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.ProductionShiftSplit.route,
+            arguments = listOf(
+                navArgument("branchId") { type = NavType.StringType },
+                navArgument("date") { type = NavType.StringType }
+            )
+        ) { backStackEntry ->
+            val branchId = backStackEntry.stringArg("branchId") ?: return@composable
+            val date = backStackEntry.stringArg("date")?.toLongOrNull() ?: return@composable
+            RequirePermission(state.user, Permission.MANAGE_PRODUCTION_LOTS, onBack = { navController.popBackStack() }) {
+                ProductionShiftSplitScreen(
+                    presetBranchId = branchId,
+                    presetDate = date,
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToLotDetail = { id -> navController.navigate(Screen.ProductionLotDetail.route(id)) },
                     authViewModel = viewModel,
                     viewModel = productionViewModel,
                     productViewModel = productViewModel
@@ -1563,7 +1728,9 @@ fun AppNavigation(
                     onNavigateToComplete = { id -> navController.navigate(Screen.ProductionLotComplete.route(id)) },
                     authViewModel = viewModel,
                     viewModel = productionViewModel,
-                    productViewModel = productViewModel
+                    productViewModel = productViewModel,
+                    documentPrinter = documentPrinter,
+                    bluetoothPrinterManager = bluetoothPrinterManager
                 )
             }
         }
@@ -1738,7 +1905,8 @@ fun AppNavigation(
                     shiftId = shiftId,
                     onNavigateBack = { navController.popBackStack() },
                     authViewModel = viewModel,
-                    viewModel = productionViewModel
+                    viewModel = productionViewModel,
+                    productViewModel = productViewModel
                 )
             }
         }

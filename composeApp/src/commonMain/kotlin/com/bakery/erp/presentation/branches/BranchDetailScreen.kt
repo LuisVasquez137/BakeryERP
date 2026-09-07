@@ -48,7 +48,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.collectAsState
 import com.bakery.erp.model.Branch
+import com.bakery.erp.model.DISPATCH_TRIP_FIRST
+import com.bakery.erp.model.DISPATCH_TRIP_SECOND
 import com.bakery.erp.model.BranchCapability
+import com.bakery.erp.model.isoWeekdayName
+import com.bakery.erp.util.fmt
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.presentation.products.ProductViewModel
 
@@ -192,6 +196,12 @@ private fun BranchDetailContent(
         // ── Información general ───────────────────────────────────────────────
         DetailSection("Información General")
         if (branch.location.isNotEmpty()) DetailRow("Dirección", branch.location)
+        if (branch.latitude != null && branch.longitude != null) {
+            // Capturada automáticamente (GPS) al crear el primer pedido de esta
+            // sucursal — ver Branch.latitude. Se puede corregir desde "Editar"
+            // si la capturó alguien que no estaba físicamente en la sucursal.
+            DetailRow("Ubicación (GPS)", "${branch.latitude.fmt(5)}, ${branch.longitude.fmt(5)}")
+        }
         if (branch.phone.isNotEmpty()) DetailRow("Teléfono", branch.phone)
         if (branch.managerName.isNotEmpty()) DetailRow("Encargado", branch.managerName)
 
@@ -236,6 +246,20 @@ private fun BranchDetailContent(
                 }
             }
             Spacer(Modifier.height(4.dp))
+
+            if (branch.closedWeekdays.isNotEmpty()) {
+                DetailRow(
+                    "Día(s) de descanso",
+                    branch.closedWeekdays.sorted()
+                        .joinToString(", ") { isoWeekdayName(it).replaceFirstChar { c -> c.uppercase() } }
+                )
+            }
+
+            when (branch.receivesOnlyInTrip) {
+                DISPATCH_TRIP_FIRST -> "Solo el primer viaje"
+                DISPATCH_TRIP_SECOND -> "Solo el segundo viaje"
+                else -> null
+            }?.let { DetailRow("Recibe despacho en", it) }
         }
 
         // ── Notas ────────────────────────────────────────────────────────────

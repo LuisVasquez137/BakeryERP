@@ -55,6 +55,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,12 +64,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.bakery.erp.model.IngredientUsage
 import com.bakery.erp.model.INGREDIENT_CATEGORIES
 import com.bakery.erp.model.Ingredient
 import com.bakery.erp.model.Permission
 import com.bakery.erp.model.formatStockDisplay
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.presentation.auth.AuthViewModel
+import com.bakery.erp.ui.LoadingOverlay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -88,6 +91,9 @@ fun IngredientListScreen(
 
     var searchQuery by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf<String?>(null) }
+    // Materia prima o suministros. Empieza en materia prima porque es el trabajo diario;
+    // el cloro se revisa una vez al mes y no debe estorbar la búsqueda de la harina.
+    var usageFilter by rememberSaveable { mutableStateOf(IngredientUsage.PRODUCTION) }
 
     LaunchedEffect(companyId, currentUser) {
         if (companyId.isNotEmpty() && currentUser != null) {
@@ -100,13 +106,20 @@ fun IngredientListScreen(
         state.error?.let { snackbarHostState.showSnackbar(it); viewModel.clearError() }
     }
 
-    val displayed = remember(state.ingredientList, searchQuery, selectedCategory) {
+    /** Solo se ofrece separar los dos catálogos si la empresa realmente usa suministros. */
+    val hasSupplies = remember(state.ingredientList) {
+        state.ingredientList.any { it.usage == IngredientUsage.SUPPLY }
+    }
+
+    val displayed = remember(state.ingredientList, searchQuery, selectedCategory, usageFilter, hasSupplies) {
         state.ingredientList
+            .filter { !hasSupplies || it.usage == usageFilter }
             .filter { selectedCategory == null || it.category == selectedCategory }
             .filter { it.name.contains(searchQuery.trim(), ignoreCase = true) }
             .sortedBy { it.name.lowercase() }
     }
 
+    Box(Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -188,6 +201,23 @@ fun IngredientListScreen(
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
+                    }
+
+                    // ── Materia prima / Suministros (solo si hay de los dos) ───
+                    if (hasSupplies) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            IngredientUsage.entries.forEach { opt ->
+                                FilterChip(
+                                    selected = usageFilter == opt,
+                                    onClick = { usageFilter = opt; selectedCategory = null },
+                                    label = { Text(opt.label) }
+                                )
+                            }
+                        }
                     }
 
                     // â”€â”€ Filtro de sucursal (solo si hay mÃ¡s de una accesible) â”€
@@ -286,6 +316,8 @@ fun IngredientListScreen(
                 }
             }
         }
+    }
+    LoadingOverlay(visible = state.isLoading)
     }
 }
 

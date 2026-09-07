@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,20 +18,21 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ShoppingBasket
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -39,6 +41,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
@@ -49,25 +53,45 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.bakery.erp.model.PurchaseKind
 import com.bakery.erp.model.Purchase
-import com.bakery.erp.model.PurchaseStatus
+import com.bakery.erp.model.PurchaseDisplayStatus
+import com.bakery.erp.model.PurchasePeriod
+import com.bakery.erp.model.applyPurchaseFilters
+import com.bakery.erp.model.balanceDue
+import com.bakery.erp.model.daysUntilDue
+import com.bakery.erp.model.displayStatus
+import com.bakery.erp.model.purchaseKpis
 import com.bakery.erp.presentation.auth.AuthViewModel
+import com.bakery.erp.ui.LoadingOverlay
+import com.bakery.erp.ui.ZoomableImageDialog
+import com.bakery.erp.ui.theme.BrandColors
+import com.bakery.erp.util.fmtMoney
+import kotlin.time.Clock
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PurchaseListScreen(
     onNavigateBack: () -> Unit,
     onNavigateToForm: () -> Unit,
+    onNavigateToMarketRun: () -> Unit,
     onNavigateToDetail: (String) -> Unit,
+    onNavigateToEdit: (String) -> Unit,
     authViewModel: AuthViewModel,
     viewModel: PurchaseViewModel
 ) {
@@ -76,6 +100,13 @@ fun PurchaseListScreen(
     val companyId = authState.user?.orgId ?: ""
     val currentUser = authState.user
     val snackbarHostState = remember { SnackbarHostState() }
+    var showFilterSheet by rememberSaveable { mutableStateOf(false) }
+    // Foto que se está viendo en grande desde la lista, sin entrar al detalle.
+    var photoPreview by rememberSaveable { mutableStateOf<String?>(null) }
+    // Facturas y vueltas se ven en pestañas separadas: son dos formas de gastar que se
+    // revisan por preguntas distintas ("¿a quién le debo?" vs "¿en qué se fue la semana?"),
+    // y mezcladas en una sola lista los KPIs de cuentas por pagar dejan de significar algo.
+    var showMarketRuns by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(companyId, currentUser) {
         if (companyId.isNotEmpty() && currentUser != null) {
@@ -85,24 +116,42 @@ fun PurchaseListScreen(
     LaunchedEffect(state.error) {
         state.error?.let { snackbarHostState.showSnackbar(it); viewModel.clearError() }
     }
+    LaunchedEffect(state.message) {
+        state.message?.let { snackbarHostState.showSnackbar(it); viewModel.clearMessage() }
+    }
 
-    // Filtrado en memoria
-    val displayed = remember(state.purchases, state.searchQuery, state.branchFilter) {
+    // `now` se fija una vez por composición de la pantalla: "vencida" no puede cambiar de
+    // valor a mitad de un scroll, y recalcularlo por fila haría inestable el `remember`.
+    val now = remember { Clock.System.now().toEpochMilliseconds() }
+
+    /** Solo se ofrecen las pestañas si la empresa ya registró alguna vuelta. */
+    val hasMarketRuns = remember(state.purchases) {
+        state.purchases.any { it.kind == PurchaseKind.MARKET_RUN }
+    }
+
+    val displayed = remember(state.purchases, state.filters, now, showMarketRuns) {
         state.purchases
-            .filter { state.branchFilter == null || it.branchId == state.branchFilter }
-            .filter {
-                state.searchQuery.isBlank() ||
-                it.supplierName.contains(state.searchQuery.trim(), ignoreCase = true) ||
-                (it.invoiceNumber?.contains(state.searchQuery.trim(), ignoreCase = true) == true) ||
-                it.branchName.contains(state.searchQuery.trim(), ignoreCase = true)
-            }
+            .filter { (it.kind == PurchaseKind.MARKET_RUN) == showMarketRuns }
+            .applyPurchaseFilters(state.filters, now)
     }
+    val kpis = remember(displayed, now) { displayed.purchaseKpis(now) }
 
-    // Sucursales únicas (para los chips de filtro)
+    // Las sucursales y proveedores del filtro salen de lo que REALMENTE hay en las compras
+    // del usuario: ofrecer un proveedor sin facturas solo lleva a una lista vacía.
     val uniqueBranches = remember(state.purchases) {
-        state.purchases.map { it.branchId to it.branchName }.distinct()
+        state.purchases.map { it.branchId to it.branchName }
+            .filter { it.first.isNotEmpty() }
+            .distinct()
+            .sortedBy { it.second.lowercase() }
+    }
+    val uniqueSuppliers = remember(state.purchases) {
+        state.purchases.map { it.supplierId to it.supplierName }
+            .filter { it.first.isNotEmpty() }
+            .distinct()
+            .sortedBy { it.second.lowercase() }
     }
 
+    Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -112,21 +161,63 @@ fun PurchaseListScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
                     }
                 },
+                actions = {
+                    // Punto de entrada a la PRIMERA vuelta: la pestaña no existe hasta que
+                    // haya una, así que sin esto no habría forma de crearla.
+                    if (!hasMarketRuns) {
+                        IconButton(onClick = onNavigateToMarketRun) {
+                            Icon(
+                                Icons.Default.ShoppingBasket,
+                                contentDescription = "Registrar una vuelta de compras"
+                            )
+                        }
+                    }
+                    IconButton(onClick = { showFilterSheet = true }) {
+                        FilterIconWithBadge(state.filters.activeCount) {
+                            Icon(Icons.Default.FilterList, contentDescription = "Filtros")
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     titleContentColor = MaterialTheme.colorScheme.onPrimary,
-                    navigationIconContentColor = MaterialTheme.colorScheme.onPrimary
+                    navigationIconContentColor = MaterialTheme.colorScheme.onPrimary,
+                    actionIconContentColor = MaterialTheme.colorScheme.onPrimary
                 )
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = onNavigateToForm) {
-                Icon(Icons.Default.Add, contentDescription = "Nueva compra")
+            FloatingActionButton(
+                onClick = if (showMarketRuns) onNavigateToMarketRun else onNavigateToForm
+            ) {
+                Icon(
+                    Icons.Default.Add,
+                    contentDescription = if (showMarketRuns) "Nueva vuelta" else "Nueva compra"
+                )
             }
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+
+            // ── Facturas / Vueltas ────────────────────────────────────────────
+            // La pestaña de vueltas solo aparece cuando ya hay alguna. Quien nunca hizo una
+            // no debería tener que entender qué es antes de poder ver sus facturas; el botón
+            // para crear la primera vive en el menú del TopAppBar.
+            if (hasMarketRuns) {
+                TabRow(selectedTabIndex = if (showMarketRuns) 1 else 0) {
+                    Tab(
+                        selected = !showMarketRuns,
+                        onClick = { showMarketRuns = false },
+                        text = { Text("Facturas") }
+                    )
+                    Tab(
+                        selected = showMarketRuns,
+                        onClick = { showMarketRuns = true },
+                        text = { Text("Vueltas") }
+                    )
+                }
+            }
 
             // ── Barra de búsqueda ─────────────────────────────────────────────
             Surface(
@@ -138,16 +229,16 @@ fun PurchaseListScreen(
                 color = MaterialTheme.colorScheme.surface
             ) {
                 TextField(
-                    value = state.searchQuery,
+                    value = state.filters.query,
                     onValueChange = { viewModel.updateSearchQuery(it) },
                     placeholder = {
-                        Text("Buscar por proveedor, factura o sucursal…", color = MaterialTheme.colorScheme.outline)
+                        Text("Buscar proveedor, factura o insumo…", color = MaterialTheme.colorScheme.outline)
                     },
                     leadingIcon = {
                         Icon(Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.outline)
                     },
                     trailingIcon = {
-                        if (state.searchQuery.isNotEmpty()) {
+                        if (state.filters.query.isNotEmpty()) {
                             IconButton(onClick = { viewModel.updateSearchQuery("") }) {
                                 Icon(Icons.Default.Clear, contentDescription = "Limpiar", tint = MaterialTheme.colorScheme.outline)
                             }
@@ -165,59 +256,81 @@ fun PurchaseListScreen(
                 )
             }
 
-            // ── Chips de sucursal (solo si hay más de una) ───────────────────
-            if (uniqueBranches.size > 1) {
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
-                ) {
-                    item {
-                        FilterChip(
-                            selected = state.branchFilter == null,
-                            onClick = { viewModel.setBranchFilter(null) },
-                            label = { Text("Todas") }
-                        )
-                    }
-                    items(uniqueBranches) { (branchId, branchName) ->
-                        FilterChip(
-                            selected = state.branchFilter == branchId,
-                            onClick = { viewModel.setBranchFilter(if (state.branchFilter == branchId) null else branchId) },
-                            label = { Text(branchName) }
-                        )
-                    }
+            PurchaseKpiRow(
+                kpis = kpis,
+                canSeeAmounts = true,
+                onOverdueClick = { viewModel.showOverdue() },
+                onPendingReceiptClick = { viewModel.toggleStatusFilter(PurchaseDisplayStatus.PENDING_RECEIPT) }
+            )
+
+            Spacer(Modifier.height(8.dp))
+
+            PurchaseQuickFilters(
+                filters = state.filters,
+                onPeriodSelected = { period, from, until -> viewModel.setPeriod(period, from, until) },
+                onToggleStatus = { viewModel.toggleStatusFilter(it) }
+            )
+
+            Spacer(Modifier.height(8.dp))
+
+            // Deuda vencida que NO está en pantalla. Es el aviso que no puede depender del
+            // período: una factura de mayo sin pagar es exactamente la que hay que cobrar en
+            // septiembre, y con la lista en "Este mes" no aparecería por ningún lado.
+            val hiddenOverdue = remember(state.purchases, displayed, now) {
+                val shown = displayed.mapTo(HashSet()) { it.id }
+                state.purchases.filter {
+                    it.id !in shown && it.displayStatus(now) == PurchaseDisplayStatus.OVERDUE
                 }
+            }
+            if (hiddenOverdue.isNotEmpty()) {
+                HiddenOverdueNotice(
+                    count = hiddenOverdue.size,
+                    amount = hiddenOverdue.sumOf { it.balanceDue },
+                    onShow = { viewModel.showOverdue() }
+                )
+            }
+
+            // Resultados fuera del período mostrado: el caso típico de "¿cuándo compré
+            // aceite?". Vale para cualquier filtro, no solo para la búsqueda escrita — elegir
+            // el chip "Vencida" en un mes sin compras también parecía decir que no hay ninguna.
+            val outsidePeriod = remember(state.purchases, state.filters, displayed, now) {
+                if (state.filters.query.isBlank() && state.filters.activeCount == 0) 0
+                else state.purchases.applyPurchaseFilters(
+                    state.filters.copy(period = PurchasePeriod.ALL), now
+                ).size - displayed.size
+            }
+            if (outsidePeriod > 0) {
+                WiderSearchNotice(
+                    count = outsidePeriod,
+                    onExpand = { viewModel.setPeriod(PurchasePeriod.ALL) }
+                )
             }
 
             // ── Contenido adaptativo ──────────────────────────────────────────
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                 val isWideScreen = maxWidth >= 900.dp
                 val isTablet = maxWidth >= 600.dp
+                val hasFilters = state.filters.hasAny
 
                 when {
                     // ── PC / tablet horizontal: tabla izquierda + panel detalle ──
                     isWideScreen -> {
                         Row(modifier = Modifier.fillMaxSize()) {
-                            Column(modifier = Modifier.fillMaxHeight().weight(0.4f)) {
+                            Column(modifier = Modifier.fillMaxHeight().weight(0.45f)) {
                                 PurchaseTableHeader()
                                 when {
                                     state.isLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                         CircularProgressIndicator()
                                     }
-                                    displayed.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                        Text(
-                                            if (state.searchQuery.isNotEmpty() || state.branchFilter != null) "Sin resultados"
-                                            else "Sin compras registradas",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.outline
-                                        )
-                                    }
+                                    displayed.isEmpty() -> PurchaseEmptyState(hasFilters, Modifier.fillMaxSize())
                                     else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
                                         items(displayed, key = { it.id }) { purchase ->
                                             PurchaseTableRow(
                                                 purchase = purchase,
+                                                now = now,
                                                 isSelected = state.selectedPurchase?.id == purchase.id,
-                                                onClick = { viewModel.selectPurchase(purchase, companyId) }
+                                                onClick = { viewModel.selectPurchase(purchase, companyId) },
+                                                onPhotoClick = { photoPreview = purchase.invoicePhotoUrl }
                                             )
                                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                                         }
@@ -228,12 +341,42 @@ fun PurchaseListScreen(
                                 modifier = Modifier.fillMaxHeight().width(1.dp)
                                     .background(MaterialTheme.colorScheme.outlineVariant)
                             )
-                            Box(modifier = Modifier.fillMaxHeight().weight(0.6f)) {
+                            Box(modifier = Modifier.fillMaxHeight().weight(0.55f)) {
                                 when {
                                     state.isDetailLoading -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                                     state.selectedPurchase != null -> PurchaseDetailContent(
                                         purchase = state.selectedPurchase!!,
-                                        lines = state.selectedPurchaseLines
+                                        lines = state.selectedPurchaseLines,
+                                        payments = state.selectedPurchasePayments,
+                                        currentUser = currentUser,
+                                        onStatusChange = null,
+                                        onReceive = {
+                                            currentUser?.let {
+                                                viewModel.receivePurchase(companyId, state.selectedPurchase!!.id, it)
+                                            }
+                                        },
+                                        onAddPayment = { amount, date, method, reference, note ->
+                                            currentUser?.let {
+                                                viewModel.addPayment(
+                                                    companyId, state.selectedPurchase!!.id,
+                                                    amount, date, method, reference, note, it
+                                                )
+                                            }
+                                        },
+                                        onDeletePayment = { paymentId ->
+                                            viewModel.deletePayment(companyId, state.selectedPurchase!!.id, paymentId)
+                                        },
+                                        onDueDateChange = { due ->
+                                            viewModel.updateDueDate(companyId, state.selectedPurchase!!.id, due)
+                                        },
+                                        onSettleInFull = { d, m, r ->
+                                            currentUser?.let {
+                                                viewModel.settleInFull(
+                                                    companyId, state.selectedPurchase!!.id, d, m, r, it
+                                                )
+                                            }
+                                        },
+                                        onEdit = { onNavigateToEdit(state.selectedPurchase!!.id) }
                                     )
                                     else -> Text(
                                         text = "Selecciona una compra para ver el detalle",
@@ -255,10 +398,7 @@ fun PurchaseListScreen(
                                 state.isLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                     CircularProgressIndicator()
                                 }
-                                displayed.isEmpty() -> PurchaseEmptyState(
-                                    hasFilters = state.searchQuery.isNotEmpty() || state.branchFilter != null,
-                                    modifier = Modifier.fillMaxSize()
-                                )
+                                displayed.isEmpty() -> PurchaseEmptyState(hasFilters, Modifier.fillMaxSize())
                                 else -> LazyColumn(
                                     modifier = Modifier.fillMaxSize(),
                                     contentPadding = PaddingValues(bottom = 80.dp)
@@ -266,8 +406,10 @@ fun PurchaseListScreen(
                                     items(displayed, key = { it.id }) { purchase ->
                                         PurchaseTableRow(
                                             purchase = purchase,
+                                            now = now,
                                             isSelected = false,
-                                            onClick = { onNavigateToDetail(purchase.id) }
+                                            onClick = { onNavigateToDetail(purchase.id) },
+                                            onPhotoClick = { photoPreview = purchase.invoicePhotoUrl }
                                         )
                                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                                     }
@@ -282,19 +424,18 @@ fun PurchaseListScreen(
                             state.isLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                 CircularProgressIndicator()
                             }
-                            displayed.isEmpty() -> PurchaseEmptyState(
-                                hasFilters = state.searchQuery.isNotEmpty() || state.branchFilter != null,
-                                modifier = Modifier.fillMaxSize()
-                            )
+                            displayed.isEmpty() -> PurchaseEmptyState(hasFilters, Modifier.fillMaxSize())
                             else -> LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 88.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 items(displayed, key = { it.id }) { purchase ->
                                     PurchaseCard(
                                         purchase = purchase,
-                                        onClick = { onNavigateToDetail(purchase.id) }
+                                        now = now,
+                                        onClick = { onNavigateToDetail(purchase.id) },
+                                        onPhotoClick = { photoPreview = purchase.invoicePhotoUrl }
                                     )
                                 }
                             }
@@ -304,10 +445,94 @@ fun PurchaseListScreen(
             }
         }
     }
+    LoadingOverlay(visible = state.isLoading)
+    }
+
+    photoPreview?.takeIf { it.isNotEmpty() }?.let { url ->
+        ZoomableImageDialog(
+            imageUrl = url,
+            title = "Factura",
+            onDismiss = { photoPreview = null }
+        )
+    }
+
+    if (showFilterSheet) {
+        PurchaseFilterSheet(
+            filters = state.filters,
+            branches = uniqueBranches,
+            suppliers = uniqueSuppliers,
+            onToggleBranch = { viewModel.toggleBranchFilter(it) },
+            onToggleSupplier = { viewModel.toggleSupplierFilter(it) },
+            onSortSelected = { viewModel.setSort(it) },
+            onClear = { viewModel.clearFilters() },
+            onDismiss = { showFilterSheet = false }
+        )
+    }
 }
 
 @Composable
-private fun PurchaseCard(purchase: Purchase, onClick: () -> Unit) {
+private fun HiddenOverdueNotice(count: Int, amount: Double, onShow: () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 8.dp),
+        shape = RoundedCornerShape(10.dp),
+        color = Color(0xFFFBE0E0)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "$count factura${if (count != 1) "s" else ""} vencida${if (count != 1) "s" else ""} " +
+                    "por Q${amount.fmtMoney()}",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+                color = Color(0xFFB3261E),
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = "Ver",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFFB3261E),
+                modifier = Modifier.clickable(onClick = onShow).padding(start = 8.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun WiderSearchNotice(count: Int, onExpand: () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 8.dp),
+        shape = RoundedCornerShape(10.dp),
+        color = BrandColors.PrimaryContainer
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Hay $count factura${if (count != 1) "s" else ""} más fuera de este período",
+                style = MaterialTheme.typography.bodySmall,
+                color = BrandColors.Primary,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = "Ver todo",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = BrandColors.Primary,
+                modifier = Modifier.clickable(onClick = onExpand).padding(start = 8.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun PurchaseCard(purchase: Purchase, now: Long, onClick: () -> Unit, onPhotoClick: () -> Unit) {
+    val status = purchase.displayStatus(now)
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -323,9 +548,10 @@ private fun PurchaseCard(purchase: Purchase, onClick: () -> Unit) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = purchase.supplierName.ifEmpty { "Sin proveedor" },
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = BrandColors.TextSlate,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
@@ -341,37 +567,60 @@ private fun PurchaseCard(purchase: Purchase, onClick: () -> Unit) {
                 }
                 Spacer(Modifier.width(12.dp))
                 Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "Q${purchase.totalAmount.fmtMoney()}",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = BrandColors.Primary
+                    )
                     if (!purchase.invoiceNumber.isNullOrEmpty()) {
                         Text(
-                            text = purchase.invoiceNumber,
+                            text = "Fact. ${purchase.invoiceNumber}",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
                     Text(
-                        text = "${purchase.lineCount} insumo${if (purchase.lineCount != 1) "s" else ""}",
+                        text = "${purchase.lineCount} línea${if (purchase.lineCount != 1) "s" else ""}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.outline
                     )
                 }
             }
             Spacer(Modifier.height(8.dp))
-            // Chip de estado
-            val (statusColor, statusOnColor) = when (purchase.status) {
-                PurchaseStatus.PAID -> MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.onPrimaryContainer
-                PurchaseStatus.PENDING_RECEIPT -> MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
-                else -> MaterialTheme.colorScheme.surfaceVariant to MaterialTheme.colorScheme.onSurfaceVariant
-            }
-            Surface(shape = RoundedCornerShape(50), color = statusColor) {
-                Text(
-                    text = PurchaseStatus.label(purchase.status),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = statusOnColor,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                PurchaseStatusPill(status)
+                if (purchase.invoicePhotoUrl.isNotEmpty()) {
+                    IconButton(onClick = onPhotoClick, modifier = Modifier.size(30.dp)) {
+                        Icon(
+                            Icons.Default.Receipt,
+                            contentDescription = "Ver la factura",
+                            modifier = Modifier.size(18.dp),
+                            tint = BrandColors.Primary
+                        )
+                    }
+                }
+                val note = purchase.dueNote(now)
+                if (note != null) {
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = note,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (status == PurchaseDisplayStatus.OVERDUE) Color(0xFFB3261E)
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (purchase.balanceDue > 0.01 && status != PurchaseDisplayStatus.PENDING_RECEIPT) {
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        text = "Saldo Q${purchase.balanceDue.fmtMoney()}",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = BrandColors.AccentDeep
+                    )
+                }
             }
         }
     }
@@ -385,33 +634,72 @@ private fun PurchaseTableHeader() {
             .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f))
             .padding(horizontal = 12.dp, vertical = 10.dp)
     ) {
-        Text("Proveedor", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(0.3f))
-        Text("Sucursal", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(0.2f))
-        Text("Fecha", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(0.18f))
-        Text("Factura", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(0.17f))
-        Text("Estado", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(0.15f))
+        HeaderCell("Proveedor", 0.25f)
+        HeaderCell("Sucursal", 0.15f)
+        HeaderCell("Fecha", 0.14f)
+        HeaderCell("Factura", 0.13f)
+        HeaderCell("Total", 0.14f, TextAlign.End)
+        HeaderCell("Estado", 0.19f)
     }
     HorizontalDivider()
 }
 
 @Composable
-private fun PurchaseTableRow(purchase: Purchase, isSelected: Boolean, onClick: () -> Unit) {
+private fun RowScope.HeaderCell(
+    text: String,
+    weight: Float,
+    align: TextAlign = TextAlign.Start
+) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.Bold,
+        textAlign = align,
+        modifier = Modifier.weight(weight)
+    )
+}
+
+@Composable
+private fun PurchaseTableRow(
+    purchase: Purchase,
+    now: Long,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    onPhotoClick: () -> Unit
+) {
+    val status = purchase.displayStatus(now)
+    // El estado se lee de un vistazo por el color de la fila, no solo por el chip del final:
+    // una barra de acento a la izquierda más un fondo muy tenue del mismo tono. Se eligió un
+    // alpha bajo (0.14) a propósito — un fondo saturado convertiría la tabla en un
+    // resaltador y volvería ilegible el texto en la columna de montos.
+    val (statusBg, statusFg) = purchaseStatusColors(status)
+    val neutral = status == PurchaseDisplayStatus.PENDING_PAYMENT
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(
-                if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
-                else Color.Transparent
+                when {
+                    isSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                    neutral -> Color.Transparent
+                    else -> statusBg.copy(alpha = 0.35f)
+                }
             )
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(start = 4.dp)
+            .drawStatusAccent(if (neutral) Color.Transparent else statusFg)
+            .padding(start = 8.dp, end = 12.dp)
+            .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // El proveedor es el dato por el que uno busca una factura en la lista; iba con el
+        // mismo peso y tamaño que la sucursal y la fecha, así que no había dónde apoyar la
+        // vista al recorrerla.
         Text(
             text = purchase.supplierName.ifEmpty { "Sin proveedor" },
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-            modifier = Modifier.weight(0.3f),
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = BrandColors.TextSlate,
+            modifier = Modifier.weight(0.25f),
             maxLines = 2,
             overflow = TextOverflow.Ellipsis
         )
@@ -419,43 +707,94 @@ private fun PurchaseTableRow(purchase: Purchase, isSelected: Boolean, onClick: (
             text = purchase.branchName,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(0.2f),
+            modifier = Modifier.weight(0.15f),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
-        Text(
-            text = formatPurchaseDate(purchase.date),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(0.18f)
-        )
+        Column(modifier = Modifier.weight(0.14f)) {
+            Text(
+                text = formatPurchaseDate(purchase.date),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            purchase.dueNote(now)?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (status == PurchaseDisplayStatus.OVERDUE) Color(0xFFB3261E)
+                            else MaterialTheme.colorScheme.outline
+                )
+            }
+        }
         Text(
             text = purchase.invoiceNumber ?: "—",
             style = MaterialTheme.typography.bodySmall,
             color = if (!purchase.invoiceNumber.isNullOrEmpty()) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.outline,
-            modifier = Modifier.weight(0.17f),
+            modifier = Modifier.weight(0.13f),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
-        // Estado
-        val statusLabel = when (purchase.status) {
-            PurchaseStatus.PAID -> "Pagado"
-            PurchaseStatus.PENDING_RECEIPT -> "Por recibir"
-            else -> "Pte. pago"
+        Column(
+            modifier = Modifier.weight(0.14f),
+            horizontalAlignment = Alignment.End
+        ) {
+            Text(
+                text = "Q${purchase.totalAmount.fmtMoney()}",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            if (purchase.balanceDue > 0.01 && status != PurchaseDisplayStatus.PENDING_RECEIPT &&
+                purchase.paidAmount > 0.01
+            ) {
+                Text(
+                    text = "saldo ${purchase.balanceDue.fmtMoney()}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = BrandColors.AccentDeep
+                )
+            }
         }
-        val statusColor = when (purchase.status) {
-            PurchaseStatus.PAID -> MaterialTheme.colorScheme.primary
-            PurchaseStatus.PENDING_RECEIPT -> MaterialTheme.colorScheme.error
-            else -> MaterialTheme.colorScheme.outline
+        Row(
+            modifier = Modifier.weight(0.19f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            PurchaseStatusPill(status, short = true)
+            // Atajo a la foto sin entrar al detalle: al cotejar una tanda de facturas, el
+            // papel se consulta muchas más veces de las que se abre la compra completa.
+            if (purchase.invoicePhotoUrl.isNotEmpty()) {
+                IconButton(onClick = onPhotoClick, modifier = Modifier.size(28.dp)) {
+                    Icon(
+                        Icons.Default.Receipt,
+                        contentDescription = "Ver la factura",
+                        modifier = Modifier.size(16.dp),
+                        tint = BrandColors.Primary
+                    )
+                }
+            }
         }
-        Text(
-            text = statusLabel,
-            style = MaterialTheme.typography.labelSmall,
-            color = statusColor,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.weight(0.15f)
-        )
+    }
+}
+
+/** Barra de 3dp pegada al borde izquierdo de la fila, del color del estado. */
+private fun Modifier.drawStatusAccent(color: Color): Modifier = drawBehind {
+    if (color == Color.Transparent) return@drawBehind
+    drawRect(
+        color = color,
+        topLeft = Offset(0f, 0f),
+        size = Size(3.dp.toPx(), size.height)
+    )
+}
+
+/** "Vence en 3 días" / "Vencida hace 5 días". Null cuando la factura no tiene crédito. */
+internal fun Purchase.dueNote(now: Long): String? {
+    if (dueDate <= 0L || balanceDue <= 0.01) return null
+    val days = daysUntilDue(now) ?: return null
+    return when {
+        days < 0 -> "Vencida hace ${-days} d"
+        days == 0 -> "Vence hoy"
+        days <= 7 -> "Vence en $days d"
+        else -> null
     }
 }
 
@@ -473,12 +812,12 @@ private fun PurchaseEmptyState(hasFilters: Boolean, modifier: Modifier = Modifie
             tint = MaterialTheme.colorScheme.outline
         )
         Text(
-            text = if (hasFilters) "Sin resultados" else "Sin compras registradas",
+            text = if (hasFilters) "Sin resultados" else "Sin compras en este período",
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold
         )
         Text(
-            text = if (hasFilters) "Prueba con otro término de búsqueda o filtro"
+            text = if (hasFilters) "Prueba con otro término, otro período o quita los filtros"
                    else "Toca + para registrar el ingreso de materia prima",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -60,6 +60,8 @@ import com.bakery.erp.model.Recipe
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.ui.AdaptiveContainer
+import com.bakery.erp.ui.LoadingOverlay
+import com.bakery.erp.ui.theme.BrandColors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -84,6 +86,7 @@ fun RecipeListScreen(
         state.error?.let { snackbarHostState.showSnackbar(it); viewModel.clearError() }
     }
 
+    Box(Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -185,6 +188,8 @@ fun RecipeListScreen(
             }
         }
     }
+    LoadingOverlay(visible = state.isLoading)
+    }
 }
 
 @Composable
@@ -212,7 +217,11 @@ private fun RecipeListCard(recipe: Recipe, onClick: () -> Unit) {
                 Icon(
                     Icons.AutoMirrored.Filled.MenuBook,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        // El mosaico crema es el de Operaciones; el glifo va en su naranja para
+                    // que la fila sea la misma ficha que se tocó en el lanzador. Los badges
+                    // de al lado siguen en `onSecondaryContainer` azul: son TEXTO de 11sp y
+                    // el naranja de icono se queda en 3:1, por debajo del 4.5:1 que pide.
+                    tint = BrandColors.AccentIcon,
                     modifier = Modifier.size(24.dp)
                 )
             }

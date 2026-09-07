@@ -1,6 +1,9 @@
 package com.bakery.erp.ui
 
 import android.graphics.BitmapFactory
+import android.net.Uri
+import androidx.core.content.FileProvider
+import java.io.File
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -17,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.BrokenImage
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -39,7 +43,8 @@ actual fun ImagePickerButton(
     currentImageUrl: String?,
     selectedBytes: ByteArray?,
     onImageSelected: (ByteArray) -> Unit,
-    modifier: Modifier
+    modifier: Modifier,
+    allowCamera: Boolean
 ) {
     val context = LocalContext.current
     val launcher = rememberLauncherForActivityResult(
@@ -48,6 +53,34 @@ actual fun ImagePickerButton(
         uri?.let {
             val bytes = context.contentResolver.openInputStream(it)?.readBytes()
             bytes?.let(onImageSelected)
+        }
+    }
+
+    // El archivo destino se crea ANTES de abrir la cámara y su Uri se recuerda acá:
+    // `TakePicture` solo devuelve un booleano, no la imagen, así que sin guardarla no
+    // habría de dónde leer la foto al volver.
+    var pendingPhotoUri by remember { mutableStateOf<Uri?>(null) }
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { success ->
+        val uri = pendingPhotoUri
+        pendingPhotoUri = null
+        if (success && uri != null) {
+            runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBytes() } }
+                .getOrNull()?.let(onImageSelected)
+        }
+    }
+
+    fun launchCamera() {
+        runCatching {
+            val file = File.createTempFile("captura_", ".jpg", context.cacheDir)
+            // Se entrega por FileProvider y no como "file://": desde Android 7 pasarle una
+            // Uri de archivo a otra app lanza FileUriExposedException.
+            val uri = FileProvider.getUriForFile(
+                context, context.packageName + ".fileprovider", file
+            )
+            pendingPhotoUri = uri
+            cameraLauncher.launch(uri)
         }
     }
 
@@ -92,10 +125,24 @@ actual fun ImagePickerButton(
             }
         }
 
-        OutlinedButton(onClick = { launcher.launch("image/*") }) {
-            Icon(Icons.Default.AddPhotoAlternate, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text(if (previewBitmap != null || !currentImageUrl.isNullOrEmpty()) "Cambiar imagen" else "Seleccionar imagen")
+        val hasImage = previewBitmap != null || !currentImageUrl.isNullOrEmpty()
+        if (allowCamera) {
+            OutlinedButton(onClick = { launchCamera() }, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.PhotoCamera, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(if (hasImage) "Tomar otra foto" else "Tomar foto")
+            }
+            OutlinedButton(onClick = { launcher.launch("image/*") }, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.AddPhotoAlternate, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Elegir de la galería")
+            }
+        } else {
+            OutlinedButton(onClick = { launcher.launch("image/*") }) {
+                Icon(Icons.Default.AddPhotoAlternate, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(if (hasImage) "Cambiar imagen" else "Seleccionar imagen")
+            }
         }
     }
 }

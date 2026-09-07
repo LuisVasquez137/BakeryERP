@@ -6,7 +6,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.*
@@ -16,12 +18,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.bakery.erp.ui.ProductImage
+import com.bakery.erp.util.formatBakerWeight
+import androidx.compose.ui.draw.clip
 import com.bakery.erp.model.Permission
 import com.bakery.erp.model.ProductionLotStatus
 import com.bakery.erp.model.ProductionOrderStatus
+import com.bakery.erp.model.UserRole
 import com.bakery.erp.model.canAccessBranch
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.presentation.auth.AuthViewModel
+import com.bakery.erp.ui.theme.BrandChip
+import com.bakery.erp.ui.theme.BrandColors
+import com.bakery.erp.ui.theme.ChipTone
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,13 +53,13 @@ fun ProductionOrderDetailScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF005B8D),
+                    containerColor = BrandColors.Primary,
                     titleContentColor = Color.White,
                     navigationIconContentColor = Color.White
                 )
             )
         },
-        containerColor = Color(0xFFFDFBF7)
+        containerColor = BrandColors.Ivory
     ) { padding ->
         ProductionOrderDetailContent(
             orderId = orderId,
@@ -86,7 +95,11 @@ fun ProductionOrderDetailContent(
     val companyId = user?.orgId ?: ""
     val canSend = user?.hasPermission(Permission.SEND_PRODUCTION_ORDER) == true
     val canManageLots = user?.hasPermission(Permission.MANAGE_PRODUCTION_LOTS) == true
+    // El borrado de raíz es del propietario y de nadie más: no es una acción de la
+    // operación diaria (para eso está cancelar), es la salida para los pedidos de prueba.
+    val isOwner = user?.role == UserRole.OWNER
     var showCancelDialog by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(orderId) {
         if (companyId.isNotEmpty()) viewModel.loadOrderDetail(companyId, orderId)
@@ -108,6 +121,57 @@ fun ProductionOrderDetailContent(
                 }) { Text("Cancelar pedido", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { showCancelDialog = false }) { Text("No, mantener") } }
+        )
+    }
+
+    if (showDeleteDialog) {
+        // Los lotes que este pedido alimenta y que quedarían sin ninguna otra fuente:
+        // el propietario tiene que saber que se van con él antes de confirmar.
+        val lotsGoingAway = state.lotsForSelectedOrder.filter {
+            it.sourceOrderIds.all { id -> id == orderId } && it.customerOrderIds.isEmpty()
+        }
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            title = { Text("Borrar el pedido de raíz") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Esto NO es cancelar. El pedido desaparece por completo, junto con:"
+                    )
+                    Text("• sus productos y las notas de despacho que salieron de él")
+                    if (lotsGoingAway.isNotEmpty()) {
+                        Text(
+                            "• el lote de " +
+                                lotsGoingAway.joinToString(" y ") { it.shiftName.ifEmpty { "la planta" } } +
+                                ", que se queda sin ningún otro pedido"
+                        )
+                    }
+                    Text("• lo que aporta a las cantidades sugeridas de ese día de la semana")
+                    Text(
+                        "Sirve para sacar pedidos de prueba. Un pedido real conviene cancelarlo, " +
+                            "para que quede el rastro de que existió.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+                    Text(
+                        "No se puede deshacer.",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDeleteDialog = false
+                    user?.let { current ->
+                        viewModel.deleteOrderPermanently(companyId, orderId, current) {
+                            onAfterCancel()
+                        }
+                    }
+                }) { Text("Borrar definitivamente", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { showDeleteDialog = false }) { Text("No, mantener") } }
         )
     }
 
@@ -138,7 +202,7 @@ fun ProductionOrderDetailContent(
                             "Pedido",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF005B8D)
+                            color = BrandColors.Primary
                         )
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             StatusChip(order.status, state.lotForSelectedOrder?.status, order.isLateOrder)
@@ -184,13 +248,13 @@ fun ProductionOrderDetailContent(
                         Icon(
                             Icons.Default.Lock,
                             contentDescription = null,
-                            tint = Color(0xFFD9A441)
+                            tint = BrandColors.AccentDeep
                         )
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 "Este pedido ya está en un lote (${ProductionLotStatus.label(lotForOrder.status)}).",
                                 fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFFD9A441),
+                                color = BrandColors.AccentDeep,
                                 style = MaterialTheme.typography.bodySmall
                             )
                             Text(
@@ -209,7 +273,7 @@ fun ProductionOrderDetailContent(
             Text(
                 "Productos solicitados (${lines.size})",
                 fontWeight = FontWeight.Bold,
-                color = Color(0xFF005B8D)
+                color = BrandColors.Primary
             )
         }
 
@@ -223,14 +287,52 @@ fun ProductionOrderDetailContent(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // La foto del especial va acá aunque el detalle sea read-only:
+                    // es la pantalla donde la planta revisa el pedido antes de
+                    // consolidarlo, y "pirujo del doble" sin imagen es una discusión
+                    // por teléfono que se puede evitar.
+                    if (line.isSpecial && line.specialPhotoUrl.isNotEmpty()) {
+                        ProductImage(
+                            imageUrl = line.specialPhotoUrl,
+                            contentDescription = null,
+                            modifier = Modifier.size(44.dp).clip(RoundedCornerShape(8.dp))
+                        )
+                        Spacer(Modifier.width(10.dp))
+                    }
                     Column(Modifier.weight(1f)) {
-                        Text(line.productName, fontWeight = FontWeight.SemiBold, color = Color(0xFF005B8D))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            if (line.isSpecial) {
+                                Icon(
+                                    Icons.Default.Star,
+                                    contentDescription = "Pedido especial",
+                                    tint = BrandColors.AccentDeep,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
+                            Text(line.productName, fontWeight = FontWeight.SemiBold, color = BrandColors.Primary)
+                        }
+                        if (line.isSpecial) {
+                            Text(
+                                listOfNotNull(
+                                    "Especial",
+                                    line.specialRecipeName.takeIf { it.isNotBlank() },
+                                    formatBakerWeight(line.specialRawWeightGrams)
+                                        .takeIf { it != "—" }?.let { "$it c/u" }
+                                ).joinToString(" · "),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = BrandColors.AccentDeep,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
                         Text(line.productUnit, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                     }
                     Text(
                         "${line.requestedQuantity.toInt()} uds.",
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFFD9A441)
+                        color = BrandColors.AccentDeep
                     )
                 }
             }
@@ -258,6 +360,34 @@ fun ProductionOrderDetailContent(
                 ProductionLotStatus.OPEN -> isProducingStaff && canManageLots
                 else -> false
             }
+            // Planta de 2 turnos con un lote ya en producción y el otro abierto: se
+            // puede editar, pero el cambio solo puede caer en el turno que sigue
+            // abierto. Decirlo evita que la encargada crea que movió pan que ya
+            // está en el horno.
+            val lockedShifts = state.lotsForSelectedOrder
+                .filter { it.status != ProductionLotStatus.OPEN }
+                .mapNotNull { it.shiftName.ifEmpty { null } }
+            val openShifts = state.lotsForSelectedOrder
+                .filter { it.status == ProductionLotStatus.OPEN }
+                .mapNotNull { it.shiftName.ifEmpty { null } }
+            if (editable && lockedShifts.isNotEmpty()) {
+                item {
+                    Spacer(Modifier.height(8.dp))
+                    Surface(
+                        color = Color(0xFFFBF1DC),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            "${lockedShifts.joinToString(" y ")} ya está en producción: lo que cambies " +
+                                "acá solo puede salir de ${openShifts.joinToString(" y ").ifEmpty { "el turno abierto" }}.",
+                            modifier = Modifier.padding(12.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = BrandColors.AccentDeep
+                        )
+                    }
+                }
+            }
             if (editable || canSend) {
                 item {
                     Spacer(Modifier.height(8.dp))
@@ -265,7 +395,7 @@ fun ProductionOrderDetailContent(
                         onClick = { onNavigateToEdit(order.id) },
                         modifier = Modifier.fillMaxWidth().height(48.dp),
                         enabled = editable,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF005B8D))
+                        colors = ButtonDefaults.buttonColors(containerColor = BrandColors.Primary)
                     ) {
                         Icon(Icons.Default.Edit, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
@@ -286,10 +416,38 @@ fun ProductionOrderDetailContent(
                             "El lote ya está en producción o cerrado. La cancelación queda " +
                                 "bloqueada para no descuadrar el stock.",
                             style = MaterialTheme.typography.labelSmall,
-                            color = Color(0xFFD9A441),
+                            color = BrandColors.AccentDeep,
                             modifier = Modifier.padding(top = 4.dp)
                         )
                     }
+                }
+            }
+            // Borrado de raíz — solo el propietario. Va al final y como texto, no como
+            // botón lleno: es la salida para los pedidos de prueba, no una acción que
+            // deba competir visualmente con editar o cancelar.
+            if (isOwner) {
+                item {
+                    Spacer(Modifier.height(4.dp))
+                    TextButton(
+                        onClick = { showDeleteDialog = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Icon(Icons.Default.DeleteForever, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Borrar pedido de prueba")
+                    }
+                    Text(
+                        if (lotStatus == ProductionLotStatus.COMPLETED)
+                            "El lote ya cerró y descontó insumos: este pedido ya no se puede borrar, " +
+                                "solo ajustar el stock a mano."
+                        else
+                            "Solo vos ves esta opción. Borra el pedido y su lote sin dejar rastro; " +
+                                "un pedido real es mejor cancelarlo.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.Gray,
+                        modifier = Modifier.padding(horizontal = 8.dp)
+                    )
                 }
             }
         }
@@ -298,22 +456,14 @@ fun ProductionOrderDetailContent(
 
 @Composable
 private fun StatusChip(status: String, lotStatus: String? = null, isLateOrder: Boolean = false) {
-    val (label, color, bg) = effectiveOrderDisplay(status, lotStatus, isLateOrder)
-    Surface(shape = RoundedCornerShape(20.dp), color = bg) {
-        Text(
-            label,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-            style = MaterialTheme.typography.labelSmall,
-            color = color,
-            fontWeight = FontWeight.Bold
-        )
-    }
+    val (label, tone) = effectiveOrderDisplay(status, lotStatus, isLateOrder)
+    BrandChip(label, tone)
 }
 
 @Composable
 private fun InfoRow(label: String, value: String) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
-        Text(value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = Color(0xFF005B8D))
+        Text(value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = BrandColors.Primary)
     }
 }

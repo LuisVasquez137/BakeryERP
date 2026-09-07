@@ -75,6 +75,17 @@ interface AuthRepository {
     /** Actualiza la flag de aceptar entregas a domicilio para revendedores. */
     suspend fun setAcceptsResellerDelivery(orgId: String, accepts: Boolean): Result<Unit>
 
+    /**
+     * Enciende o apaga los flujos de compra opcionales de la empresa (reventa, suministros,
+     * servicios). La materia prima no se configura — es el flujo base.
+     */
+    suspend fun setPurchaseFlows(
+        orgId: String,
+        usesResale: Boolean,
+        usesSupplies: Boolean,
+        usesServices: Boolean
+    ): Result<Unit>
+
     /** Regenera el código de invitación de la organización. Invalida el código viejo. */
     suspend fun regenerateInviteCode(orgId: String): Result<String>
 }

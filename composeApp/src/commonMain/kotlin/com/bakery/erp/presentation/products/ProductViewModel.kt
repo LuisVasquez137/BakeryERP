@@ -39,6 +39,42 @@ class ProductViewModel(
     }
 
     /**
+     * Guarda de una vez los pesos en crudo editados en la carga rápida.
+     *
+     * [unit] ("oz" o "g") es la unidad activa en la pantalla al momento de
+     * guardar — se persiste junto al gramaje para que el detalle/formulario
+     * del producto lo muestre en la misma unidad en que se tecleó, en vez de
+     * caer al default "g" y verse redondeado a gramos enteros.
+     *
+     * Actualiza también `productList` en memoria para que la pantalla refleje lo
+     * guardado sin releer toda la colección.
+     */
+    fun saveRawWeights(companyId: String, gramsByProductId: Map<String, Double>, unit: String) {
+        if (gramsByProductId.isEmpty()) return
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
+            runCatching { repository.updateRawWeights(companyId, gramsByProductId, unit) }
+                .onSuccess {
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        isSaved = true,
+                        productList = _uiState.value.productList.map { product ->
+                            gramsByProductId[product.id]
+                                ?.let { product.copy(rawWeightGrams = it, rawWeightUnit = unit) }
+                                ?: product
+                        }
+                    )
+                }
+                .onFailure {
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        error = it.message ?: "No se pudieron guardar los pesos"
+                    )
+                }
+        }
+    }
+
+    /**
      * Guarda el producto y, opcionalmente, los precios por lista.
      * - `pricesByListId`: priceListId → unitPrice (>0). Inserta/actualiza el override.
      * - `priceListIdsToReset`: listas donde el usuario vació el campo. Se borra el

@@ -3,11 +3,11 @@ package com.bakery.erp.presentation.home
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.foundation.border
 import androidx.compose.ui.layout.ContentScale
 import org.jetbrains.compose.resources.painterResource
 import bakeryerp.composeapp.generated.resources.Res
-import bakeryerp.composeapp.generated.resources.bakeos_logo
+import bakeryerp.composeapp.generated.resources.bakeos_logo_light
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -38,62 +38,88 @@ import com.bakery.erp.model.User
 import com.bakery.erp.model.UserRole
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.presentation.auth.AuthViewModel
+import com.bakery.erp.presentation.notifications.NotificationViewModel
+import com.bakery.erp.presentation.notifications.NotificationsSheet
+import com.bakery.erp.ui.ProductImage
+import com.bakery.erp.ui.shareText
 import com.bakery.erp.util.fmtMoney
 import androidx.compose.runtime.remember
+import com.bakery.erp.ui.theme.BrandColors.Primary as PrimaryBlue
+import com.bakery.erp.ui.theme.BrandColors.TextSlate as SlateText
+import com.bakery.erp.ui.theme.BrandColors
 
-private val PrimaryBlue = Color(0xFF005B8D)
 private val CoffeeBrown = Color(0xFF2E4A6E)
-private val SlateText   = Color(0xFF1A2B38)
 private val MutedText   = Color(0xFF607585)
 
-data class ModuleItem(val title: String, val subtitle: String, val icon: ImageVector, val color: Color)
+data class ModuleItem(val title: String, val subtitle: String, val icon: ImageVector)
 
+/**
+ * El color vive en la SECCION, no en el modulo: son 26 fichas y leerlas una por una para
+ * encontrar "Compras" no deja formar memoria muscular. Cuatro bloques distinguibles si.
+ *
+ * Cuatro tonos y no uno por modulo (estilo Odoo): recetas -> produccion -> despacho -> reparto
+ * son una sola cadena, y pintarlos de colores distintos afirmaria que no tienen relacion.
+ * Ademas el naranja significa "necesita tus ojos" en toda la app; si cada modulo tuviera su
+ * hue decorativo, esa senal se pierde. Por eso el color por seccion vive SOLO en este
+ * lanzador — dentro de las pantallas el icono sigue diciendo estado.
+ */
 private data class ModuleSection(
     val title: String,
     val icon: ImageVector,
-    val accentColor: Color,
+    /** Tinte del icono (de la ficha y del encabezado). Nunca color de texto. */
+    val iconColor: Color,
+    /**
+     * Fondo del cuadrito del icono, en pálido. Se probó rellenarlo de color sólido — daba
+     * más contraste y el #FF9800 exacto — pero el lanzador entero ganaba demasiado peso
+     * visual y perdía sobriedad, que es el registro que se quiere para un ERP.
+     */
+    val container: Color,
     val modules: List<ModuleItem>
 )
 
 private val ALL_SECTIONS = listOf(
-    ModuleSection("Operaciones", Icons.Default.Factory, PrimaryBlue, listOf(
-        ModuleItem("Recetas",         "Fórmulas y procesos",   Icons.AutoMirrored.Filled.MenuBook,    Color(0xFFDCEEFB)),
-        ModuleItem("Pedidos",         "Enviar a producción",   Icons.AutoMirrored.Filled.ReceiptLong, Color(0xFFDCEEFB)),
-        ModuleItem("Producción",      "Lotes por turno",       Icons.Default.Factory,                 Color(0xFFDCEEFB)),
-        ModuleItem("Preparaciones",   "Adornos y rellenos",    Icons.Default.BakeryDining,            Color(0xFFDCEEFB)),
-        ModuleItem("Lotes de Preparación", "Preparar lotes",   Icons.Default.Factory,                 Color(0xFFDCEEFB)),
-        ModuleItem("Ingreso a Turno", "Marcar asistencia",     Icons.Default.HowToReg,                Color(0xFFDCEEFB)),
+    // Operaciones = donde pasa el dia -> naranja.
+    ModuleSection("Operaciones", Icons.Default.Factory, BrandColors.AccentIcon, BrandColors.AccentSoft, listOf(
+        ModuleItem("Recetas",         "Fórmulas y procesos",   Icons.AutoMirrored.Filled.MenuBook),
+        ModuleItem("Pedidos",         "Enviar a producción",   Icons.AutoMirrored.Filled.ReceiptLong),
+        ModuleItem("Producción",      "Lotes por turno",       Icons.Default.Factory),
+        ModuleItem("Preparaciones",   "Adornos y rellenos",    Icons.Default.BakeryDining),
+        ModuleItem("Lotes de Preparación", "Preparar lotes",   Icons.Default.Factory),
+        ModuleItem("Ingreso a Turno", "Marcar asistencia",     Icons.Default.HowToReg),
     )),
-    ModuleSection("Inventario", Icons.Default.Inventory, Color(0xFF0D7A8C), listOf(
-        ModuleItem("Insumos",    "Costos y stock",       Icons.Default.Kitchen,      Color(0xFFD4EFF3)),
-        ModuleItem("Compras",    "Ingreso de insumos",   Icons.Default.ShoppingCart, Color(0xFFD4EFF3)),
-        ModuleItem("Despacho",   "Empaque y recepción",  Icons.Default.LocalShipping, Color(0xFFD4EFF3)),
-        ModuleItem("Reparto",    "Hojas de ruta",        Icons.Default.LocalShipping, Color(0xFFD4EFF3)),
-        ModuleItem("Inventario tienda", "Stock terminado y mermas", Icons.Default.Inventory, Color(0xFFD4EFF3)),
-        ModuleItem("Conteo de pan", "Cierre de día con merma",   Icons.Default.Inventory, Color(0xFFD4EFF3)),
+    // Inventario = el azul de estructura.
+    ModuleSection("Inventario", Icons.Default.Inventory, BrandColors.Primary, BrandColors.PrimaryContainer, listOf(
+        ModuleItem("Insumos",    "Costos y stock",       Icons.Default.Kitchen),
+        ModuleItem("Compras",    "Ingreso de insumos",   Icons.Default.ShoppingCart),
+        ModuleItem("Despacho",   "Empaque y recepción",  Icons.Default.LocalShipping),
+        ModuleItem("Reparto",    "Hojas de ruta",        Icons.Default.LocalShipping),
+        ModuleItem("Inventario tienda", "Stock terminado y mermas", Icons.Default.Inventory),
+        ModuleItem("Conteo de pan", "Cierre de día con merma",   Icons.Default.Inventory),
     )),
-    ModuleSection("Ventas", Icons.Default.PointOfSale, Color(0xFF1A56A0), listOf(
-        ModuleItem("Productos",       "Catálogo y precios",   Icons.Default.BakeryDining,  Color(0xFFEEF3FC)),
-        ModuleItem("Listas de Precios", "Canales y mayoreo",  Icons.Default.Sell,          Color(0xFFEEF3FC)),
-        ModuleItem("Pedidos de Clientes", "Revendedores y encargos", Icons.Default.ShoppingCart, Color(0xFFEEF3FC)),
-        ModuleItem("Aprobar Revendedores", "Validar nuevos registros", Icons.Default.HowToReg, Color(0xFFEEF3FC)),
-        ModuleItem("Punto de Venta",  "Caja y cobro rápido",  Icons.Default.PointOfSale,   Color(0xFFEEF3FC)),
-        ModuleItem("Historial de Ventas", "Transacciones del día", Icons.Default.Receipt,  Color(0xFFEEF3FC)),
-        ModuleItem("Cierre del día",      "Consolidado por sucursal", Icons.Default.PointOfSale, Color(0xFFEEF3FC)),
-        ModuleItem("Cuadre sorpresa",     "Auditoría a cajas abiertas", Icons.Default.PointOfSale, Color(0xFFEEF3FC)),
+    // Ventas = el teal que la app ya usa en las categorias del POS.
+    ModuleSection("Ventas", Icons.Default.PointOfSale, Color(0xFF0D7A8C), Color(0xFFD4EFF3), listOf(
+        ModuleItem("Productos",       "Catálogo y precios",   Icons.Default.BakeryDining),
+        ModuleItem("Listas de Precios", "Canales y mayoreo",  Icons.Default.Sell),
+        ModuleItem("Pedidos de Clientes", "Revendedores y encargos", Icons.Default.ShoppingCart),
+        ModuleItem("Aprobar Revendedores", "Validar nuevos registros", Icons.Default.HowToReg),
+        ModuleItem("Punto de Venta",  "Caja y cobro rápido",  Icons.Default.PointOfSale),
+        ModuleItem("Historial de Ventas", "Transacciones del día", Icons.Default.Receipt),
+        ModuleItem("Cierre del día",      "Consolidado por sucursal", Icons.Default.PointOfSale),
+        ModuleItem("Cuadre sorpresa",     "Auditoría a cajas abiertas", Icons.Default.PointOfSale),
     )),
-    ModuleSection("Administración", Icons.Default.Settings, CoffeeBrown, listOf(
-        ModuleItem("Configuración",        "Código de invitación y entregas", Icons.Default.Settings, Color(0xFFE0E8F0)),
-        ModuleItem("Proveedores",          "Gestión externa",      Icons.Default.Business,    Color(0xFFE0E8F0)),
-        ModuleItem("Gastos",               "Control por sucursal", Icons.Default.Receipt,     Color(0xFFE0E8F0)),
-        ModuleItem("Sucursales",           "Gestión de locales",   Icons.Default.Store,       Color(0xFFE0E8F0)),
-        ModuleItem("Usuarios",             "Accesos y permisos",   Icons.Default.People,      Color(0xFFE0E8F0)),
-        ModuleItem("Colaboradores",        "Equipo de trabajo",    Icons.Default.Badge,       Color(0xFFE0E8F0)),
-        ModuleItem("Descriptores de Puestos", "Perfiles y funciones", Icons.Default.WorkOutline, Color(0xFFE0E8F0)),
-        ModuleItem("Turnos",               "Configurar jornadas",  Icons.Default.Schedule,    Color(0xFFE0E8F0)),
-        ModuleItem("Activos Fijos",        "Patrimonio y mantenimiento", Icons.Default.Construction, Color(0xFFE0E8F0)),
-        ModuleItem("Cajas Registradoras",  "Configurar cajas POS",       Icons.Default.PointOfSale,  Color(0xFFE0E8F0)),
-        ModuleItem("Categorías POS",       "Agrupar productos para venta", Icons.Default.Sell,         Color(0xFFE0E8F0)),
+    // Administracion = se toca una vez al mes; que se apague es correcto.
+    ModuleSection("Administración", Icons.Default.Settings, BrandColors.MutedSlate, BrandColors.Sand, listOf(
+        ModuleItem("Configuración",        "Código de invitación y entregas", Icons.Default.Settings),
+        ModuleItem("Proveedores",          "Gestión externa",      Icons.Default.Business),
+        ModuleItem("Gastos",               "Control por sucursal", Icons.Default.Receipt),
+        ModuleItem("Sucursales",           "Gestión de locales",   Icons.Default.Store),
+        ModuleItem("Usuarios",             "Accesos y permisos",   Icons.Default.People),
+        ModuleItem("Colaboradores",        "Equipo de trabajo",    Icons.Default.Badge),
+        ModuleItem("Descriptores de Puestos", "Perfiles y funciones", Icons.Default.WorkOutline),
+        ModuleItem("Turnos",               "Configurar jornadas",  Icons.Default.Schedule),
+        ModuleItem("Activos Fijos",        "Patrimonio y mantenimiento", Icons.Default.Construction),
+        ModuleItem("Cajas Registradoras",  "Configurar cajas POS",       Icons.Default.PointOfSale),
+        ModuleItem("Categorías POS",       "Agrupar productos para venta", Icons.Default.Sell),
     ))
 )
 
@@ -181,16 +207,50 @@ fun HomeScreen(
     onNavigateToCustomerOrders: () -> Unit = {},
     onNavigateToOrganizationSettings: () -> Unit = {},
     onNavigateToResellerApproval: () -> Unit = {},
+    onNavigateToNotificationTarget: (targetScreen: String, targetId: String) -> Unit = { _, _ -> },
     viewModel: AuthViewModel,
-    homeViewModel: HomeViewModel
+    homeViewModel: HomeViewModel,
+    notificationViewModel: NotificationViewModel
 ) {
     val state by viewModel.uiState.collectAsState()
     val homeState by homeViewModel.uiState.collectAsState()
+    val notificationState by notificationViewModel.uiState.collectAsState()
     val user = state.user
     var menuExpanded by remember { mutableStateOf(false) }
+    var showNotifications by remember { mutableStateOf(false) }
+    var showInviteCodeDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(user?.id) {
         user?.let { homeViewModel.ensureLoadedFor(it) }
+    }
+    // La campana se suscribe desde Home porque es la pantalla que siempre está
+    // en el backstack: así el badge sigue vivo aunque el usuario ande en otro
+    // módulo y vuelva.
+    LaunchedEffect(user?.id, user?.orgId) {
+        val u = user ?: return@LaunchedEffect
+        notificationViewModel.observe(u.orgId, u)
+        notificationViewModel.registerCurrentDevice(u.orgId, u.id)
+    }
+
+    if (showInviteCodeDialog) {
+        InviteCodeDialog(
+            code = state.inviteCode,
+            onDismiss = { showInviteCodeDialog = false }
+        )
+    }
+
+    if (showNotifications && user != null) {
+        NotificationsSheet(
+            notifications = notificationState.notifications,
+            currentUserId = user.id,
+            onDismiss = { showNotifications = false },
+            onMarkAllRead = { notificationViewModel.markAllAsRead(user.orgId, user.id) },
+            onOpen = { notification ->
+                notificationViewModel.markAsRead(user.orgId, notification.id, user.id)
+                showNotifications = false
+                onNavigateToNotificationTarget(notification.targetScreen, notification.targetId)
+            }
+        )
     }
 
     fun navigate(title: String) {
@@ -238,27 +298,52 @@ fun HomeScreen(
     }
 
     Scaffold(
-        containerColor = Color(0xFFFDFBF7),
+        containerColor = BrandColors.Ivory,
         topBar = {
             TopAppBar(
                 title = {
-                    // Logo (recortado, aspecto ~2.8:1) tintado en blanco para resaltar sobre el header azul.
+                    // Variante invertida del wordmark: el azul va en blanco para resaltar sobre el
+                    // header azul, pero el naranja del croissant se conserva. Un ColorFilter.tint
+                    // sobre el logo normal teñía TODO de blanco y se perdía ese acento.
                     Image(
-                        painter = painterResource(Res.drawable.bakeos_logo),
+                        painter = painterResource(Res.drawable.bakeos_logo_light),
                         contentDescription = "BakeOS",
                         contentScale = ContentScale.Fit,
-                        colorFilter = ColorFilter.tint(Color.White),
-                        modifier = Modifier.height(40.dp)
+                        modifier = Modifier.height(32.dp)
                     )
                 },
                 actions = {
-                    IconButton(onClick = {}) {
-                        Icon(Icons.Default.Notifications, null, tint = Color.White.copy(alpha = 0.85f))
+                    BadgedBox(
+                        badge = {
+                            if (notificationState.unreadCount > 0) {
+                                Badge(containerColor = BrandColors.Accent, contentColor = BrandColors.OnAccent) {
+                                    Text(
+                                        if (notificationState.unreadCount > 9) "9+"
+                                        else "${notificationState.unreadCount}",
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                    ) {
+                        IconButton(onClick = { showNotifications = true }) {
+                            Icon(
+                                Icons.Default.Notifications,
+                                "Avisos",
+                                tint = if (notificationState.unreadCount > 0) Color.White
+                                       else Color.White.copy(alpha = 0.85f)
+                            )
+                        }
                     }
                     IconButton(onClick = { menuExpanded = true }) {
                         Icon(Icons.Default.MoreVert, null, tint = Color.White)
                     }
                     DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Compartir código de la panadería") },
+                            leadingIcon = { Icon(Icons.Default.Share, null, tint = PrimaryBlue) },
+                            onClick = { menuExpanded = false; showInviteCodeDialog = true }
+                        )
                         DropdownMenuItem(
                             text = { Text("Cerrar sesión") },
                             leadingIcon = { Icon(Icons.AutoMirrored.Filled.ExitToApp, null, tint = PrimaryBlue) },
@@ -277,7 +362,7 @@ fun HomeScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 20.dp)
         ) {
             item {
-                GreetingHeader(user)
+                GreetingHeader(user, state.orgName)
                 Spacer(Modifier.height(16.dp))
             }
             if (homeState.alerts.isNotEmpty()) {
@@ -333,7 +418,8 @@ fun HomeScreen(
                 item(key = "grid_${section.title}") {
                     ResponsiveGrid(
                         modules = section.modules,
-                        iconTint = section.accentColor,
+                        iconTint = section.iconColor,
+                        iconBg = section.container,
                         onModuleClick = { navigate(it.title) }
                     )
                     Spacer(Modifier.height(28.dp))
@@ -345,7 +431,7 @@ fun HomeScreen(
 }
 
 @Composable
-private fun GreetingHeader(user: User?) {
+private fun GreetingHeader(user: User?, orgName: String?) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -358,34 +444,103 @@ private fun GreetingHeader(user: User?) {
                 fontWeight = FontWeight.ExtraBold,
                 color = PrimaryBlue
             )
+            val roleLabel = when (user?.role ?: UserRole.EMPLOYEE) {
+                UserRole.OWNER    -> "Propietario"
+                UserRole.ADMIN    -> "Administrador"
+                UserRole.MANAGER  -> "Encargado"
+                UserRole.EMPLOYEE -> "Empleado"
+                UserRole.RESELLER -> "Revendedor"
+            }
             Text(
-                text = when (user?.role ?: UserRole.EMPLOYEE) {
-                    UserRole.OWNER    -> "Propietario · BakeOS"
-                    UserRole.ADMIN    -> "Administrador"
-                    UserRole.MANAGER  -> "Encargado"
-                    UserRole.EMPLOYEE -> "Empleado"
-                    UserRole.RESELLER -> "Revendedor"
-                },
+                text = if (!orgName.isNullOrBlank()) "$roleLabel · $orgName" else roleLabel,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MutedText
             )
         }
-        Surface(
-            shape = CircleShape,
-            color = PrimaryBlue,
-            border = BorderStroke(2.dp, CoffeeBrown),
-            modifier = Modifier.size(50.dp)
-        ) {
-            Text(
-                text = (user?.displayName?.firstOrNull() ?: 'U').toString().uppercase(),
-                color = Color.White,
-                fontWeight = FontWeight.Bold,
-                style = MaterialTheme.typography.titleMedium,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.wrapContentSize(Alignment.Center)
-            )
+        if (!user?.photoUrl.isNullOrBlank()) {
+            Box(
+                modifier = Modifier
+                    .size(50.dp)
+                    .clip(CircleShape)
+                    .border(2.dp, CoffeeBrown, CircleShape)
+            ) {
+                ProductImage(
+                    imageUrl = user?.photoUrl,
+                    contentDescription = "Foto de perfil",
+                    modifier = Modifier.size(50.dp)
+                )
+            }
+        } else {
+            Surface(
+                shape = CircleShape,
+                color = PrimaryBlue,
+                border = BorderStroke(2.dp, CoffeeBrown),
+                modifier = Modifier.size(50.dp)
+            ) {
+                Text(
+                    text = (user?.displayName?.firstOrNull() ?: 'U').toString().uppercase(),
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleMedium,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.wrapContentSize(Alignment.Center)
+                )
+            }
         }
     }
+}
+
+@Composable
+private fun InviteCodeDialog(code: String?, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Compartir código de la panadería") },
+        text = {
+            Column {
+                Text(
+                    "Este código sirve para invitar a otros colaboradores a unirse a esta " +
+                        "panadería. Después de que se registren con él, el administrador " +
+                        "deberá otorgarles los permisos correspondientes — no quedan con " +
+                        "acceso automático.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MutedText
+                )
+                Spacer(Modifier.height(14.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(PrimaryBlue.copy(alpha = 0.08f), RoundedCornerShape(10.dp))
+                        .padding(vertical = 14.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = code?.ifEmpty { "—" } ?: "—",
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = PrimaryBlue,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !code.isNullOrEmpty(),
+                onClick = {
+                    shareText(
+                        text = "Únete a mi panadería en BakeOS con este código: $code",
+                        subject = "Código de invitación"
+                    )
+                }
+            ) {
+                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Compartir")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cerrar") }
+        }
+    )
 }
 
 @Composable
@@ -561,6 +716,8 @@ private fun navigateAlert(alert: HomeAlert, navigate: (String) -> Unit) {
         AlertTarget.LATE_PRODUCTION_ORDER  -> "Pedidos"
         AlertTarget.OVERDUE_CASH_SESSION   -> "Cierre del día"
         AlertTarget.DISPATCH_PRICE_MISSING -> "Listas de Precios"
+        AlertTarget.OVERDUE_PURCHASE       -> "Compras"
+        AlertTarget.EXPIRING_INGREDIENT    -> "Insumos"
     }
     navigate(title)
 }
@@ -575,10 +732,10 @@ private fun SectionHeader(section: ModuleSection) {
         Box(
             modifier = Modifier
                 .size(30.dp)
-                .background(section.accentColor.copy(alpha = 0.12f), RoundedCornerShape(8.dp)),
+                .background(section.container, RoundedCornerShape(8.dp)),
             contentAlignment = Alignment.Center
         ) {
-            Icon(section.icon, null, tint = section.accentColor, modifier = Modifier.size(17.dp))
+            Icon(section.icon, null, tint = section.iconColor, modifier = Modifier.size(17.dp))
         }
 
 
@@ -596,6 +753,7 @@ private fun SectionHeader(section: ModuleSection) {
 private fun ResponsiveGrid(
     modules: List<ModuleItem>,
     iconTint: Color,
+    iconBg: Color,
     onModuleClick: (ModuleItem) -> Unit
 ) {
     BoxWithConstraints {
@@ -618,6 +776,7 @@ private fun ResponsiveGrid(
                             ModuleCard(
                                 module = modules[idx],
                                 iconTint = iconTint,
+                                iconBg = iconBg,
                                 modifier = Modifier.weight(1f),
                                 onClick = { onModuleClick(modules[idx]) }
                             )
@@ -635,6 +794,7 @@ private fun ResponsiveGrid(
 private fun ModuleCard(
     module: ModuleItem,
     iconTint: Color,
+    iconBg: Color,
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
@@ -652,7 +812,7 @@ private fun ModuleCard(
             Box(
                 modifier = Modifier
                     .size(36.dp)
-                    .background(module.color, RoundedCornerShape(10.dp)),
+                    .background(iconBg, RoundedCornerShape(10.dp)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(module.icon, null, tint = iconTint, modifier = Modifier.size(20.dp))

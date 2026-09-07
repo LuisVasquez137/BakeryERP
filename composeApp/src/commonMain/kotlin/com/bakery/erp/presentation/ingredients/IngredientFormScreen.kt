@@ -66,12 +66,18 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.INGREDIENT_CATEGORIES
+import com.bakery.erp.model.IngredientUsage
+import com.bakery.erp.model.SUPPLY_CATEGORIES
+import com.bakery.erp.ui.BarcodeField
 import com.bakery.erp.model.Ingredient
 import com.bakery.erp.model.PurchaseFormat
 import com.bakery.erp.model.Supplier
+import com.bakery.erp.model.countUnitsPer
 import com.bakery.erp.model.largestUnit
+import com.bakery.erp.util.gramsToOz
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.presentation.suppliers.SupplierViewModel
+import com.bakery.erp.ui.LoadingOverlay
 import kotlin.random.Random
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -103,11 +109,23 @@ fun IngredientFormScreen(
     // ── Form state ────────────────────────────────────────────────────────────
     var name by rememberSaveable { mutableStateOf(existing?.name ?: "") }
     var category by rememberSaveable { mutableStateOf(existing?.category ?: "") }
+    // Materia prima o suministro de operación. El insumo se almacena igual en los dos
+    // casos; lo que cambia es dónde se ofrece (las recetas solo ven materia prima).
+    var usage by rememberSaveable { mutableStateOf(existing?.usage ?: IngredientUsage.PRODUCTION) }
+    var barcode by rememberSaveable { mutableStateOf(existing?.barcode ?: "") }
     var categoryExpanded by remember { mutableStateOf(false) }
     var allowedUnits by remember { mutableStateOf(existing?.allowedUnits ?: emptyList<String>()) }
+    // Peso de UNA unidad, en gramos. Solo se pide a insumos que se cuentan (huevo).
+    var unitWeightGrams by rememberSaveable {
+        mutableStateOf(
+            existing?.unitWeightGrams?.takeIf { it > 0.0 }
+                ?.let { it.fmt(2).trimEnd('0').trimEnd('.') } ?: ""
+        )
+    }
     var stockAlert by rememberSaveable { mutableStateOf(existing?.stockAlert?.toString() ?: "") }
     var notes by rememberSaveable { mutableStateOf(existing?.notes ?: "") }
     var active by rememberSaveable { mutableStateOf(existing?.active ?: true) }
+    var isPerishable by rememberSaveable { mutableStateOf(existing?.isPerishable ?: false) }
     var purchaseFormats by remember { mutableStateOf(existing?.purchaseFormats ?: emptyList<PurchaseFormat>()) }
 
     var showFormatDialog by remember { mutableStateOf(false) }
@@ -153,17 +171,27 @@ fun IngredientFormScreen(
         )
     }
 
+    val categoryOptions = if (usage == IngredientUsage.SUPPLY) SUPPLY_CATEGORIES
+                          else INGREDIENT_CATEGORIES
+
     fun buildIngredient() = Ingredient(
         id = existing?.id ?: "",
         name = name.trim().replaceFirstChar { it.uppercase() },
         category = category,
+        usage = usage,
+        barcode = barcode.trim(),
         allowedUnits = allowedUnits,
+        unitWeightGrams = if (allowedUnits.any { countUnitsPer(it) != null })
+            unitWeightGrams.replace(',', '.').toDoubleOrNull()?.takeIf { it > 0.0 } ?: 0.0
+        else 0.0,
         purchaseFormats = purchaseFormats,
         stockAlert = stockAlert.toDoubleOrNull(),
+        isPerishable = isPerishable,
         notes = notes.trim().ifEmpty { null },
         active = active
     )
 
+    Box(Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -199,6 +227,37 @@ fun IngredientFormScreen(
                 // ── General ───────────────────────────────────────────────────
                 SectionHeader("General")
 
+                // Materia prima vs. suministro. Va PRIMERO porque decide las categorías
+                // que se ofrecen abajo y si el insumo aparecerá o no en las recetas.
+                Column(Modifier.fillMaxWidth()) {
+                    Text("¿Para qué es?", style = MaterialTheme.typography.labelLarge)
+                    Spacer(Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        IngredientUsage.entries.forEach { opt ->
+                            FilterChip(
+                                selected = usage == opt,
+                                onClick = {
+                                    if (usage != opt) {
+                                        usage = opt
+                                        // La categoría anterior pertenece al otro catálogo:
+                                        // dejarla puesta guardaría "Harinas" en un cloro.
+                                        category = ""
+                                    }
+                                },
+                                label = { Text(opt.label) }
+                            )
+                        }
+                    }
+                    Text(
+                        text = if (usage == IngredientUsage.PRODUCTION)
+                            "Entra a recetas y se descuenta al producir."
+                        else "Se cuenta y se repone, pero no entra a recetas. Su compra se registra como gasto del mes.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it; nameError = false },
@@ -225,7 +284,9 @@ fun IngredientFormScreen(
                         modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable)
                     )
                     ExposedDropdownMenu(expanded = categoryExpanded, onDismissRequest = { categoryExpanded = false }) {
-                        INGREDIENT_CATEGORIES.forEach { opt ->
+                        // Las categorías siguen al tipo de uso: "Harinas" no le dice nada
+                        // al cloro, y "Limpieza" no le dice nada a la masa.
+                        categoryOptions.forEach { opt ->
                             DropdownMenuItem(
                                 text = { Text(opt) },
                                 onClick = { category = opt; categoryExpanded = false },
@@ -234,6 +295,12 @@ fun IngredientFormScreen(
                         }
                     }
                 }
+
+                BarcodeField(
+                    value = barcode,
+                    onValueChange = { barcode = it },
+                    supportingText = "Opcional. Sirve para encontrarlo al capturar una factura."
+                )
 
                 // ── Unidades de medida (multi-selección) ─────────────────────
                 Column(modifier = Modifier.fillMaxWidth()) {
@@ -310,6 +377,40 @@ fun IngredientFormScreen(
                             modifier = Modifier.padding(top = 4.dp)
                         )
                     }
+                }
+
+                // ── Peso por unidad (solo insumos que se cuentan) ─────────────
+                // El stock del huevo se lleva en unidades, pero la receta lo pide
+                // en peso. Este es el único puente entre ambos: sin él la receta
+                // no puede calcular el % del panadero ni descontar bien el Kardex.
+                if (allowedUnits.any { countUnitsPer(it) != null }) {
+                    OutlinedTextField(
+                        value = unitWeightGrams,
+                        onValueChange = { txt ->
+                            if (txt.isEmpty() || txt.matches(Regex("^\\d*[.,]?\\d*$"))) {
+                                unitWeightGrams = txt
+                            }
+                        },
+                        label = { Text("Peso de una unidad (g)") },
+                        placeholder = { Text("Ej. 50 (un huevo)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        supportingText = {
+                            val g = unitWeightGrams.replace(',', '.').toDoubleOrNull()
+                            if (g != null && g > 0.0) {
+                                Text(
+                                    "= ${g.gramsToOz().fmt(2)} oz por unidad · " +
+                                        "una docena pesa ${(g * 12).gramsToOz().fmt(2)} oz"
+                                )
+                            } else {
+                                Text(
+                                    "Necesario para usar este insumo en recetas: el % del " +
+                                        "panadero se calcula por peso. El stock sigue en unidades."
+                                )
+                            }
+                        }
+                    )
                 }
 
                 Row(
@@ -416,6 +517,25 @@ fun IngredientFormScreen(
                     supportingText = { Text("Recibirás una alerta cuando el stock baje de este nivel (en presentaciones o unidad mayor)") }
                 )
 
+                // El campo de vencimiento en el formulario de compra solo aparece para estos:
+                // pedírselo a la harina a granel o a la sal sería ruido donde la captura debe
+                // ser rápida.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Caduca", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "Al comprarlo se pedirá la fecha de vencimiento y el Home avisará antes de que caduque",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(checked = isPerishable, onCheckedChange = { isPerishable = it })
+                }
+
                 OutlinedTextField(
                     value = notes,
                     onValueChange = { notes = it },
@@ -454,6 +574,8 @@ fun IngredientFormScreen(
                 Spacer(Modifier.padding(16.dp))
             }
         }
+    }
+    LoadingOverlay(visible = state.isLoading)
     }
 }
 

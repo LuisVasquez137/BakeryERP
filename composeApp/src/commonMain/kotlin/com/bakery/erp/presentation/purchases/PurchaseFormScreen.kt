@@ -1,6 +1,7 @@
 ﻿package com.bakery.erp.presentation.purchases
 
 import com.bakery.erp.util.fmt
+import com.bakery.erp.util.fmtMoney
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -15,7 +16,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -25,12 +29,17 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -50,6 +59,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -62,18 +72,34 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.bakery.erp.ui.isBarcodeScanSupported
+import com.bakery.erp.ui.rememberBarcodeScanner
 import com.bakery.erp.model.Branch
+import com.bakery.erp.model.DEFAULT_TAX_RATE_PERCENT
+import com.bakery.erp.model.TaxBreakdown
 import com.bakery.erp.model.Ingredient
+import com.bakery.erp.model.Product
 import com.bakery.erp.model.PurchaseLine
+import com.bakery.erp.model.PurchaseLineKind
 import com.bakery.erp.model.PurchaseStatus
 import com.bakery.erp.model.Supplier
 import com.bakery.erp.model.convertUnits
 import com.bakery.erp.model.largestUnit
+import com.bakery.erp.model.purchaseTotal
+import com.bakery.erp.model.taxBreakdownFromGross
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.ui.AdaptiveContainer
+import com.bakery.erp.ui.ImagePickerButton
+import com.bakery.erp.ui.LoadingOverlay
+import com.bakery.erp.ui.theme.BrandColors
 import kotlin.time.Clock
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -82,7 +108,9 @@ fun PurchaseFormScreen(
     onNavigateBack: () -> Unit,
     onNavigateToSuppliers: () -> Unit,
     authViewModel: AuthViewModel,
-    viewModel: PurchaseViewModel
+    viewModel: PurchaseViewModel,
+    /** null = alta. Con id, la pantalla edita esa compra. */
+    purchaseId: String? = null
 ) {
     val state by viewModel.uiState.collectAsState()
     val authState by authViewModel.uiState.collectAsState()
@@ -93,43 +121,153 @@ fun PurchaseFormScreen(
     var notes by rememberSaveable { mutableStateOf("") }
     var purchaseStatus by rememberSaveable { mutableStateOf(PurchaseStatus.RECEIVED_PENDING_PAYMENT) }
     var ingredientSearch by rememberSaveable { mutableStateOf("") }
+    // Borrador del proveedor ocasional. Vive local hasta que se confirma con "Usar": si
+    // fuera al ViewModel en cada tecla, cada letra reiniciaría el catálogo del formulario.
+    var occasionalDraft by rememberSaveable { mutableStateOf("") }
     var showReview by rememberSaveable { mutableStateOf(false) }
+    // La fecha ya no es `now` fijo: las facturas se capturan en tandas, y con la fecha de hoy
+    // el vencimiento de una factura de la semana pasada nacía corrido.
+    var purchaseDate by rememberSaveable { mutableStateOf(Clock.System.now().toEpochMilliseconds()) }
+    var showDatePicker by rememberSaveable { mutableStateOf(false) }
+    var creditDaysStr by rememberSaveable { mutableStateOf("") }
+    var creditTouched by rememberSaveable { mutableStateOf(false) }
+    var applyTax by rememberSaveable { mutableStateOf(true) }
+    var declaredTotalStr by rememberSaveable { mutableStateOf("") }
+    var showOnlySelected by rememberSaveable { mutableStateOf(false) }
+    var showAddIngredient by rememberSaveable { mutableStateOf(false) }
+    // ByteArray no es Parcelable: `remember`, no `rememberSaveable` (regla del proyecto).
+    var invoicePhotoBytes by remember { mutableStateOf<ByteArray?>(null) }
 
-    LaunchedEffect(companyId, currentUser) {
-        if (companyId.isNotEmpty() && currentUser != null) viewModel.loadFormData(companyId, currentUser)
+    // Los días de crédito los propone el proveedor y el usuario puede pisarlos para esta
+    // factura; `creditTouched` evita que cambiar de proveedor borre lo que ya escribió.
+    LaunchedEffect(state.selectedSupplier?.id) {
+        if (!creditTouched) creditDaysStr = (state.selectedSupplier?.paymentTermsDays ?: 0).toString()
+    }
+    val creditDays = creditDaysStr.toIntOrNull()?.coerceIn(0, 365) ?: 0
+    val dueDate = if (creditDays > 0) purchaseDate + creditDays * 86_400_000L else 0L
+
+    val grandTotal = state.draftLines.purchaseTotal()
+    val taxRate = if (applyTax) DEFAULT_TAX_RATE_PERCENT else 0.0
+    val breakdown = taxBreakdownFromGross(grandTotal, taxRate)
+    val declaredTotal = declaredTotalStr.replace(",", ".").toDoubleOrNull() ?: 0.0
+
+    // Insumos perecederos ya capturados: son los únicos a los que se les pide vencimiento.
+    val perishableLines = remember(state.draftLines, state.supplierIngredients) {
+        val perishableIds = state.supplierIngredients.filter { it.isPerishable }.mapTo(HashSet()) { it.id }
+        state.draftLines.filter { it.ingredientId in perishableIds && it.quantityReceived > 0 }
+            .sortedBy { it.ingredientName.lowercase() }
+    }
+
+    val isEditing = purchaseId != null
+    // Vacío en alta (estable), y pasa a ser el id de la compra en cuanto la edición termina
+    // de cargar — ese cambio es el que hace que las filas se re-inicialicen con sus valores.
+    val formKey = state.editingPurchase?.id.orEmpty()
+
+    LaunchedEffect(companyId, currentUser, purchaseId) {
+        if (companyId.isEmpty() || currentUser == null) return@LaunchedEffect
+        // En edición NO se llama loadFormData: pisaría la sucursal y el proveedor de la
+        // compra con los valores por defecto del alta.
+        if (purchaseId == null) viewModel.loadFormData(companyId, currentUser)
+        else viewModel.loadPurchaseForEdit(companyId, purchaseId, currentUser)
+    }
+
+    // Siembra los campos del encabezado una sola vez, cuando la compra termina de cargar.
+    LaunchedEffect(state.editingPurchase?.id) {
+        val editing = state.editingPurchase ?: return@LaunchedEffect
+        invoiceNumber = editing.invoiceNumber.orEmpty()
+        notes = editing.notes.orEmpty()
+        purchaseStatus = editing.status
+        purchaseDate = editing.date
+        creditDaysStr = editing.paymentTermsDays.toString()
+        creditTouched = true
+        applyTax = editing.taxRatePercent > 0.0
+        declaredTotalStr = if (editing.declaredTotal > 0.0) editing.declaredTotal.fmt(2) else ""
     }
     LaunchedEffect(state.isSaved) {
-        if (state.isSaved) { viewModel.resetForm(); onNavigateBack() }
+        if (state.isSaved) { viewModel.cancelEdit(); viewModel.resetForm(); onNavigateBack() }
     }
     LaunchedEffect(state.error) {
         state.error?.let { snackbarHostState.showSnackbar(it); viewModel.clearError() }
     }
-    LaunchedEffect(state.selectedSupplier) { ingredientSearch = "" }
+    // En edición el proveedor viene fijado por la compra: limpiar la búsqueda al "cambiarlo"
+    // no aplica, y reaccionar al objeto entero borraría el filtro en cada recomposición.
+    LaunchedEffect(state.selectedSupplier?.id) { if (!isEditing) ingredientSearch = "" }
 
-    val filteredIngredients = remember(state.supplierIngredients, ingredientSearch) {
-        if (ingredientSearch.isBlank()) state.supplierIngredients
-        else state.supplierIngredients.filter { it.name.contains(ingredientSearch.trim(), ignoreCase = true) }
+    // Escanear = buscar. El código encuentra el renglón y lo deja solo en pantalla; la
+    // cantidad se sigue tecleando, porque la factura dice cuántos vinieron, no el empaque.
+    var scanMessage by remember { mutableStateOf<String?>(null) }
+    val scanBarcode = rememberBarcodeScanner { code ->
+        when (val match = viewModel.findByBarcode(code)) {
+            is BarcodeMatch.OfIngredient -> {
+                ingredientSearch = match.ingredient.name
+                showOnlySelected = false
+            }
+            is BarcodeMatch.OfProduct -> {
+                ingredientSearch = ""
+                scanMessage = "${match.product.name} está en la sección de reventa, más abajo."
+            }
+            null -> scanMessage = "Ningún insumo ni producto tiene el código $code."
+        }
+    }
+    LaunchedEffect(scanMessage) {
+        scanMessage?.let { snackbarHostState.showSnackbar(it); scanMessage = null }
+    }
+
+    val filteredIngredients = remember(
+        state.supplierIngredients, ingredientSearch, showOnlySelected, state.draftLines
+    ) {
+        val chosen = state.draftLines.mapTo(HashSet()) { it.ingredientId }
+        state.supplierIngredients
+            .filter { ingredientSearch.isBlank() || it.name.contains(ingredientSearch.trim(), ignoreCase = true) }
+            .filter { !showOnlySelected || it.id in chosen }
     }
 
     fun doSave() {
-        if (currentUser != null) {
+        if (currentUser == null) return
+        if (isEditing) {
+            viewModel.updatePurchase(
+                companyId = companyId,
+                currentUser = currentUser,
+                invoiceNumber = invoiceNumber.trim().ifEmpty { null },
+                notes = notes.trim().ifEmpty { null },
+                date = purchaseDate,
+                status = purchaseStatus,
+                paymentTermsDays = creditDays,
+                dueDate = dueDate,
+                taxRatePercent = taxRate,
+                declaredTotal = declaredTotal,
+                invoicePhotoBytes = invoicePhotoBytes
+            )
+            return
+        }
+        run {
             viewModel.savePurchase(
                 companyId = companyId,
                 currentUser = currentUser,
                 invoiceNumber = invoiceNumber.trim().ifEmpty { null },
                 notes = notes.trim().ifEmpty { null },
-                date = Clock.System.now().toEpochMilliseconds(),
-                status = purchaseStatus
+                date = purchaseDate,
+                status = purchaseStatus,
+                paymentTermsDaysOverride = creditDays,
+                dueDateOverride = dueDate,
+                taxRatePercent = taxRate,
+                declaredTotal = declaredTotal,
+                invoicePhotoBytes = invoicePhotoBytes
             )
         }
     }
 
+    Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Text(
-                        if (showReview) "Revisar pedido" else "Nueva Compra",
+                        when {
+                            showReview -> "Revisar compra"
+                            isEditing -> "Editar compra"
+                            else -> "Nueva Compra"
+                        },
                         fontWeight = FontWeight.SemiBold
                     )
                 },
@@ -164,15 +302,23 @@ fun PurchaseFormScreen(
                         onConfirm = ::doSave
                     )
                 } else {
+                  Column(modifier = Modifier.fillMaxSize()) {
                     Column(
                         modifier = Modifier
-                            .fillMaxSize()
+                            .weight(1f)
+                            .fillMaxWidth()
                             .verticalScroll(rememberScrollState())
                             .padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
                         // ── PASO 1: Sucursal ──────────────────────────────────────────
-                        StepHeader("1. Sucursal destino")
+                        // Con una sola sucursal accesible el ViewModel ya la eligió: mostrarla
+                        // como "paso" gastaba el espacio más caro de la pantalla en algo que
+                        // nadie puede cambiar.
+                        val singleBranch = state.accessibleBranches.size == 1 && state.selectedBranch != null
+                        if (!singleBranch) {
+                            StepHeader("1. Sucursal destino")
+                        }
                         when {
                             state.isLoadingBranches -> LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                             state.accessibleBranches.isEmpty() -> InfoCard(
@@ -183,39 +329,84 @@ fun PurchaseFormScreen(
                                 branches = state.accessibleBranches,
                                 onSelect = { viewModel.selectBranch(it) }
                             )
+                            singleBranch -> Text(
+                                "Ingresa a ${state.selectedBranch!!.name}",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                             else -> SelectedItem(
                                 label = state.selectedBranch!!.name,
-                                onClear = if (state.accessibleBranches.size > 1) ({ viewModel.selectBranch(null) }) else null
+                                onClear = { viewModel.selectBranch(null) }
+                            )
+                        }
+
+                        if (isEditing) {
+                            EditPurchaseNotice(
+                                status = state.editingPurchase?.status ?: purchaseStatus,
+                                isLoading = state.isLoadingEdit
                             )
                         }
 
                         // ── PASO 2: Proveedor ─────────────────────────────────────────
                         if (state.selectedBranch != null) {
-                            HorizontalDivider()
-                            StepHeader("2. Proveedor")
+                            if (!singleBranch) HorizontalDivider()
+                            StepHeader(if (singleBranch) "1. Proveedor" else "2. Proveedor")
+                            val occasional = state.occasionalSupplierName
+                            val supplierChosen =
+                                state.selectedSupplier != null || occasional.isNotBlank()
                             when {
-                                state.selectedSupplier == null -> SupplierSelector(
-                                    suppliers = state.suppliers,
-                                    onSelect = { viewModel.selectSupplier(companyId, it) },
-                                    onNavigateToSuppliers = onNavigateToSuppliers
-                                )
+                                !supplierChosen -> {
+                                    SupplierSelector(
+                                        suppliers = state.suppliers,
+                                        onSelect = { viewModel.selectSupplier(companyId, it) },
+                                        onNavigateToSuppliers = onNavigateToSuppliers
+                                    )
+                                    // Proveedor ocasional: la tienda de la esquina, el puesto
+                                    // del mercado. No se da de alta como proveedor a propósito
+                                    // —al que le comprás una vez no es un proveedor— y sin esta
+                                    // salida había que inventar una ficha para poder capturar.
+                                    Spacer(Modifier.height(8.dp))
+                                    OutlinedTextField(
+                                        value = occasionalDraft,
+                                        onValueChange = { occasionalDraft = it },
+                                        label = { Text("O escribí dónde compraste") },
+                                        placeholder = { Text("Ej: la tienda de la esquina") },
+                                        supportingText = {
+                                            Text("No se guarda como proveedor. Para una compra que no se repite.")
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true,
+                                        trailingIcon = if (occasionalDraft.isNotBlank()) ({
+                                            TextButton(onClick = {
+                                                viewModel.setOccasionalSupplier(companyId, occasionalDraft)
+                                            }) { Text("Usar") }
+                                        }) else null
+                                    )
+                                }
                                 else -> {
                                     SelectedItem(
-                                        label = state.selectedSupplier!!.company,
-                                        onClear = { viewModel.selectSupplier(companyId, null) }
+                                        label = state.selectedSupplier?.company ?: occasional,
+                                        onClear = {
+                                            occasionalDraft = ""
+                                            viewModel.setOccasionalSupplier(companyId, "")
+                                            viewModel.selectSupplier(companyId, null)
+                                        }
                                     )
 
-                                    OutlinedTextField(
-                                        value = invoiceNumber,
-                                        onValueChange = { invoiceNumber = it },
-                                        label = { Text("Nº de factura (opcional)") },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        singleLine = true
+                                    InvoiceHeaderFields(
+                                        invoiceNumber = invoiceNumber,
+                                        onInvoiceNumberChange = { invoiceNumber = it },
+                                        date = purchaseDate,
+                                        onPickDate = { showDatePicker = true },
+                                        creditDaysStr = creditDaysStr,
+                                        onCreditDaysChange = { creditTouched = true; creditDaysStr = it },
+                                        dueDate = dueDate,
+                                        supplierDefaultDays = state.selectedSupplier?.paymentTermsDays ?: 0
                                     )
 
                                     // ── PASO 3: Insumos ───────────────────────────────
                                     HorizontalDivider()
-                                    StepHeader("3. Insumos recibidos")
+                                    StepHeader(if (singleBranch) "2. Insumos recibidos" else "3. Insumos recibidos")
 
                                     if (currentUser != null) {
                                         Text(
@@ -227,12 +418,70 @@ fun PurchaseFormScreen(
 
                                     if (state.isLoadingIngredients) {
                                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                                    } else if (state.supplierIngredients.isEmpty()) {
+                                    } else if (
+                                        // Con servicios encendidos SIEMPRE hay algo que capturar:
+                                        // una factura de mantenimiento no necesita catálogo. Sin
+                                        // esta condición, el aviso de "proveedor sin insumos"
+                                        // tapaba la única sección que servía para esa factura.
+                                        // Un proveedor ocasional tampoco tiene catálogo, y ahí
+                                        // el camino es la línea suelta, no un aviso.
+                                        !state.usesServices &&
+                                        state.selectedSupplier != null &&
+                                        state.supplierIngredients.isEmpty() &&
+                                        state.supplierSupplies.isEmpty() &&
+                                        state.supplierResaleProducts.isEmpty()
+                                    ) {
                                         InfoCard(
-                                            "Este proveedor no tiene insumos asociados. " +
-                                            "Agregá una presentación de compra en el detalle de un insumo."
+                                            "Este proveedor no tiene insumos ni productos de reventa asociados. " +
+                                            "Agregá una presentación de compra en el detalle de un insumo, o " +
+                                            "asígnale este proveedor a un producto de reventa."
                                         )
                                     } else {
+                                      if (state.selectedSupplier == null) {
+                                          // Proveedor ocasional: no hay catálogo que recorrer,
+                                          // se agregan líneas sueltas una por una.
+                                          Text(
+                                              "Compra sin proveedor registrado: agregá cada insumo " +
+                                                  "con su cantidad y lo que costó.",
+                                              style = MaterialTheme.typography.bodySmall,
+                                              color = MaterialTheme.colorScheme.onSurfaceVariant
+                                          )
+                                          LineToolbar(
+                                              lineCount = state.draftLines.size,
+                                              showOnlySelected = showOnlySelected,
+                                              onToggleOnlySelected = { showOnlySelected = !showOnlySelected },
+                                              onAddIngredient = { showAddIngredient = true },
+                                              onScanBarcode = if (isBarcodeScanSupported()) scanBarcode else null
+                                          )
+                                          LooseLinesList(
+                                              lines = state.draftLines.filter {
+                                                  it.lineKind != PurchaseLineKind.SERVICE
+                                              },
+                                              onRemove = { viewModel.removeDraftLine(it) }
+                                          )
+                                      }
+
+                                      if (state.supplierIngredients.isNotEmpty()) {
+                                        if (state.supplierSupplies.isNotEmpty() && state.usesSupplies) {
+                                            StepHeader("Materia prima")
+                                        }
+                                        // La pantalla muestra el catálogo del proveedor, no la
+                                        // factura: sin decirlo, no se entiende que hay que ir
+                                        // tocando "Agregar" en cada renglón que sí venga.
+                                        Text(
+                                            "Tocá \"Agregar\" en cada producto que traiga esta " +
+                                                "factura y anotá la cantidad. Solo lo que agregues " +
+                                                "cuenta en el total.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        LineToolbar(
+                                            lineCount = state.draftLines.size,
+                                            showOnlySelected = showOnlySelected,
+                                            onToggleOnlySelected = { showOnlySelected = !showOnlySelected },
+                                            onAddIngredient = { showAddIngredient = true },
+                                            onScanBarcode = if (isBarcodeScanSupported()) scanBarcode else null
+                                        )
                                         if (state.supplierIngredients.size > 4) {
                                             OutlinedTextField(
                                                 value = ingredientSearch,
@@ -260,6 +509,7 @@ fun PurchaseFormScreen(
                                                 ingredients = filteredIngredients,
                                                 supplierId = state.selectedSupplier!!.id,
                                                 draftLines = state.draftLines,
+                                                formKey = formKey,
                                                 onLineChanged = { viewModel.updateDraftLine(it) }
                                             )
                                         } else {
@@ -270,10 +520,83 @@ fun PurchaseFormScreen(
                                                         ingredient = ingredient,
                                                         supplierId = state.selectedSupplier!!.id,
                                                         existingLine = existingLine,
+                                                        formKey = formKey,
                                                         onLineChanged = { viewModel.updateDraftLine(it) }
                                                     )
                                                 }
                                             }
+                                        }
+                                      } // fin sección insumos
+
+                                      // ── Suministros de operación ──────────
+                                      // Reusan la MISMA fila que la materia prima: un
+                                      // suministro se compra por presentación, se guarda en
+                                      // la sucursal y lleva Kardex igual. Lo único distinto
+                                      // —que además se gasta— pasa al guardar, no acá.
+                                      if (state.usesSupplies && state.supplierSupplies.isNotEmpty()) {
+                                          Spacer(Modifier.height(8.dp))
+                                          StepHeader("Suministros de operación")
+                                          Text(
+                                              "Entran al inventario de la sucursal y se registran " +
+                                                  "como gasto del mes.",
+                                              style = MaterialTheme.typography.bodySmall,
+                                              color = MaterialTheme.colorScheme.onSurfaceVariant
+                                          )
+                                          Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                              state.supplierSupplies.forEach { supply ->
+                                                  IngredientPurchaseRow(
+                                                      ingredient = supply,
+                                                      supplierId = state.selectedSupplier!!.id,
+                                                      existingLine = state.draftLines.find {
+                                                          it.ingredientId == supply.id
+                                                      },
+                                                      formKey = formKey,
+                                                      onLineChanged = { viewModel.updateDraftLine(it) }
+                                                  )
+                                              }
+                                          }
+                                      }
+
+                                      if (state.usesResale && state.supplierResaleProducts.isNotEmpty()) {
+                                          Spacer(Modifier.height(8.dp))
+                                          StepHeader("Productos de reventa")
+                                          Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                              state.supplierResaleProducts.forEach { product ->
+                                                  val existing = state.draftLines.find {
+                                                      it.lineKind == PurchaseLineKind.RESALE_PRODUCT &&
+                                                      it.productId == product.id
+                                                  }
+                                                  ResaleProductRow(
+                                                      product = product,
+                                                      existingLine = existing,
+                                                      formKey = formKey,
+                                                      onLineChanged = { viewModel.updateDraftLine(it) }
+                                                  )
+                                              }
+                                          }
+                                      }
+
+                                        // ── Servicios y gastos ────────────
+                                        // Único tipo SIN catálogo: la ferretería vende algo
+                                        // distinto cada vez, así que la línea es texto libre.
+                                        // Dar de alta un ítem por cada reparación llenaría el
+                                        // catálogo de cosas que no se vuelven a comprar.
+                                        if (state.usesServices) {
+                                            ServiceLinesSection(
+                                                lines = state.draftLines.filter {
+                                                    it.lineKind == PurchaseLineKind.SERVICE
+                                                },
+                                                assets = state.assets,
+                                                onUpsert = { viewModel.upsertServiceLine(it) },
+                                                onRemove = { viewModel.removeServiceLine(it) }
+                                            )
+                                        }
+
+                                        if (perishableLines.isNotEmpty()) {
+                                            ExpirySection(
+                                                lines = perishableLines,
+                                                onLineChanged = { viewModel.updateDraftLine(it) }
+                                            )
                                         }
 
                                         Spacer(Modifier.height(4.dp))
@@ -313,6 +636,22 @@ fun PurchaseFormScreen(
                                             }
                                         }
 
+                                        // El estado ya NO es solo una etiqueta: "Por recibir"
+                                        // deja el inventario intacto hasta que alguien confirme
+                                        // la llegada desde el detalle de la compra.
+                                        Text(
+                                            text = when (purchaseStatus) {
+                                                PurchaseStatus.PENDING_RECEIPT ->
+                                                    "El stock NO entrará todavía. Se ingresa cuando marques la compra como recibida."
+                                                PurchaseStatus.PAID ->
+                                                    "Entra al stock y queda saldada, sin saldo por pagar."
+                                                else ->
+                                                    "Entra al stock y queda pendiente de pago."
+                                            },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+
                                         OutlinedTextField(
                                             value = notes,
                                             onValueChange = { notes = it },
@@ -322,45 +661,108 @@ fun PurchaseFormScreen(
                                             maxLines = 4
                                         )
 
-                                        if (isWide) {
-                                            Button(
-                                                onClick = ::doSave,
-                                                modifier = Modifier.fillMaxWidth(),
-                                                enabled = state.draftLines.isNotEmpty() && !state.isLoading
-                                            ) {
-                                                if (state.isLoading) {
-                                                    CircularProgressIndicator(
-                                                        modifier = Modifier.size(20.dp),
-                                                        color = MaterialTheme.colorScheme.onPrimary,
-                                                        strokeWidth = 2.dp
-                                                    )
-                                                } else {
-                                                    Icon(Icons.Default.Check, contentDescription = null)
-                                                    Spacer(Modifier.width(8.dp))
-                                                    Text("Confirmar compra", fontWeight = FontWeight.SemiBold)
-                                                }
-                                            }
-                                        } else {
-                                            Button(
-                                                onClick = { showReview = true },
-                                                modifier = Modifier.fillMaxWidth(),
-                                                enabled = state.draftLines.isNotEmpty()
-                                            ) {
-                                                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null)
-                                                Spacer(Modifier.width(8.dp))
-                                                Text("Revisar pedido", fontWeight = FontWeight.SemiBold)
-                                            }
-                                        }
+                                        // El respaldo del papel: cuando el total no cuadra o
+                                        // el proveedor reclama, lo que resuelve la discusión
+                                        // es la factura física, no el documento de Firestore.
+                                        Text(
+                                            "Foto de la factura (opcional)",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Medium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        ImagePickerButton(
+                                            currentImageUrl = state.editingPurchase?.invoicePhotoUrl
+                                                ?.ifEmpty { null },
+                                            selectedBytes = invoicePhotoBytes,
+                                            onImageSelected = { invoicePhotoBytes = it },
+                                            allowCamera = true
+                                        )
+
                                     }
                                 }
                             }
                         }
 
-                        Spacer(Modifier.height(32.dp))
+                        Spacer(Modifier.height(24.dp))
                     }
+
+                    // El total va fijo abajo, no dentro del scroll: es el número que se coteja
+                    // contra el papel mientras se teclea, y antes solo existía en el paso de
+                    // revisión — que en tablet ni siquiera se muestra.
+                    if (state.selectedSupplier != null) {
+                        PurchaseTotalsBar(
+                            lineCount = state.draftLines.size,
+                            breakdown = breakdown,
+                            applyTax = applyTax,
+                            onToggleTax = { applyTax = it },
+                            declaredTotalStr = declaredTotalStr,
+                            onDeclaredTotalChange = { v ->
+                                declaredTotalStr = v.filter { it.isDigit() || it == '.' || it == ',' }
+                            },
+                            isLoading = state.isLoading,
+                            confirmLabel = when {
+                                isEditing -> "Guardar cambios"
+                                isWide -> "Confirmar compra"
+                                else -> "Revisar"
+                            },
+                            onConfirm = { if (isWide || isEditing) doSave() else showReview = true }
+                        )
+                    }
+                  }
                 }
             }
         }
+    }
+    LoadingOverlay(visible = state.isLoading)
+    }
+
+    if (showDatePicker) {
+        val dpState = rememberDatePickerState(initialSelectedDateMillis = purchaseDate)
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    purchaseDate = dpState.selectedDateMillis ?: purchaseDate
+                    showDatePicker = false
+                }) { Text("Aceptar") }
+            },
+            dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("Cancelar") } }
+        ) { DatePicker(state = dpState) }
+    }
+
+    // Sin proveedor del catálogo no hay presentación de compra que dar de alta: la línea se
+    // captura suelta (insumo + cantidad + lo que costó) y no deja nada permanente detrás.
+    // Es el mismo criterio de la línea de servicio: no ensuciar el catálogo por una compra
+    // que no se repite.
+    if (showAddIngredient && state.selectedSupplier == null) {
+        LooseIngredientLineDialog(
+            candidates = remember(state.allIngredients) {
+                state.allIngredients.sortedBy { it.name.lowercase() }
+            },
+            onDismiss = { showAddIngredient = false },
+            onConfirm = { line ->
+                showAddIngredient = false
+                viewModel.updateDraftLine(line)
+            }
+        )
+    }
+
+    if (showAddIngredient && state.selectedSupplier != null) {
+        AddSupplierIngredientDialog(
+            supplierName = state.selectedSupplier!!.company,
+            candidates = remember(state.allIngredients, state.supplierIngredients) {
+                val already = state.supplierIngredients.mapTo(HashSet()) { it.id }
+                state.allIngredients.filter { it.id !in already }.sortedBy { it.name.lowercase() }
+            },
+            isSaving = state.isProcessing,
+            onDismiss = { showAddIngredient = false },
+            onConfirm = { ingredient, description, unit, unitsPerPackage, packageCost ->
+                showAddIngredient = false
+                viewModel.addSupplierFormat(
+                    companyId, ingredient, description, unit, unitsPerPackage, packageCost
+                )
+            }
+        )
     }
 }
 
@@ -371,6 +773,13 @@ private fun IngredientTable(
     ingredients: List<Ingredient>,
     supplierId: String,
     draftLines: List<PurchaseLine>,
+    /**
+     * Cambia cuando el formulario se rellena con una compra existente. Va en las claves de
+     * `rememberSaveable` de cada fila: sin él, los campos se inicializan vacíos en la primera
+     * composición y NO se vuelven a inicializar cuando las líneas terminan de cargar, así que
+     * editar una compra mostraría todas las cantidades en blanco.
+     */
+    formKey: String,
     onLineChanged: (PurchaseLine) -> Unit
 ) {
     Card(
@@ -423,6 +832,7 @@ private fun IngredientTable(
                     ingredient = ingredient,
                     supplierId = supplierId,
                     existingLine = existingLine,
+                    formKey = formKey,
                     onLineChanged = onLineChanged
                 )
                 if (index < ingredients.lastIndex) {
@@ -438,6 +848,7 @@ private fun IngredientTableRow(
     ingredient: Ingredient,
     supplierId: String,
     existingLine: PurchaseLine?,
+    formKey: String,
     onLineChanged: (PurchaseLine) -> Unit
 ) {
     val defaultFormat = ingredient.purchaseFormats.firstOrNull { it.isDefault && it.supplierId == supplierId }
@@ -454,9 +865,13 @@ private fun IngredientTableRow(
     val unitLabel = defaultFormat?.description?.split(" ")?.firstOrNull()?.lowercase()
         ?: ingredient.effectiveBaseUnit
 
-    var editingPrice by remember(ingredient.id) { mutableStateOf(false) }
-    var packageCostStr by rememberSaveable(ingredient.id) {
-        mutableStateOf(if (originalPackageCost > 0) originalPackageCost.fmt(2) else "")
+    var editingPrice by remember(ingredient.id, formKey) { mutableStateOf(false) }
+    var packageCostStr by rememberSaveable(ingredient.id, formKey) {
+        // Se prefiere el precio de la línea: una compra vieja pudo registrarse a un precio
+        // distinto del que hoy tiene el formato, y reabrirla mostrando el precio del catálogo
+        // se lo cambiaría en silencio al guardar.
+        val seed = existingLine?.packageCost?.takeIf { it > 0 } ?: originalPackageCost
+        mutableStateOf(if (seed > 0) seed.fmt(2) else "")
     }
     var showQtyDialog by remember { mutableStateOf(false) }
 
@@ -583,12 +998,21 @@ private fun IngredientTableRow(
                         }
                     }
                 } else {
-                    OutlinedButton(
+                    // Lleno y en el azul de la marca: en outline se leía como un borde vacío
+                    // más de la tabla y no se entendía que ahí es donde se agrega el producto.
+                    Button(
                         onClick = { showQtyDialog = true },
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                        modifier = Modifier.height(32.dp)
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                        modifier = Modifier.height(32.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = BrandColors.Primary,
+                            contentColor = Color.White
+                        )
                     ) {
-                        Text("Agregar", style = MaterialTheme.typography.labelSmall)
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Agregar", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
@@ -627,7 +1051,23 @@ private fun QuantityInputDialog(
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit
 ) {
-    var qty by remember { mutableStateOf(initialQty) }
+    // Se abre con todo seleccionado para poder teclear encima sin borrar primero.
+    var qty by remember {
+        mutableStateOf(
+            TextFieldValue(initialQty, selection = TextRange(0, initialQty.length))
+        )
+    }
+    val focusRequester = remember { FocusRequester() }
+    // El diálogo se abre para escribir un número y nada más: pedirle al usuario un toque
+    // extra sobre el campo para que aparezca el teclado es un toque por cada producto de la
+    // factura. El `runCatching` cubre la carrera de pedir foco antes de que el diálogo
+    // termine de componerse.
+    LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
+
+    fun confirmIfValid() {
+        if (qty.text.toDoubleOrNull()?.let { it > 0 } == true) onConfirm(qty.text)
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -639,15 +1079,19 @@ private fun QuantityInputDialog(
                 onValueChange = { qty = it },
                 label = { Text("Cantidad") },
                 suffix = { Text(unitLabel, style = MaterialTheme.typography.labelSmall) },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Decimal,
+                    imeAction = ImeAction.Done
+                ),
+                keyboardActions = KeyboardActions(onDone = { confirmIfValid() }),
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().focusRequester(focusRequester)
             )
         },
         confirmButton = {
             Button(
-                onClick = { onConfirm(qty) },
-                enabled = qty.toDoubleOrNull()?.let { it > 0 } == true
+                onClick = { confirmIfValid() },
+                enabled = qty.text.toDoubleOrNull()?.let { it > 0 } == true
             ) { Text("Confirmar") }
         },
         dismissButton = {
@@ -670,9 +1114,10 @@ private fun PurchaseReviewContent(
     onBack: () -> Unit,
     onConfirm: () -> Unit
 ) {
-    val grandTotal = draftLines
-        .filter { it.packageCost > 0 }
-        .sumOf { it.packageCost * it.packagesReceived.coerceAtLeast(1.0) }
+    // `purchaseTotal()` es la misma fórmula del encabezado y del script de backfill. La
+    // versión anterior filtraba por `packageCost > 0`, así que las líneas de reventa
+    // —que se costean por unidad— sumaban cero en la revisión.
+    val grandTotal = draftLines.purchaseTotal()
 
     Column(
         modifier = Modifier
@@ -709,7 +1154,7 @@ private fun PurchaseReviewContent(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        "INSUMOS A RECIBIR",
+                        "ÍTEMS A RECIBIR",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
@@ -737,7 +1182,7 @@ private fun PurchaseReviewContent(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(2f)) {
-                            Text(line.ingredientName, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                            Text(line.ingredientName.ifEmpty { line.productName }, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
                             if (line.packageDescription.isNotEmpty()) {
                                 Text(line.packageDescription, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
@@ -925,41 +1370,11 @@ private fun BranchSelector(branches: List<Branch>, onSelect: (Branch) -> Unit) {
 }
 
 @Composable
-private fun SupplierSelector(
-    suppliers: List<Supplier>,
-    onSelect: (Supplier) -> Unit,
-    onNavigateToSuppliers: () -> Unit
-) {
-    if (suppliers.isEmpty()) {
-        InfoCard("No hay proveedores registrados. Registrá uno en el módulo Proveedores primero.")
-        Spacer(Modifier.height(4.dp))
-        Button(onClick = onNavigateToSuppliers, modifier = Modifier.fillMaxWidth()) {
-            Text("Ir a Proveedores")
-        }
-    } else {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            suppliers.forEach { supplier ->
-                Card(
-                    onClick = { onSelect(supplier) },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    ListItem(
-                        headlineContent = { Text(supplier.company, fontWeight = FontWeight.Medium) },
-                        supportingContent = if (supplier.salesperson.isNotEmpty()) ({ Text(supplier.salesperson) }) else null,
-                        colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface)
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun IngredientPurchaseRow(
     ingredient: Ingredient,
     supplierId: String,
     existingLine: PurchaseLine?,
+    formKey: String,
     onLineChanged: (PurchaseLine) -> Unit
 ) {
     val defaultFormat = ingredient.purchaseFormats.firstOrNull { it.isDefault && it.supplierId == supplierId }
@@ -974,7 +1389,7 @@ private fun IngredientPurchaseRow(
 
     val originalPackageCost = defaultFormat?.packageCost ?: 0.0
 
-    var qty by rememberSaveable(ingredient.id) {
+    var qty by rememberSaveable(ingredient.id, formKey) {
         mutableStateOf(
             existingLine?.let {
                 val displayed = if (it.packagesReceived > 0) it.packagesReceived
@@ -985,9 +1400,13 @@ private fun IngredientPurchaseRow(
         )
     }
 
-    var editingPrice by remember(ingredient.id) { mutableStateOf(false) }
-    var packageCostStr by rememberSaveable(ingredient.id) {
-        mutableStateOf(if (originalPackageCost > 0) originalPackageCost.fmt(2) else "")
+    var editingPrice by remember(ingredient.id, formKey) { mutableStateOf(false) }
+    var packageCostStr by rememberSaveable(ingredient.id, formKey) {
+        // Se prefiere el precio de la línea: una compra vieja pudo registrarse a un precio
+        // distinto del que hoy tiene el formato, y reabrirla mostrando el precio del catálogo
+        // se lo cambiaría en silencio al guardar.
+        val seed = existingLine?.packageCost?.takeIf { it > 0 } ?: originalPackageCost
+        mutableStateOf(if (seed > 0) seed.fmt(2) else "")
     }
 
     val currentPackageCost = packageCostStr.toDoubleOrNull() ?: originalPackageCost
@@ -1113,6 +1532,101 @@ private fun IngredientPurchaseRow(
                             )
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+// ── Fila de producto de reventa ──────────────────────────────────────────────
+
+@Composable
+private fun ResaleProductRow(
+    product: Product,
+    existingLine: PurchaseLine?,
+    formKey: String,
+    onLineChanged: (PurchaseLine) -> Unit
+) {
+    var qty by rememberSaveable(product.id, formKey) {
+        mutableStateOf(
+            existingLine?.quantityReceived?.takeIf { it > 0 }
+                ?.let { it.fmt(2).trimEnd('0').trimEnd('.') } ?: ""
+        )
+    }
+    var costStr by rememberSaveable(product.id, formKey) {
+        mutableStateOf(
+            (existingLine?.unitCost ?: product.purchaseCost ?: 0.0).takeIf { it > 0 }?.fmt(2) ?: ""
+        )
+    }
+    val currentQty = qty.toDoubleOrNull() ?: 0.0
+    val currentCost = costStr.toDoubleOrNull() ?: 0.0
+    val lineTotal = currentQty * currentCost
+    val isSelected = currentQty > 0
+
+    fun buildLine() = PurchaseLine(
+        lineKind = PurchaseLineKind.RESALE_PRODUCT,
+        productId = product.id,
+        productName = product.name,
+        quantityReceived = qty.toDoubleOrNull() ?: 0.0,
+        packagesReceived = qty.toDoubleOrNull() ?: 0.0,
+        packageDescription = product.unit,
+        unitCost = costStr.toDoubleOrNull() ?: 0.0,
+        packageCost = costStr.toDoubleOrNull() ?: 0.0
+    )
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) Color(0xFFFFF3DC) else MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(product.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                    if (product.unit.isNotEmpty()) {
+                        Text(
+                            text = product.unit,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = qty,
+                    onValueChange = { raw -> qty = raw; onLineChanged(buildLine()) },
+                    label = { Text("Cantidad") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    modifier = Modifier.width(115.dp)
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedTextField(
+                    value = costStr,
+                    onValueChange = { raw -> costStr = raw; onLineChanged(buildLine()) },
+                    label = { Text("Costo por unidad") },
+                    prefix = { Text("Q ") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                if (lineTotal > 0) {
+                    Text(
+                        text = "Q ${lineTotal.fmt(2)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
                 }
             }
         }

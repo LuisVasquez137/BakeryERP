@@ -50,8 +50,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.bakery.erp.model.PriceList
 import com.bakery.erp.model.Product
+import com.bakery.erp.model.ProductPrice
+import com.bakery.erp.model.PriceListType
 import com.bakery.erp.presentation.auth.AuthViewModel
+import com.bakery.erp.presentation.pricing.PriceListViewModel
 import com.bakery.erp.ui.ProductImage
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -61,15 +65,24 @@ fun ProductDetailScreen(
     onNavigateBack: () -> Unit,
     onNavigateToEdit: (productId: String) -> Unit,
     authViewModel: AuthViewModel,
-    viewModel: ProductViewModel
+    viewModel: ProductViewModel,
+    priceListViewModel: PriceListViewModel
 ) {
     val state by viewModel.uiState.collectAsState()
     val authState by authViewModel.uiState.collectAsState()
+    val priceListState by priceListViewModel.uiState.collectAsState()
     val companyId = authState.user?.orgId ?: ""
     val snackbarHostState = remember { SnackbarHostState() }
     var showDeleteDialog by remember { mutableStateOf(false) }
 
     val product = state.productList.find { it.id == productId }
+
+    LaunchedEffect(companyId) {
+        if (companyId.isNotEmpty()) priceListViewModel.loadLists(companyId)
+    }
+    LaunchedEffect(companyId, productId) {
+        if (companyId.isNotEmpty()) priceListViewModel.loadPricesForProduct(companyId, productId)
+    }
 
     LaunchedEffect(state.isDeleted) {
         if (state.isDeleted) { viewModel.clearDeleted(); onNavigateBack() }
@@ -147,14 +160,22 @@ fun ProductDetailScreen(
                 product == null -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("Producto no encontrado", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                else -> ProductDetailContent(product = product)
+                else -> ProductDetailContent(
+                    product = product,
+                    priceLists = priceListState.lists,
+                    pricesForProduct = priceListState.pricesForProduct
+                )
             }
         }
     }
 }
 
 @Composable
-private fun ProductDetailContent(product: Product) {
+private fun ProductDetailContent(
+    product: Product,
+    priceLists: List<PriceList>,
+    pricesForProduct: List<ProductPrice>
+) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isWide = maxWidth >= 700.dp
         if (isWide) {
@@ -168,7 +189,7 @@ private fun ProductDetailContent(product: Product) {
                         .padding(start = 24.dp, end = 16.dp, top = 24.dp, bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    ProductInfoSection(product)
+                    ProductInfoSection(product, priceLists, pricesForProduct)
                 }
                 // Imagen derecha (fija)
                 Box(
@@ -207,7 +228,7 @@ private fun ProductDetailContent(product: Product) {
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    ProductInfoSection(product)
+                    ProductInfoSection(product, priceLists, pricesForProduct)
                 }
             }
         }
@@ -215,7 +236,11 @@ private fun ProductDetailContent(product: Product) {
 }
 
 @Composable
-private fun ProductInfoSection(product: Product) {
+private fun ProductInfoSection(
+    product: Product,
+    priceLists: List<PriceList>,
+    pricesForProduct: List<ProductPrice>
+) {
     // Nombre + badges
     Text(
         text = product.name,
@@ -257,6 +282,32 @@ private fun ProductInfoSection(product: Product) {
         valueColor = MaterialTheme.colorScheme.outline
     )
 
+    // ── Precios por lista ────────────────────────────────────────────
+    // Misma cascada que la pestaña "Precios" del form (override > factor ×
+    // retail > sin precio) — acá solo de lectura, para ver de un vistazo lo
+    // que va a cobrar cada lista sin tener que entrar a editar.
+    if (priceLists.isNotEmpty()) {
+        Spacer(Modifier.height(4.dp))
+        DetailSection("Precios por Lista")
+        priceLists.forEach { list ->
+            val isRetailDefault = list.type == PriceListType.RETAIL && list.isDefault
+            val override = pricesForProduct.find { it.priceListId == list.id }?.unitPrice?.takeIf { it > 0 }
+            val autoFromFactor = list.priceFactor?.takeIf { product.salePrice > 0 }?.let { product.salePrice * it }
+            val (value, sourceHint) = when {
+                isRetailDefault -> product.salePrice to null
+                override != null -> override to "fijo"
+                autoFromFactor != null -> autoFromFactor to "${(list.priceFactor!! * 100).toInt()}% del retail"
+                else -> null to null
+            }
+            DetailRow(
+                label = list.name + if (sourceHint != null) " ($sourceHint)" else "",
+                value = value?.let { "Q ${it.fmt(2)}" } ?: "Sin precio definido",
+                valueColor = if (value == null) MaterialTheme.colorScheme.error
+                             else MaterialTheme.colorScheme.onSurface
+            )
+        }
+    }
+
     // ── Datos del producto ───────────────────────────────────────────
     val hasPhysicalData = product.weightPerUnit != null || product.rawWeightGrams != null || product.shelfLife != null || !product.storageType.isNullOrEmpty()
     if (hasPhysicalData) {
@@ -280,8 +331,20 @@ private fun ProductInfoSection(product: Product) {
         DetailSection("Adornos")
         product.decorations.forEach { deco ->
             DetailRow(
-                label = deco.preparationName,
+                label = deco.preparationName.ifEmpty { deco.ingredientName },
                 value = "${deco.gramsPerUnit.fmt(1)} g / unidad"
+            )
+        }
+    }
+
+    // ── Relleno de otra masa ────────────────────────────────────────────
+    if (product.doughFillings.isNotEmpty()) {
+        Spacer(Modifier.height(4.dp))
+        DetailSection("Relleno de otra masa")
+        product.doughFillings.forEach { filling ->
+            DetailRow(
+                label = filling.recipeName,
+                value = "${filling.rawWeightGrams.fmt(1)} g crudo"
             )
         }
     }

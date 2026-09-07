@@ -1,6 +1,7 @@
 package com.bakery.erp.domain
 
 import com.bakery.erp.domain.report.ProductionSummary
+import com.bakery.erp.model.OrderPattern
 import com.bakery.erp.model.ProductionLot
 import com.bakery.erp.model.ProductionLotLine
 import com.bakery.erp.model.ProductionOrder
@@ -102,6 +103,34 @@ interface ProductionRepository {
         lines: List<ProductionOrderLine>
     )
     suspend fun updateOrderStatus(companyId: String, orderId: String, newStatus: String)
+
+    /**
+     * Borrado real del pedido: el documento, su subcolección `lines/` y la muestra
+     * que aportaba a las cantidades sugeridas (igual que
+     * [updateOrderStatus] con CANCELLED, pero sin dejar el pedido a la vista).
+     *
+     * **No es el camino normal para deshacer un pedido** — para eso está cancelarlo,
+     * que conserva el rastro de que existió. Esto es para sacar de encima pedidos de
+     * prueba, y por eso la UI lo limita al OWNER. El borrado de la cascada (lotes,
+     * notas de despacho, avisos) lo coordina
+     * [com.bakery.erp.presentation.production.ProductionViewModel.deleteOrderPermanently];
+     * este método solo se ocupa del pedido y su patrón.
+     */
+    suspend fun deleteOrder(companyId: String, orderId: String)
+
+    /**
+     * Borrado real del lote y sus líneas. Pensado para el lote que queda vacío al
+     * borrarse el último pedido que lo alimentaba: un lote sin fuentes no puede
+     * despachar ni recomputarse, y quedaría estorbando en la lista del panadero.
+     */
+    suspend fun deleteLot(companyId: String, lotId: String)
+
+    /**
+     * Saca [orderIds] de la planificación de lotes: dejan de aparecer en el
+     * aviso de "pendientes en otras fechas". No cambia su estado ni los borra —
+     * siguen PENDING y visibles en su propia fecha.
+     */
+    suspend fun excludeOrdersFromLotPlanning(companyId: String, orderIds: List<String>)
     /**
      * Anexa las líneas de [orderId] al [lotId] existente, fusionando por `productId`:
      * si el producto ya está en el lote suma cantidades; si no, agrega línea nueva.
@@ -155,6 +184,30 @@ interface ProductionRepository {
         customerOrderId: String
     )
 
+    // ── Patrones de pedido (cantidades sugeridas) ─────────────────────────────
+
+    /**
+     * Lee el [OrderPattern] denormalizado de una combinación `(sucursal
+     * solicitante, planta, turno, día de la semana)`. **1 lectura**. Devuelve
+     * null si todavía no se ha construido.
+     */
+    suspend fun getOrderPattern(companyId: String, patternId: String): OrderPattern?
+
+    /**
+     * Reconstruye el patrón escaneando el historial de pedidos de la sucursal y
+     * lo persiste. Es la operación cara (headers + subcolección `lines/` de
+     * hasta [OrderPattern.MAX_SAMPLES] pedidos); se ejecuta solo cuando
+     * [getOrderPattern] devuelve null. Después de esto el patrón se mantiene
+     * al día desde [saveOrder] / [updateOrder] / [updateOrderStatus].
+     */
+    suspend fun rebuildOrderPatternFromHistory(
+        companyId: String,
+        sellingBranchId: String,
+        producingBranchId: String,
+        shiftId: String,
+        weekday: Int
+    ): OrderPattern
+
     // ── Lotes de producción ───────────────────────────────────────────────────
 
     suspend fun getLotsForBranch(companyId: String, branchId: String): List<ProductionLot>
@@ -181,6 +234,17 @@ interface ProductionRepository {
         productionDate: Long,
         shiftId: String
     ): ProductionLot?
+    /**
+     * Todos los lotes activos (no CANCELLED) que coincidan con `(producingBranchId,
+     * productionDate)`, sin filtrar por turno — el análogo de [getActiveLotForBranchDateShift]
+     * para plantas de varios turnos, donde un mismo día puede tener un lote por turno.
+     * Se compara `productionDate` por día calendario en TZ del sistema.
+     */
+    suspend fun getActiveLotsForBranchDate(
+        companyId: String,
+        producingBranchId: String,
+        productionDate: Long
+    ): List<ProductionLot>
     suspend fun getLot(companyId: String, lotId: String): ProductionLot?
     suspend fun getLotLines(companyId: String, lotId: String): List<ProductionLotLine>
     suspend fun saveLot(

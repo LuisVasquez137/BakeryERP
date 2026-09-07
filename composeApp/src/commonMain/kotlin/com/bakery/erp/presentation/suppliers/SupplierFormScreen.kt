@@ -23,6 +23,9 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -48,7 +51,7 @@ import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.Supplier
 import com.bakery.erp.presentation.auth.AuthViewModel
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SupplierFormScreen(
     supplierId: String?,
@@ -72,6 +75,7 @@ fun SupplierFormScreen(
     var phone by rememberSaveable { mutableStateOf(existing?.phone ?: "") }
     var address by rememberSaveable { mutableStateOf(existing?.address ?: "") }
     var notes by rememberSaveable { mutableStateOf(existing?.notes ?: "") }
+    var paymentTermsDays by rememberSaveable { mutableStateOf((existing?.paymentTermsDays ?: 0).toString()) }
     var active by rememberSaveable { mutableStateOf(existing?.active ?: true) }
 
     var companyError by remember { mutableStateOf(false) }
@@ -91,6 +95,7 @@ fun SupplierFormScreen(
         phone = phone.trim(),
         address = address.trim().ifEmpty { null },
         notes = notes.trim().ifEmpty { null },
+        paymentTermsDays = paymentTermsDays.toIntOrNull()?.coerceIn(0, 365) ?: 0,
         active = active
     )
 
@@ -185,6 +190,39 @@ fun SupplierFormScreen(
                     modifier = Modifier.fillMaxWidth(),
                     minLines = 2,
                     maxLines = 3
+                )
+
+                SectionDivider()
+
+                // ── Condiciones de pago ──────────────────────────────────────
+                SectionHeader("Condiciones de pago")
+
+                Text(
+                    "Cuántos días de crédito da este proveedor. Con esto las compras nacen " +
+                        "con fecha de vencimiento y aparecen en \"por pagar\" antes de que se venzan.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(0 to "Contado", 8 to "8 días", 15 to "15 días", 30 to "30 días", 60 to "60 días")
+                        .forEach { (days, label) ->
+                            FilterChip(
+                                selected = paymentTermsDays.toIntOrNull() == days,
+                                onClick = { paymentTermsDays = days.toString() },
+                                label = { Text(label) }
+                            )
+                        }
+                }
+
+                OutlinedTextField(
+                    value = paymentTermsDays,
+                    onValueChange = { v -> paymentTermsDays = v.filter { it.isDigit() }.take(3) },
+                    label = { Text("Días de crédito") },
+                    supportingText = { Text("0 = contado") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                 )
 
                 SectionDivider()

@@ -1,6 +1,7 @@
 package com.bakery.erp.presentation.recipes
 
 import com.bakery.erp.util.fmt
+import com.bakery.erp.util.fmtPercentage
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -316,7 +317,7 @@ private fun ComponentDetailRow(component: RecipeComponent, isLarge: Boolean, nam
             )
         }
         Text(
-            text = "${component.percentage.fmt(1)}%",
+            text = "${component.percentage.fmtPercentage()}%",
             style = pctStyle,
             fontWeight = FontWeight.SemiBold,
             color = if (component.isBase) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface

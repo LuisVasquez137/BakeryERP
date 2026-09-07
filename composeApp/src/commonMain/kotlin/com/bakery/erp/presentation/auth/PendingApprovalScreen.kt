@@ -31,8 +31,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.bakery.erp.ui.theme.BrandColors.Primary as PrimaryBlue
+import com.bakery.erp.ui.theme.BrandColors
 
-private val PrimaryBlue = Color(0xFF005B8D)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

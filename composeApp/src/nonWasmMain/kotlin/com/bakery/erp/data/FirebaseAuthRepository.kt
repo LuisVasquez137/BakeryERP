@@ -44,7 +44,7 @@ class FirebaseAuthRepository(
                     val uid = firebaseUser.uid
                     val doc = usersCol().document(uid).get()
                     if (doc.exists) {
-                        emit(AuthState.Authenticated(doc.toDomain()))
+                        emit(AuthState.Authenticated(backfillGooglePhoto(uid, doc.toDomain(), firebaseUser.photoURL)))
                     } else {
                         // Usuario autenticado en Firebase Auth pero sin perfil Firestore aún.
                         // Puede ser un nuevo usuario Google en mitad del onboarding, o una
@@ -56,7 +56,8 @@ class FirebaseAuthRepository(
                             email = firebaseUser.email ?: "",
                             displayName = firebaseUser.displayName ?: "",
                             role = UserRole.OWNER, branchIds = emptyList(),
-                            isActive = true, isApproved = true
+                            isActive = true, isApproved = true,
+                            photoUrl = firebaseUser.photoURL
                         )))
                     }
                 }.catch { e -> emit(AuthState.Error(e.message ?: "Error desconocido")) }
@@ -198,21 +199,37 @@ class FirebaseAuthRepository(
         val result = auth.signInWithCredential(credential)
         val firebaseUser = result.user ?: error("User nulo tras Google Sign-In")
         val uid = firebaseUser.uid
+        val googlePhotoUrl = firebaseUser.photoURL
 
         val doc = usersCol().document(uid).get()
         if (doc.exists) {
-            doc.toDomain()
+            backfillGooglePhoto(uid, doc.toDomain(), googlePhotoUrl)
         } else {
             // Primera vez con Google: crear perfil mínimo sin org
             val user = User(
                 id = uid, orgId = "", email = firebaseUser.email ?: "",
                 displayName = firebaseUser.displayName ?: "",
-                role = UserRole.OWNER, branchIds = emptyList(), isActive = true
+                role = UserRole.OWNER, branchIds = emptyList(), isActive = true,
+                photoUrl = googlePhotoUrl
             )
             usersCol().document(uid).set(user.toMap())
             user
         }
     }
+
+    /**
+     * Actualiza `photoUrl` en Firestore si la cuenta de Google trae una foto distinta
+     * a la guardada (usuarios registrados antes de que existiera este campo, o que
+     * cambiaron su avatar de Google). Se llama tanto desde `authStateChanged` — la
+     * única ruta que se dispara en Web, donde `signInWithPopup` autentica sin pasar
+     * por `signInWithGoogle` — como desde `signInWithGoogle` (Android/iOS) para que
+     * el estado se actualice de inmediato sin esperar el siguiente evento del stream.
+     */
+    private suspend fun backfillGooglePhoto(uid: String, existing: User, googlePhotoUrl: String?): User =
+        if (!googlePhotoUrl.isNullOrBlank() && googlePhotoUrl != existing.photoUrl) {
+            usersCol().document(uid).update("photoUrl" to googlePhotoUrl)
+            existing.copy(photoUrl = googlePhotoUrl)
+        } else existing
 
     override suspend fun signOut() = auth.signOut()
 
@@ -236,7 +253,12 @@ class FirebaseAuthRepository(
             inviteCode = runCatching { doc.get<String>("inviteCode") }.getOrNull() ?: "",
             acceptsResellerDelivery = runCatching {
                 doc.get<Boolean?>("acceptsResellerDelivery")
-            }.getOrNull() ?: false
+            }.getOrNull() ?: false,
+            // Flujos de compra. Ausentes = apagados: una empresa ya operando no debe ver
+            // secciones nuevas en la captura hasta que las pida.
+            usesResalePurchases = runCatching { doc.get<Boolean?>("usesResalePurchases") }.getOrNull() ?: false,
+            usesSupplyPurchases = runCatching { doc.get<Boolean?>("usesSupplyPurchases") }.getOrNull() ?: false,
+            usesServicePurchases = runCatching { doc.get<Boolean?>("usesServicePurchases") }.getOrNull() ?: false
         )
     }
 
@@ -334,6 +356,19 @@ class FirebaseAuthRepository(
         customer
     }
 
+    override suspend fun setPurchaseFlows(
+        orgId: String,
+        usesResale: Boolean,
+        usesSupplies: Boolean,
+        usesServices: Boolean
+    ): Result<Unit> = runCatching {
+        orgsCol().document(orgId).update(
+            "usesResalePurchases" to usesResale,
+            "usesSupplyPurchases" to usesSupplies,
+            "usesServicePurchases" to usesServices
+        )
+    }
+
     override suspend fun setAcceptsResellerDelivery(
         orgId: String,
         accepts: Boolean
@@ -405,13 +440,15 @@ class FirebaseAuthRepository(
         branchIds = get<List<String>?>("branchIds") ?: emptyList(),
         permissions = get<List<String>?>("permissions") ?: emptyList(),
         isActive = get<Boolean?>("isActive") ?: true,
-        isApproved = get<Boolean?>("isApproved") ?: true  // default true → usuarios existentes no se bloquean
+        isApproved = get<Boolean?>("isApproved") ?: true,  // default true → usuarios existentes no se bloquean
+        photoUrl = get<String?>("photoUrl")
     )
 
     private fun User.toMap(): Map<String, Any?> = firestoreSafeOf(
         "orgId" to orgId, "email" to email, "displayName" to displayName,
         "role" to role.name, "branchIds" to ArrayList(branchIds),
         "permissions" to ArrayList(permissions),
-        "isActive" to isActive, "isApproved" to isApproved
+        "isActive" to isActive, "isApproved" to isApproved,
+        "photoUrl" to photoUrl
     )
 }

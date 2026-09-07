@@ -14,6 +14,9 @@ enum class Permission {
 
     // Compras
     RECEIVE_STOCK,
+    MANAGE_PURCHASE_PAYMENTS,
+    EDIT_PURCHASES,
+    DELETE_PURCHASES,
 
     // Administración
     VIEW_ALL_BRANCHES,
@@ -90,6 +93,9 @@ enum class Permission {
         ADD_VARIABLE_EXPENSE -> "Ingresar gastos variables"
         MANAGE_FIXED_BUDGET -> "Gestionar presupuesto fijo"
         RECEIVE_STOCK -> "Ingresar materia prima"
+        MANAGE_PURCHASE_PAYMENTS -> "Registrar pagos a proveedores"
+        EDIT_PURCHASES -> "Editar compras registradas"
+        DELETE_PURCHASES -> "Eliminar compras"
         VIEW_ALL_BRANCHES -> "Ver todas las sucursales"
         MANAGE_BRANCHES -> "Gestionar sucursales"
         MANAGE_USERS -> "Gestionar usuarios"
@@ -148,6 +154,9 @@ enum class Permission {
         ADD_VARIABLE_EXPENSE -> "Puede registrar gastos variables"
         MANAGE_FIXED_BUDGET -> "Puede configurar y editar el presupuesto fijo"
         RECEIVE_STOCK -> "Puede registrar compras e ingreso de materia prima"
+        MANAGE_PURCHASE_PAYMENTS -> "Puede abonar y saldar facturas de proveedor"
+        EDIT_PURCHASES -> "Puede corregir una compra ya registrada; el inventario se ajusta por diferencia"
+        DELETE_PURCHASES -> "Puede eliminar una compra y revertir su ingreso al inventario"
         VIEW_ALL_BRANCHES -> "Puede ver todas las sucursales de la empresa"
         MANAGE_BRANCHES -> "Puede crear, editar y eliminar sucursales"
         MANAGE_USERS -> "Puede gestionar usuarios y asignar permisos"
@@ -201,6 +210,9 @@ enum class Permission {
         VIEW_EXPENSES, ADD_VARIABLE_EXPENSE,
         MANAGE_FIXED_BUDGET -> "Gastos"
         RECEIVE_STOCK -> "Compras"
+        MANAGE_PURCHASE_PAYMENTS -> "Compras"
+        EDIT_PURCHASES -> "Compras"
+        DELETE_PURCHASES -> "Compras"
         VIEW_ALL_BRANCHES, MANAGE_BRANCHES,
         MANAGE_USERS -> "Administración"
         VIEW_PRODUCTION, SEND_PRODUCTION_ORDER,
@@ -226,4 +238,16 @@ enum class Permission {
         MANAGE_CUSTOMER_ORDERS, MANAGE_EXTERNAL_CUSTOMERS,
         COLLECT_ORDER_PAYMENT -> "Pedidos de Clientes"
     }
+
+    /**
+     * Permiso **sensible**: deja ver dinero a alguien que solo necesita contar pan.
+     *
+     * Se queda fuera del "Habilitar todos" del grupo — hay que marcarlo uno por uno,
+     * a propósito. Vive en el mismo grupo que empacar y recibir porque ahí es donde
+     * se usa, y por eso habilitar "Distribución" completo se lo llevaba puesto: la
+     * encargada quedaba viendo el valor de cada nota sin que nadie lo hubiera
+     * decidido. Quitar el permiso de su grupo lo escondería de donde se busca; lo
+     * que corresponde es que el atajo no lo incluya.
+     */
+    val isSensitive: Boolean get() = this == VIEW_DISPATCH_VALUE || this == VIEW_SALES_VALUE
 }

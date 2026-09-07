@@ -9,7 +9,8 @@ data class User(
     val branchIds: List<String>,         // vacío = acceso a todas (OWNER)
     val permissions: List<String> = emptyList(),
     val isActive: Boolean,
-    val isApproved: Boolean = true       // false hasta que el admin apruebe
+    val isApproved: Boolean = true,      // false hasta que el admin apruebe
+    val photoUrl: String? = null         // foto de perfil de Google; null si se registró con email/password
 )
 
 fun User.hasPermission(permission: Permission): Boolean =

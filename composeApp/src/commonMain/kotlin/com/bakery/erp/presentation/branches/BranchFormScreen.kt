@@ -4,6 +4,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,6 +26,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MenuAnchorType
@@ -52,14 +55,18 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.Branch
+import com.bakery.erp.model.DISPATCH_TRIP_BOTH
+import com.bakery.erp.model.DISPATCH_TRIP_FIRST
+import com.bakery.erp.model.DISPATCH_TRIP_SECOND
 import com.bakery.erp.model.BranchCapability
+import com.bakery.erp.model.isoWeekdayName
 import com.bakery.erp.model.PriceList
 import com.bakery.erp.model.PriceListType
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.presentation.pricing.PriceListViewModel
 import com.bakery.erp.presentation.products.ProductViewModel
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun BranchFormScreen(
     branchId: String?,
@@ -84,6 +91,12 @@ fun BranchFormScreen(
 
     var name by rememberSaveable { mutableStateOf(existing?.name ?: "") }
     var location by rememberSaveable { mutableStateOf(existing?.location ?: "") }
+    // Coordenadas: normalmente se capturan solas (GPS) al crear el primer
+    // pedido de la sucursal — ver Branch.latitude. Estos campos son solo la
+    // salida de emergencia para corregirlas si quedaron mal (ej. si quien
+    // creó ese primer pedido no estaba físicamente en la sucursal).
+    var latitudeText by rememberSaveable { mutableStateOf(existing?.latitude?.toString() ?: "") }
+    var longitudeText by rememberSaveable { mutableStateOf(existing?.longitude?.toString() ?: "") }
     var phone by rememberSaveable { mutableStateOf(existing?.phone ?: "") }
     var managerName by rememberSaveable { mutableStateOf(existing?.managerName ?: "") }
     var notes by rememberSaveable { mutableStateOf(existing?.notes ?: "") }
@@ -97,6 +110,12 @@ fun BranchFormScreen(
         mutableStateOf(existing?.assignedProductIds?.toSet() ?: emptySet<String>())
     }
     var productSearchQuery by rememberSaveable { mutableStateOf("") }
+    var closedWeekdays by remember {
+        mutableStateOf(existing?.closedWeekdays?.toSet() ?: emptySet<Int>())
+    }
+    var receivesOnlyInTrip by rememberSaveable(existing?.id) {
+        mutableStateOf(existing?.receivesOnlyInTrip ?: DISPATCH_TRIP_BOTH)
+    }
 
     var nameError by remember { mutableStateOf(false) }
     var locationError by remember { mutableStateOf(false) }
@@ -130,6 +149,15 @@ fun BranchFormScreen(
         capabilities = capabilities.toList(),
         assignedProductIds = assignedProductIds.toList(),
         defaultPriceListId = defaultPriceListId,
+        latitude = latitudeText.replace(',', '.').toDoubleOrNull(),
+        longitude = longitudeText.replace(',', '.').toDoubleOrNull(),
+        // Los órdenes de productos se configuran desde Pedidos / la orden de
+        // producción, no acá: hay que arrastrarlos o `updateBranch` (que hace
+        // `set`) los borraría.
+        productSortOrder = existing?.productSortOrder ?: emptyList(),
+        productionSortOrder = existing?.productionSortOrder ?: emptyList(),
+        closedWeekdays = closedWeekdays.toList(),
+        receivesOnlyInTrip = receivesOnlyInTrip,
         active = active
     )
 
@@ -191,6 +219,34 @@ fun BranchFormScreen(
                     minLines = 2,
                     maxLines = 3
                 )
+
+                Text(
+                    "Ubicación (GPS) — normalmente se llena sola al crear el primer pedido " +
+                        "de esta sucursal. Solo tócala si quedó mal capturada.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = latitudeText,
+                        onValueChange = { latitudeText = it },
+                        label = { Text("Latitud") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                    )
+                    OutlinedTextField(
+                        value = longitudeText,
+                        onValueChange = { longitudeText = it },
+                        label = { Text("Longitud") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                    )
+                }
 
                 OutlinedTextField(
                     value = phone,
@@ -323,6 +379,29 @@ fun BranchFormScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+
+                    SectionDivider()
+                    SectionHeader("Días de descanso")
+                    Text(
+                        text = "Las sucursales no podrán crear pedidos hacia esta planta esos días — " +
+                            "evita que alguien pida sin querer para el día que no se trabaja.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        (1..7).forEach { weekday ->
+                            FilterChip(
+                                selected = weekday in closedWeekdays,
+                                onClick = {
+                                    closedWeekdays = if (weekday in closedWeekdays)
+                                        closedWeekdays - weekday
+                                    else
+                                        closedWeekdays + weekday
+                                },
+                                label = { Text(isoWeekdayName(weekday).replaceFirstChar { it.uppercase() }) }
+                            )
+                        }
+                    }
                 }
 
                 // ── Lista de precios para despacho ────────────────────────────
@@ -375,6 +454,30 @@ fun BranchFormScreen(
                                     onClick = { defaultPriceListId = list.id; priceListExpanded = false }
                                 )
                             }
+                        }
+                    }
+
+                    // ── Viaje en que recibe el despacho ───────────────────────
+                    SectionDivider()
+                    SectionHeader("¿En qué viaje recibe el pan?")
+                    Text(
+                        text = "Solo aplica cuando la planta reparte el día en dos turnos. Si esta " +
+                            "sucursal abre tarde o cierra temprano, elige un solo viaje: su pedido " +
+                            "no se reparte y va completo en ese viaje.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(
+                            DISPATCH_TRIP_BOTH to "Los dos viajes",
+                            DISPATCH_TRIP_FIRST to "Solo el primer viaje",
+                            DISPATCH_TRIP_SECOND to "Solo el segundo viaje"
+                        ).forEach { (trip, label) ->
+                            FilterChip(
+                                selected = receivesOnlyInTrip == trip,
+                                onClick = { receivesOnlyInTrip = trip },
+                                label = { Text(label) }
+                            )
                         }
                     }
                 }

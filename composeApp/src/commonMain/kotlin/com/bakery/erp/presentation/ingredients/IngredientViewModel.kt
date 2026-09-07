@@ -8,6 +8,8 @@ import com.bakery.erp.domain.IngredientUsage
 import com.bakery.erp.domain.RecipeRepository
 import com.bakery.erp.model.Branch
 import com.bakery.erp.model.BranchStock
+import com.bakery.erp.model.STOCK_LOT_EPSILON
+import com.bakery.erp.model.StockLot
 import com.bakery.erp.model.Ingredient
 import com.bakery.erp.model.StockMovement
 import com.bakery.erp.model.User
@@ -18,6 +20,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.random.Random
+import kotlin.time.Clock
 
 data class IngredientUiState(
     val ingredientList: List<Ingredient> = emptyList(),
@@ -29,6 +32,8 @@ data class IngredientUiState(
     val relatedRecipes: List<IngredientUsage>? = null,
     val isRelatedRecipesLoading: Boolean = false,
     val relatedRecipesIngredientId: String? = null,
+    val isSyncingIngredientName: Boolean = false,
+    val syncedIngredientNameCount: Int? = null,
     // Branch filter for ingredient list
     val accessibleBranches: List<Branch> = emptyList(),
     val selectedBranch: Branch? = null,
@@ -37,6 +42,8 @@ data class IngredientUiState(
     // Detail tabs
     val selectedIngredientStocks: List<BranchStock>? = null,
     val selectedIngredientStocksForId: String? = null,
+    /** Lotes vivos del insumo perecedero abierto, ya ordenados por vencimiento. */
+    val selectedIngredientLots: List<StockLot> = emptyList(),
     val stockMovements: List<StockMovement>? = null,
     val stockMovementsForId: String? = null,
     val isMovementsLoading: Boolean = false
@@ -107,6 +114,42 @@ class IngredientViewModel(
         }
     }
 
+    /**
+     * `RecipeComponent.ingredientName` es una copia del nombre del insumo
+     * guardada al momento de agregarlo a la receta — no se relee del catálogo
+     * ([Ingredient]), así que renombrar el insumo no cambia por sí solo lo que
+     * el panadero ve en la receta escalada. Este método recorre las recetas que
+     * usan el insumo (reutilizando [RecipeRepository.getRecipesUsingIngredient])
+     * y, para cada una, relee la receta completa, actualiza solo el/los
+     * componente(s) de este insumo y la vuelve a guardar con
+     * [RecipeRepository.updateRecipe] — el mismo camino de guardado normal de
+     * una receta, así que no arriesga el resto de sus datos.
+     */
+    fun syncIngredientNameInRecipes(companyId: String, ingredient: Ingredient) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSyncingIngredientName = true, syncedIngredientNameCount = null) }
+            val usages = runCatching {
+                recipeRepository.getRecipesUsingIngredient(companyId, ingredient.id)
+            }.getOrElse { emptyList() }
+            var updatedCount = 0
+            usages.map { it.recipeId }.distinct().forEach { recipeId ->
+                runCatching {
+                    val recipe = recipeRepository.getRecipe(companyId, recipeId)
+                    val patched = recipe.components.map { component ->
+                        if (component.ingredientId == ingredient.id && component.ingredientName != ingredient.name) {
+                            component.copy(ingredientName = ingredient.name)
+                        } else component
+                    }
+                    if (patched != recipe.components) {
+                        recipeRepository.updateRecipe(companyId, recipe.copy(components = patched))
+                        updatedCount++
+                    }
+                }
+            }
+            _uiState.update { it.copy(isSyncingIngredientName = false, syncedIngredientNameCount = updatedCount) }
+        }
+    }
+
     // ── Branch filter for ingredient list ────────────────────────────────────
 
     fun loadAccessibleBranches(companyId: String, currentUser: User) {
@@ -147,9 +190,20 @@ class IngredientViewModel(
             val stocks = runCatching {
                 repository.getBranchStocksForIngredient(companyId, ingredientId, currentUser.branchIds)
             }.getOrElse { emptyList() }
+            // Los lotes se traen junto con el stock: son la misma pregunta ("qué tengo") vista
+            // con un nivel más de detalle, y pedirlos aparte duplicaría el estado de carga.
+            val lots = runCatching {
+                repository.getActiveStockLots(companyId, currentUser.branchIds)
+                    .filter { it.ingredientId == ingredientId && it.remainingQuantity > STOCK_LOT_EPSILON }
+                    .sortedWith(
+                        // Sin fecha al final, igual que el orden de consumo FEFO.
+                        compareBy({ if (it.expiryDate > 0L) it.expiryDate else Long.MAX_VALUE }, { it.receivedAt })
+                    )
+            }.getOrElse { emptyList() }
             _uiState.update { it.copy(
                 selectedIngredientStocks = stocks,
-                selectedIngredientStocksForId = ingredientId
+                selectedIngredientStocksForId = ingredientId,
+                selectedIngredientLots = lots
             ) }
         }
     }
@@ -165,6 +219,64 @@ class IngredientViewModel(
                 stockMovementsForId = ingredientId,
                 isMovementsLoading = false
             ) }
+        }
+    }
+
+    /**
+     * Ingreso/egreso manual de stock (ej. carga del stock inicial antes de tener
+     * compras registradas, o corrección de un conteo físico). Se registra en el
+     * Kardex como tipo AJUSTE — a diferencia de COMPRA/PRODUCCION no tiene
+     * referencia a un documento origen.
+     *
+     * [delta] ya viene con signo (positivo = ingreso, negativo = egreso) y [notes]
+     * ya viene armado por la UI (distingue "Ingreso manual" / "Egreso manual" /
+     * "Conteo físico") para no acoplar el ViewModel a los modos del diálogo.
+     */
+    fun adjustStock(
+        companyId: String,
+        ingredient: Ingredient,
+        branchId: String,
+        branchName: String,
+        delta: Double,
+        notes: String,
+        currentUser: User
+    ) {
+        if (delta == 0.0) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, error = null) }
+            runCatching {
+                val stocks = repository.getBranchStocksForIngredient(companyId, ingredient.id, listOf(branchId))
+                val prevStock = stocks.find { it.branchId == branchId }?.currentStock ?: 0.0
+                repository.updateBranchStock(companyId, ingredient.id, ingredient.name, branchId, branchName, delta)
+                repository.addStockMovement(
+                    companyId, ingredient.id, StockMovement(
+                        type = "AJUSTE",
+                        quantity = delta,
+                        balanceBefore = prevStock,
+                        balanceAfter = (prevStock + delta).coerceAtLeast(0.0),
+                        branchId = branchId,
+                        branchName = branchName,
+                        date = Clock.System.now().toEpochMilliseconds(),
+                        notes = notes
+                    )
+                )
+            }.onSuccess {
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        isSaved = true,
+                        selectedIngredientStocks = null,
+                        selectedIngredientStocksForId = null,
+                        stockMovements = null,
+                        stockMovementsForId = null
+                    )
+                }
+                loadIngredientBranchStocks(companyId, ingredient.id, currentUser)
+                loadStockMovements(companyId, ingredient.id)
+                refreshSelectedBranchStocks(companyId)
+            }.onFailure { e ->
+                _uiState.update { it.copy(isLoading = false, error = e.message ?: "Error al ajustar stock") }
+            }
         }
     }
 

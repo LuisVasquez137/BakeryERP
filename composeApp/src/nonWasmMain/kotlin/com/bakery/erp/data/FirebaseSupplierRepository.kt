@@ -41,6 +41,7 @@ class FirebaseSupplierRepository(
         "phone" to phone,
         "address" to address,
         "notes" to notes,
+        "paymentTermsDays" to paymentTermsDays,
         "active" to active,
         "createdAt" to if (createdAt == 0L) Clock.System.now().toEpochMilliseconds() else createdAt,
         "updatedAt" to Clock.System.now().toEpochMilliseconds()
@@ -53,6 +54,7 @@ class FirebaseSupplierRepository(
         phone = get<String?>("phone") ?: "",
         address = get<String?>("address"),
         notes = get<String?>("notes"),
+        paymentTermsDays = runCatching { get<Long?>("paymentTermsDays")?.toInt() }.getOrNull() ?: 0,
         active = get<Boolean?>("active") ?: true,
         createdAt = readTimestampAsMillis("createdAt"),
         updatedAt = readTimestampAsMillis("updatedAt")

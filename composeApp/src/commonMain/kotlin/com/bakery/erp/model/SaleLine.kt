@@ -1,0 +1,61 @@
+package com.bakery.erp.model
+
+/**
+ * Línea de venta. Subcolección de [Sale].
+ *
+ * En ventas nuevas siempre hay [productId] (siempre se vende un producto concreto). Los campos
+ * [quickGroupId]/[quickGroupName] y [priceSource] = QUICK_GROUP se conservan únicamente para
+ * leer ventas históricas anteriores al rediseño de [POSCategory].
+ *
+ * [costAtSale] es el snapshot del `avgUnitCost` de [FinishedProductStock] al momento de la venta,
+ * para que reportes históricos de margen no se vean afectados por compras posteriores.
+ */
+data class SaleLine(
+    val id: String = "",
+    val saleId: String = "",
+    val productId: String? = null,
+    val productName: String = "",
+    val quickGroupId: String? = null,
+    val quickGroupName: String? = null,
+    val quantity: Double = 0.0,
+    val unitPrice: Double = 0.0,
+    val subtotal: Double = 0.0,
+    val costAtSale: Double = 0.0,
+    val priceListId: String = "",
+    val priceSource: String = SaleLinePriceSource.PRODUCT_SALE_PRICE,
+    /** true si se aplicó descuento al inventario al confirmar la venta. */
+    val stockDeducted: Boolean = false,
+    // ── Producto respaldado por un insumo (el huevo) ─────────────────────────
+    /**
+     * Insumo del que salió el stock, cuando el producto vende del inventario de insumos
+     * en vez del de terminado (ver `Product.linkedIngredientId`). Vacío = venta normal.
+     *
+     * Es un SNAPSHOT y no una lectura del catálogo a propósito, igual que `priceSource`:
+     * la venta tiene que seguir diciendo de dónde salió el pan aunque mañana se desvincule
+     * el producto. Y de paso evita que el repositorio de ventas tenga que conocer el
+     * catálogo de productos para decidir a qué inventario pegarle.
+     */
+    val linkedIngredientId: String = "",
+    val linkedIngredientName: String = "",
+    /** Unidades base del insumo que consumió UNA pieza vendida. 0 = uno a uno. */
+    val ingredientUnitsPerSale: Double = 0.0
+)
+
+/** `true` si la línea descuenta inventario de insumos en vez de terminado. */
+val SaleLine.isIngredientBacked: Boolean
+    get() = linkedIngredientId.isNotEmpty()
+
+/** Unidades del insumo que consume esta línea. Nunca cero si hay insumo detrás. */
+val SaleLine.ingredientUnitsConsumed: Double
+    get() = quantity * (ingredientUnitsPerSale.takeIf { it > 0.0 } ?: 1.0)
+
+object SaleLinePriceSource {
+    /** Override explícito en `ProductPrice` para la lista RETAIL. */
+    const val PRODUCT_OVERRIDE   = "PRODUCT_OVERRIDE"
+    /** Calculado aplicando `priceFactor` al `Product.salePrice`. */
+    const val LIST_FACTOR        = "LIST_FACTOR"
+    /** Usó `Product.salePrice` directamente (sin override ni factor). */
+    const val PRODUCT_SALE_PRICE = "PRODUCT_SALE_PRICE"
+    /** Override por pertenecer a un `SaleQuickGroup` — el precio del grupo manda. */
+    const val QUICK_GROUP        = "QUICK_GROUP"
+}

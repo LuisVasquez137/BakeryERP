@@ -18,6 +18,8 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -42,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.bakery.erp.model.isFromPurchase
 import com.bakery.erp.model.Expense
 import com.bakery.erp.model.formatPeriodLabel
 import com.bakery.erp.presentation.auth.AuthViewModel
@@ -100,11 +103,21 @@ fun ExpenseDetailScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { expense?.let { onNavigateToEdit(it.id) } }) {
-                        Icon(Icons.Default.Edit, contentDescription = "Editar")
-                    }
-                    IconButton(onClick = { showDeleteDialog = true }) {
-                        Icon(Icons.Default.Delete, contentDescription = "Eliminar", tint = MaterialTheme.colorScheme.error)
+                    // Un gasto que nació de una factura no se toca acá: la compra es su
+                    // fuente y la reconstruye completa cada vez que se guarda. Editarlo o
+                    // borrarlo desde Gastos duraría hasta la siguiente corrección de esa
+                    // factura, y el usuario no tendría cómo entender por qué volvió.
+                    if (expense?.isFromPurchase != true) {
+                        IconButton(onClick = { expense?.let { onNavigateToEdit(it.id) } }) {
+                            Icon(Icons.Default.Edit, contentDescription = "Editar")
+                        }
+                        IconButton(onClick = { showDeleteDialog = true }) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = "Eliminar",
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -142,6 +155,25 @@ private fun ExpenseDetailContent(expense: Expense) {
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             CategoryBadge(expense.category)
+        }
+
+        // Sin este aviso, la ausencia de los botones de editar y borrar se lee como un bug.
+        if (expense.isFromPurchase) {
+            Spacer(Modifier.height(12.dp))
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            ) {
+                Text(
+                    text = "Este gasto viene de una factura de compra. Se corrige editando " +
+                        "esa compra — desde acá volvería a aparecer con el valor de la factura.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(12.dp)
+                )
+            }
         }
 
         Spacer(Modifier.height(12.dp))

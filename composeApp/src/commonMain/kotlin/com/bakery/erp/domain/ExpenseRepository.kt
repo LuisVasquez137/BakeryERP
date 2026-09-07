@@ -9,6 +9,21 @@ interface ExpenseRepository {
     suspend fun updateExpense(companyId: String, expense: Expense)
     suspend fun deleteExpense(companyId: String, expenseId: String)
 
+    /**
+     * Deja los gastos generados por [purchaseId] exactamente igual a [expenses]: borra los
+     * que ya no corresponden y escribe los actuales.
+     *
+     * Se reconcilia por FACTURA y no por línea porque `updatePurchase` borra y reescribe la
+     * subcolección con ids nuevos: emparejar por `sourcePurchaseLineId` fallaría en cada
+     * edición y dejaría el mes duplicado. Una lista vacía revierte por completo — que es lo
+     * que necesita el borrado de la compra.
+     */
+    suspend fun replaceExpensesForPurchase(
+        companyId: String,
+        purchaseId: String,
+        expenses: List<Expense>
+    )
+
     /** Gastos de un período "YYYY-MM". */
     suspend fun getExpensesForPeriod(companyId: String, period: String): List<Expense>
 

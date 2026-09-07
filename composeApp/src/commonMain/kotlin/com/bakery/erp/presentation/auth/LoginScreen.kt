@@ -37,6 +37,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import bakeryerp.composeapp.generated.resources.Res
 import bakeryerp.composeapp.generated.resources.ic_google
+import com.bakery.erp.ui.LoadingOverlay
 import org.jetbrains.compose.resources.painterResource
 import androidx.compose.runtime.remember
 
@@ -139,5 +140,8 @@ fun LoginScreen(
             Text("¿No tienes cuenta? Regístrate")
         }
     }
+
+    // Overlay de carga a pantalla completa mientras se autentica / verifica la sesión.
+    LoadingOverlay(visible = state.isLoading)
     }
 }

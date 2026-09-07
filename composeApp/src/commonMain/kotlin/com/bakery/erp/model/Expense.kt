@@ -26,9 +26,21 @@ data class Expense(
     val amount: Double = 0.0,
     val period: String = "",         // "YYYY-MM"
     val notes: String? = null,
+    /**
+     * Compra que originó el gasto, cuando entró por una factura de proveedor en vez de
+     * capturarse a mano. Sin este vínculo, editar o borrar esa factura dejaría gastos
+     * huérfanos inflando el mes — el mismo motivo por el que el inventario se corrige
+     * por diferencia y no reescribiendo. Vacío = gasto capturado directamente.
+     */
+    val sourcePurchaseId: String = "",
+    val sourcePurchaseLineId: String = "",
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L
 )
+
+/** `true` si el gasto lo generó una factura de compra y no debe editarse a mano. */
+val Expense.isFromPurchase: Boolean
+    get() = sourcePurchaseId.isNotEmpty()
 
 private val MONTH_NAMES = listOf(
     "", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",

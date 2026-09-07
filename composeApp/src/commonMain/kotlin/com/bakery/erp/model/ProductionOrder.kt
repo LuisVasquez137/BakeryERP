@@ -19,6 +19,16 @@ data class ProductionOrder(
      * planta productora antes de incorporarse al lote en curso.
      */
     val isLateOrder: Boolean = false,
+    /**
+     * Pedido que la planta decidió **no** producir y sacó de la planificación.
+     *
+     * Sigue PENDING y sigue visible en su propia fecha (lista de pedidos,
+     * consolidado de ese día): no se cancela ni se borra, solo deja de aparecer
+     * en el aviso de "pendientes en otras fechas" del formulario de lote, que es
+     * donde se acumulan los pedidos viejos que nunca se produjeron y terminan
+     * tapando la pantalla.
+     */
+    val excludedFromLotPlanning: Boolean = false,
     val notes: String? = null,
     val createdByUserId: String = "",
     val createdByUserName: String = "",

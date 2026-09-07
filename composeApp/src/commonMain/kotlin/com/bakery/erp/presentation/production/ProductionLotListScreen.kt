@@ -1,9 +1,11 @@
 package com.bakery.erp.presentation.production
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -12,6 +14,8 @@ import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Factory
+import androidx.compose.material.icons.filled.NightsStay
+import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -20,11 +24,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.bakery.erp.model.Permission
 import com.bakery.erp.model.ProductionLot
 import com.bakery.erp.model.ProductionLotStatus
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.presentation.auth.AuthViewModel
+import com.bakery.erp.ui.LoadingOverlay
 import kotlin.time.Clock
 import kotlinx.datetime.Instant
 import kotlinx.datetime.LocalDateTime
@@ -32,6 +38,7 @@ import kotlinx.datetime.LocalTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toInstant
 import kotlinx.datetime.toLocalDateTime
+import com.bakery.erp.ui.theme.BrandColors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -88,6 +95,7 @@ fun ProductionLotListScreen(
         else "Lotes de Producción"
     }
 
+    Box(Modifier.fillMaxSize()) {
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
@@ -99,7 +107,7 @@ fun ProductionLotListScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF005B8D),
+                    containerColor = BrandColors.Primary,
                     titleContentColor = Color.White,
                     navigationIconContentColor = Color.White
                 )
@@ -109,11 +117,11 @@ fun ProductionLotListScreen(
             if (canManage) {
                 FloatingActionButton(
                     onClick = onNavigateToForm,
-                    containerColor = Color(0xFF005B8D)
+                    containerColor = BrandColors.Primary
                 ) { Icon(Icons.Default.Add, "Nuevo lote", tint = Color.White) }
             }
         },
-        containerColor = Color(0xFFFDFBF7)
+        containerColor = BrandColors.Ivory
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             DateHeader(
@@ -163,6 +171,8 @@ fun ProductionLotListScreen(
             }
         }
     }
+    LoadingOverlay(visible = state.isLoading)
+    }
 }
 
 @Composable
@@ -183,7 +193,7 @@ private fun DateHeader(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onPrev) {
-                Icon(Icons.Default.ChevronLeft, "Día anterior", tint = Color(0xFF005B8D))
+                Icon(Icons.Default.ChevronLeft, "Día anterior", tint = BrandColors.Primary)
             }
             Row(
                 modifier = Modifier.weight(1f).clickable(onClick = onResetToday),
@@ -193,14 +203,14 @@ private fun DateHeader(
                 Icon(
                     Icons.Default.CalendarToday,
                     contentDescription = null,
-                    tint = Color(0xFF005B8D),
+                    tint = BrandColors.Primary,
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
                     formatProductionDate(dateMillis),
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFF005B8D),
+                    color = BrandColors.Primary,
                     style = MaterialTheme.typography.titleMedium
                 )
                 Spacer(Modifier.width(8.dp))
@@ -211,7 +221,7 @@ private fun DateHeader(
                 )
             }
             IconButton(onClick = onNext) {
-                Icon(Icons.Default.ChevronRight, "Día siguiente", tint = Color(0xFF005B8D))
+                Icon(Icons.Default.ChevronRight, "Día siguiente", tint = BrandColors.Primary)
             }
         }
     }
@@ -223,11 +233,64 @@ private fun startOfTodayLotListMillis(): Long {
     return LocalDateTime(today, LocalTime(0, 0, 0)).toInstant(tz).toEpochMilliseconds()
 }
 
+/** Heurística por nombre — el turno no tiene un campo "tipo" estructurado,
+ *  y `startTime` obligaría a cargar `ProductionShift` aparte solo para esto.
+ *  "Turno noche" / "Turno mañana" / "Turno dia (calvario)" ya cubren los
+ *  nombres reales en uso; default = día si no dice "noche". */
+private fun isNightShift(shiftName: String): Boolean = shiftName.contains("noche", ignoreCase = true)
+
+/** Color de acento del turno — mismo tono en el badge, la etiqueta y la
+ *  franja de la tarjeta, para que la asociación día/noche sea inmediata. */
+private fun shiftAccentColor(shiftName: String): Color =
+    if (isNightShift(shiftName)) Color(0xFF2A2D7C) else Color(0xFFFF8F00)
+
+/** Distinto de un vistazo aunque no se distinga el color (forma + ícono +
+ *  etiqueta, no solo tinte): de día un círculo dorado con sol, de noche un
+ *  cuadrado redondeado azul-violeta oscuro con luna — silueta distinta,
+ *  no solo cambia el tono. */
+@Composable
+private fun ShiftIconBadge(
+    shiftName: String,
+    size: androidx.compose.ui.unit.Dp = 26.dp,
+    showLabel: Boolean = false
+) {
+    val isNight = isNightShift(shiftName)
+    val accent = shiftAccentColor(shiftName)
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Surface(
+            shape = if (isNight) RoundedCornerShape(size * 0.3f) else CircleShape,
+            color = accent,
+            modifier = Modifier.size(size)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    if (isNight) Icons.Default.NightsStay else Icons.Default.WbSunny,
+                    contentDescription = if (isNight) "Turno de noche" else "Turno de día",
+                    tint = Color.White,
+                    modifier = Modifier.size(size * 0.62f)
+                )
+            }
+        }
+        if (showLabel) {
+            Surface(shape = RoundedCornerShape(4.dp), color = accent) {
+                Text(
+                    if (isNight) "NOCHE" else "DÍA",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = Color.White,
+                    letterSpacing = 1.sp,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun ShiftSectionHeader(shiftName: String, lotCount: Int) {
     Surface(
         shape = RoundedCornerShape(8.dp),
-        color = Color(0xFF005B8D),
+        color = BrandColors.Primary,
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
@@ -235,13 +298,16 @@ private fun ShiftSectionHeader(shiftName: String, lotCount: Int) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(
-                shiftName,
-                color = Color.White,
-                fontWeight = FontWeight.Bold,
-                style = MaterialTheme.typography.titleMedium
-            )
-            Surface(shape = RoundedCornerShape(12.dp), color = Color(0xFFD9A441)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ShiftIconBadge(shiftName, size = 30.dp, showLabel = true)
+                Text(
+                    shiftName,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+            Surface(shape = RoundedCornerShape(12.dp), color = BrandColors.AccentDeep) {
                 Text(
                     "$lotCount lote${if (lotCount == 1) "" else "s"}",
                     color = Color.White,
@@ -269,32 +335,46 @@ fun ProductionLotCard(lot: ProductionLot, onClick: () -> Unit) {
         colors = CardDefaults.cardColors(containerColor = Color.White),
         shape = RoundedCornerShape(12.dp)
     ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(lot.producingBranchName, fontWeight = FontWeight.SemiBold, color = Color(0xFF005B8D))
-                Text(
-                    "${lot.shiftName} — ${formatProductionDate(lot.productionDate)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.Gray
-                )
-                Text(
-                    "${lot.lineCount} producto(s)",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.Gray
-                )
-            }
-            Surface(shape = RoundedCornerShape(20.dp), color = statusBg) {
-                Text(
-                    ProductionLotStatus.label(lot.status),
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = statusColor,
-                    fontWeight = FontWeight.SemiBold
-                )
+        // Franja de color a la izquierda con el mismo acento del turno — se
+        // distingue a simple vista al hacer scroll, sin depender de leer el
+        // ícono pequeño.
+        Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+            Box(
+                modifier = Modifier
+                    .width(6.dp)
+                    .fillMaxHeight()
+                    .background(shiftAccentColor(lot.shiftName))
+            )
+            Row(
+                modifier = Modifier.weight(1f).padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(lot.producingBranchName, fontWeight = FontWeight.SemiBold, color = BrandColors.Primary)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        ShiftIconBadge(lot.shiftName, size = 18.dp)
+                        Text(
+                            "${lot.shiftName} — ${formatProductionDate(lot.productionDate)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray
+                        )
+                    }
+                    Text(
+                        "${lot.lineCount} producto(s)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+                }
+                Surface(shape = RoundedCornerShape(20.dp), color = statusBg) {
+                    Text(
+                        ProductionLotStatus.label(lot.status),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = statusColor,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             }
         }
     }

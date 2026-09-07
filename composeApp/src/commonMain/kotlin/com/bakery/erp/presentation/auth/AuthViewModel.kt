@@ -5,6 +5,8 @@ import androidx.lifecycle.viewModelScope
 import com.bakery.erp.domain.AuthRepository
 import com.bakery.erp.domain.AuthState
 import com.bakery.erp.domain.GoogleAuthHandler
+import com.bakery.erp.domain.GoogleSignInCancelledException
+import com.bakery.erp.domain.GoogleSignInException
 import com.bakery.erp.model.ExternalCustomer
 import com.bakery.erp.model.User
 import com.bakery.erp.model.UserRole
@@ -26,7 +28,8 @@ data class AuthUiState(
     /** true cuando el revendedor terminó el signup pero falta completar su perfil
      *  (sucursal de retiro, modalidad, hora habitual). Forza nav a ResellerSetupScreen. */
     val needsResellerSetup: Boolean = false,
-    val inviteCode: String? = null
+    val inviteCode: String? = null,
+    val orgName: String? = null
 )
 
 class AuthViewModel(
@@ -59,6 +62,7 @@ class AuthViewModel(
                             )
                         }
                         if (hasOrg && approved) loadInviteCode()
+                        if (hasOrg) loadOrgName(state.user.orgId)
                     }
                     is AuthState.Unauthenticated -> _uiState.update {
                         it.copy(
@@ -69,6 +73,7 @@ class AuthViewModel(
                             isPendingApproval = false,   // sin esto el AppNavigation no detectaba el sign-out
                             needsResellerSetup = false,
                             inviteCode = null,
+                            orgName = null,
                             error = null
                         )
                     }
@@ -108,7 +113,8 @@ class AuthViewModel(
                     _uiState.update {
                         it.copy(
                             isLoading = false, user = user,
-                            isAuthenticated = true, needsOnboarding = false, error = null
+                            isAuthenticated = true, needsOnboarding = false,
+                            orgName = orgName, error = null
                         )
                     }
                     loadInviteCode()
@@ -173,14 +179,35 @@ class AuthViewModel(
             _uiState.update { it.copy(isLoading = true, error = null) }
             val idToken = try {
                 googleAuthHandler.getIdToken()
+            } catch (e: GoogleSignInCancelledException) {
+                // El usuario cerró el selector: no es un error, solo dejamos de cargar.
+                _uiState.update { it.copy(isLoading = false, error = null) }
+                return@launch
+            } catch (e: GoogleSignInException) {
+                val detail = e.diagnostic?.let { d -> "\n\nDetalle técnico: $d" } ?: ""
+                _uiState.update {
+                    it.copy(isLoading = false, error = (e.message ?: "Error con Google") + detail)
+                }
+                return@launch
             } catch (e: Exception) {
-                // Popup cancelled or error (e.g. auth/popup-closed-by-user)
+                // Web: popup cerrado por el usuario (auth/popup-closed-by-user) u otro fallo.
                 _uiState.update { it.copy(isLoading = false, error = null) }
                 return@launch
             }
             if (idToken == null) {
-                // Web: signInWithPopup already authenticated — authState flow handles navigation.
-                // Keep isLoading=true until the flow emits.
+                if (googleAuthHandler.completesSignInItself) {
+                    // Web: signInWithPopup already authenticated — authState flow handles navigation.
+                    // Keep isLoading=true until the flow emits.
+                    return@launch
+                }
+                // Android/iOS: sin token no hay sesión. Antes esto dejaba el spinner colgado.
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        error = "No se obtuvo la credencial de Google. Verifica que tengas una " +
+                            "cuenta de Google en el dispositivo y que Google Play Services esté actualizado."
+                    )
+                }
                 return@launch
             }
             repository.signInWithGoogle(idToken)
@@ -284,6 +311,13 @@ class AuthViewModel(
         viewModelScope.launch {
             repository.getOrgInviteCode()
                 .onSuccess { code -> _uiState.update { it.copy(inviteCode = code) } }
+        }
+    }
+
+    private fun loadOrgName(orgId: String) {
+        viewModelScope.launch {
+            repository.getOrganization(orgId)
+                .onSuccess { org -> _uiState.update { it.copy(orgName = org.name) } }
         }
     }
 }

@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.User
 import com.bakery.erp.model.UserRole
 import com.bakery.erp.presentation.auth.AuthViewModel
+import com.bakery.erp.ui.theme.BrandColors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -239,7 +240,7 @@ internal fun RoleBadge(role: UserRole) {
         UserRole.ADMIN -> Color(0xFF6A1B9A) to Color.White
         UserRole.MANAGER -> Color(0xFF2E7D32) to Color.White
         UserRole.EMPLOYEE -> Color(0xFF455A64) to Color.White
-        UserRole.RESELLER -> Color(0xFFD9A441) to Color.White
+        UserRole.RESELLER -> BrandColors.AccentDeep to Color.White
     }
     val label = when (role) {
         UserRole.OWNER -> "Dueño"

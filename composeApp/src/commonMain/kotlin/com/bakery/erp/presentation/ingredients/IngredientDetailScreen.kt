@@ -1,10 +1,15 @@
 ﻿package com.bakery.erp.presentation.ingredients
 
 import com.bakery.erp.util.fmt
+import com.bakery.erp.util.fmtPercentage
+import com.bakery.erp.util.gramsToOz
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,19 +25,26 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.EventNote
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.SnackbarHost
@@ -52,16 +64,25 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.domain.IngredientUsage
+import com.bakery.erp.model.Branch
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
+import kotlin.time.Clock
+import kotlin.time.Instant
 import com.bakery.erp.model.BranchStock
+import com.bakery.erp.model.StockLot
 import com.bakery.erp.model.Ingredient
+import com.bakery.erp.model.Permission
 import com.bakery.erp.model.PurchaseFormat
 import com.bakery.erp.model.StockMovement
 import com.bakery.erp.model.User
 import com.bakery.erp.model.convertUnits
 import com.bakery.erp.model.formatStockDisplay
+import com.bakery.erp.model.hasPermission
 import com.bakery.erp.model.largestUnit
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.presentation.purchases.formatPurchaseDate
@@ -92,6 +113,12 @@ fun IngredientDetailScreen(
     }
     LaunchedEffect(state.error) {
         state.error?.let { snackbarHostState.showSnackbar(it); viewModel.clearError() }
+    }
+    LaunchedEffect(state.isSaved) {
+        if (state.isSaved) {
+            viewModel.clearSaved()
+            snackbarHostState.showSnackbar("Stock actualizado")
+        }
     }
 
     if (showDeleteDialog) {
@@ -238,7 +265,7 @@ private fun IngredientDetailContent(
                 )
                 1 -> PresentacionesTab(ingredient)
                 2 -> RecetasTab(
-                    ingredientId = ingredient.id,
+                    ingredient = ingredient,
                     companyId = companyId,
                     state = state,
                     viewModel = viewModel
@@ -352,13 +379,51 @@ private fun InventarioTab(
     state: IngredientUiState,
     viewModel: IngredientViewModel
 ) {
+    var showAdjustDialog by remember { mutableStateOf(false) }
+    val canAdjustStock = currentUser?.hasPermission(Permission.RECEIVE_STOCK) == true
+
     LaunchedEffect(ingredient.id) {
         if (companyId.isNotEmpty() && currentUser != null) {
             viewModel.loadIngredientBranchStocks(companyId, ingredient.id, currentUser)
         }
     }
+    LaunchedEffect(companyId) {
+        if (companyId.isNotEmpty() && currentUser != null && state.accessibleBranches.isEmpty()) {
+            viewModel.loadAccessibleBranches(companyId, currentUser)
+        }
+    }
 
-    TabSectionTitle("Stock por sucursal")
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        TabSectionTitle("Stock por sucursal")
+        if (canAdjustStock) {
+            TextButton(onClick = { showAdjustDialog = true }, enabled = state.accessibleBranches.isNotEmpty()) {
+                Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Ajustar stock", style = MaterialTheme.typography.labelMedium)
+            }
+        }
+    }
+
+    if (showAdjustDialog && currentUser != null) {
+        ManualStockAdjustDialog(
+            ingredient = ingredient,
+            branches = state.accessibleBranches,
+            stocksByBranch = (state.selectedIngredientStocks ?: emptyList()).associate { it.branchId to it.currentStock },
+            initialBranchId = state.selectedIngredientStocks?.firstOrNull()?.branchId
+                ?: state.accessibleBranches.firstOrNull()?.id,
+            onDismiss = { showAdjustDialog = false },
+            onConfirm = { branchId, branchName, delta, notes ->
+                showAdjustDialog = false
+                viewModel.adjustStock(
+                    companyId, ingredient, branchId, branchName, delta, notes, currentUser
+                )
+            }
+        )
+    }
 
     when {
         state.selectedIngredientStocks == null ->
@@ -378,6 +443,38 @@ private fun InventarioTab(
         }
     }
 
+    if (ingredient.isPerishable) {
+        Spacer(Modifier.height(12.dp))
+        TabSectionTitle("Lotes en existencia")
+        if (state.selectedIngredientLots.isEmpty()) {
+            Text(
+                "Sin lotes registrados. Se crean al recibir una compra de este insumo.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline
+            )
+        } else {
+            Text(
+                "Se consume siempre el primero de la lista (el que vence antes).",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(6.dp))
+            state.selectedIngredientLots.forEach { lot ->
+                StockLotRow(lot, ingredient)
+            }
+        }
+    }
+
+    if (ingredient.unitWeightGrams > 0.0) {
+        Spacer(Modifier.height(8.dp))
+        TabSectionTitle("Peso por unidad")
+        DetailInfoRow(
+            label = "Una unidad pesa",
+            value = "${ingredient.unitWeightGrams.fmt(1).trimEnd('0').trimEnd('.')} g " +
+                "(${ingredient.unitWeightGrams.gramsToOz().fmt(2)} oz)"
+        )
+    }
+
     if (ingredient.stockAlert != null) {
         Spacer(Modifier.height(8.dp))
         TabSectionTitle("Alerta de stock mínimo")
@@ -390,6 +487,70 @@ private fun InventarioTab(
             value = "${ingredient.stockAlert.fmt(2).trimEnd('0').trimEnd('.')} $alertUnit"
         )
     }
+}
+
+/**
+ * Una fila por lote, en orden de consumo. Lo que importa de un vistazo es cuál sale primero
+ * y cuánto le queda: por eso el saldo va al lado de la fecha y no en otra pestaña.
+ */
+@Composable
+private fun StockLotRow(lot: StockLot, ingredient: Ingredient) {
+    val now = remember { Clock.System.now().toEpochMilliseconds() }
+    val days = if (lot.expiryDate > 0L) ((lot.expiryDate - now) / 86_400_000L).toInt() else null
+    val urgent = days != null && days <= 7
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (urgent) Color(0xFFFBE0E0) else MaterialTheme.colorScheme.surfaceVariant
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = when {
+                        lot.expiryDate <= 0L -> "Sin fecha de vencimiento"
+                        days != null && days < 0 -> "Vencido hace ${-days} días"
+                        days == 0 -> "Vence hoy"
+                        else -> "Vence en $days días"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (urgent) Color(0xFFB3261E) else MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = buildString {
+                        if (lot.expiryDate > 0L) append(formatIngredientDate(lot.expiryDate))
+                        if (lot.lotCode.isNotBlank()) {
+                            if (isNotEmpty()) append(" · ")
+                            append("lote ${lot.lotCode}")
+                        }
+                        if (isNotEmpty()) append(" · ")
+                        append(lot.branchName)
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Text(
+                text = formatStockDisplay(lot.remainingQuantity, ingredient),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+/** dd/MM/yyyy sin depender de APIs de plataforma (regla KMP/JS del proyecto). */
+private fun formatIngredientDate(millis: Long): String {
+    val d = Instant.fromEpochMilliseconds(millis).toLocalDateTime(TimeZone.currentSystemDefault()).date
+    return "${d.dayOfMonth.toString().padStart(2, '0')}/" +
+        "${d.monthNumber.toString().padStart(2, '0')}/${d.year}"
 }
 
 @Composable
@@ -441,14 +602,16 @@ private fun PresentacionesTab(ingredient: Ingredient) {
 
 @Composable
 private fun RecetasTab(
-    ingredientId: String,
+    ingredient: Ingredient,
     companyId: String,
     state: IngredientUiState,
     viewModel: IngredientViewModel
 ) {
+    val ingredientId = ingredient.id
     LaunchedEffect(ingredientId) {
         if (companyId.isNotEmpty()) viewModel.loadRelatedRecipes(companyId, ingredientId)
     }
+    var showSyncConfirm by remember { mutableStateOf(false) }
 
     when {
         state.isRelatedRecipesLoading ->
@@ -460,7 +623,7 @@ private fun RecetasTab(
             PlaceholderSection(
                 icon = Icons.Default.Star,
                 title = "Sin recetas vinculadas",
-                subtitle = "Ninguna receta usa este insumo aÃºn"
+                subtitle = "Ninguna receta usa este insumo aún"
             )
 
         else -> {
@@ -469,12 +632,63 @@ private fun RecetasTab(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(8.dp))
+
+            // El nombre que ve el panadero en cada receta (RecipeComponent.
+            // ingredientName) es una copia guardada al agregar el insumo — no se
+            // relee del catálogo. Si renombras el insumo, este botón actualiza
+            // esa copia en las recetas que ya lo usan.
+            Button(
+                onClick = { showSyncConfirm = true },
+                enabled = !state.isSyncingIngredientName,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+            ) {
+                if (state.isSyncingIngredientName) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                } else {
+                    Icon(Icons.Default.SwapVert, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Actualizar nombre en estas recetas", fontWeight = FontWeight.Bold)
+                }
+            }
+            state.syncedIngredientNameCount?.let { count ->
+                Text(
+                    if (count > 0) "Nombre actualizado en $count receta(s)." else "Las recetas ya tenían el nombre al día.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFF2E7D32),
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+
             state.relatedRecipes.forEach { usage ->
                 RecipeUsageCard(usage)
                 Spacer(Modifier.height(8.dp))
             }
         }
+    }
+
+    if (showSyncConfirm) {
+        AlertDialog(
+            onDismissRequest = { showSyncConfirm = false },
+            title = { Text("Actualizar nombre en recetas") },
+            text = {
+                Text(
+                    "Esto actualiza el nombre guardado de \"${ingredient.name}\" en las " +
+                        "${state.relatedRecipes?.size ?: 0} receta(s) que lo usan, para que el " +
+                        "panadero vea el nombre actual en vez del que tenía cuando se agregó a la receta."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.syncIngredientNameInRecipes(companyId, ingredient)
+                    showSyncConfirm = false
+                }) { Text("Actualizar", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSyncConfirm = false }) { Text("Cancelar") }
+            }
+        )
     }
 }
 
@@ -508,7 +722,7 @@ private fun RecipeUsageCard(usage: IngredientUsage) {
             Column(horizontalAlignment = Alignment.End) {
                 if (usage.percentage > 0) {
                     Text(
-                        text = "${usage.percentage.fmt(1)}%",
+                        text = "${usage.percentage.fmtPercentage()}%",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
@@ -594,25 +808,33 @@ private fun KardexTab(
 private fun KardexRow(mov: StockMovement, ingredient: Ingredient) {
     val qtyColor = if (mov.quantity >= 0) MaterialTheme.colorScheme.primary
                    else MaterialTheme.colorScheme.error
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(formatPurchaseDate(mov.date), style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1.2f), maxLines = 1)
-        Text(mov.branchName, style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1.2f), maxLines = 1)
-        Text(mov.type, style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(0.8f), maxLines = 1)
-        Text(
-            text = "${if (mov.quantity > 0) "+" else ""}${mov.quantity.fmt(1)} ${ingredient.effectiveBaseUnit}",
-            style = MaterialTheme.typography.labelSmall,
-            color = qtyColor,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.weight(1.0f)
-        )
-        Text(
-            formatStockDisplay(mov.balanceAfter, ingredient),
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.weight(1.0f)
-        )
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(formatPurchaseDate(mov.date), style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1.2f), maxLines = 1)
+            Text(mov.branchName, style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1.2f), maxLines = 1)
+            Text(mov.type, style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(0.8f), maxLines = 1)
+            Text(
+                text = "${if (mov.quantity > 0) "+" else ""}${mov.quantity.fmt(1)} ${ingredient.effectiveBaseUnit}",
+                style = MaterialTheme.typography.labelSmall,
+                color = qtyColor,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1.0f)
+            )
+            Text(
+                formatStockDisplay(mov.balanceAfter, ingredient),
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.weight(1.0f)
+            )
+        }
+        if (!mov.notes.isNullOrBlank()) {
+            Text(
+                text = mov.notes,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                modifier = Modifier.padding(top = 2.dp)
+            )
+        }
     }
 }
 
@@ -712,6 +934,154 @@ private fun PurchaseFormatCard(format: PurchaseFormat) {
 }
 
 // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+private enum class StockAdjustMode { ENTRY, EXIT, EXACT }
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ManualStockAdjustDialog(
+    ingredient: Ingredient,
+    branches: List<Branch>,
+    stocksByBranch: Map<String, Double>,
+    initialBranchId: String?,
+    onDismiss: () -> Unit,
+    onConfirm: (branchId: String, branchName: String, delta: Double, notes: String) -> Unit
+) {
+    var selectedBranch by remember {
+        mutableStateOf(branches.find { it.id == initialBranchId } ?: branches.firstOrNull())
+    }
+    var branchMenuExpanded by remember { mutableStateOf(false) }
+    var mode by remember { mutableStateOf(StockAdjustMode.ENTRY) }
+    var quantityText by remember { mutableStateOf("") }
+    var reason by remember { mutableStateOf("") }
+
+    val enteredValue = quantityText.replace(",", ".").toDoubleOrNull()
+    val currentStock = selectedBranch?.let { stocksByBranch[it.id] } ?: 0.0
+
+    // Delta con signo listo para escribir en el Kardex: en modo "cantidad exacta"
+    // el usuario teclea el total real y aquí se calcula cuánto sumar/restar,
+    // sin que tenga que hacer esa resta mentalmente.
+    val delta = when (mode) {
+        StockAdjustMode.ENTRY -> enteredValue
+        StockAdjustMode.EXIT -> enteredValue?.let { -it }
+        StockAdjustMode.EXACT -> enteredValue?.let { it - currentStock }
+    }
+    val quantityValid = when (mode) {
+        StockAdjustMode.EXACT -> enteredValue != null && enteredValue >= 0.0
+        else -> enteredValue != null && enteredValue > 0.0
+    }
+    val canConfirm = selectedBranch != null && quantityValid && delta != null && delta != 0.0
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Ajustar stock") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Box {
+                    OutlinedTextField(
+                        value = selectedBranch?.name ?: "Selecciona sucursal",
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Sucursal") },
+                        trailingIcon = {
+                            IconButton(onClick = { branchMenuExpanded = true }) {
+                                Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { branchMenuExpanded = true }
+                    )
+                    DropdownMenu(
+                        expanded = branchMenuExpanded,
+                        onDismissRequest = { branchMenuExpanded = false }
+                    ) {
+                        branches.forEach { b ->
+                            DropdownMenuItem(
+                                text = { Text(b.name) },
+                                onClick = { selectedBranch = b; branchMenuExpanded = false }
+                            )
+                        }
+                    }
+                }
+                Text(
+                    text = "Stock actual: ${formatStockDisplay(currentStock, ingredient)}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = mode == StockAdjustMode.ENTRY,
+                        onClick = { mode = StockAdjustMode.ENTRY },
+                        label = { Text("Ingreso") }
+                    )
+                    FilterChip(
+                        selected = mode == StockAdjustMode.EXIT,
+                        onClick = { mode = StockAdjustMode.EXIT },
+                        label = { Text("Egreso") }
+                    )
+                    FilterChip(
+                        selected = mode == StockAdjustMode.EXACT,
+                        onClick = { mode = StockAdjustMode.EXACT },
+                        label = { Text("Cantidad exacta") }
+                    )
+                }
+                OutlinedTextField(
+                    value = quantityText,
+                    onValueChange = { input -> quantityText = input.filter { it.isDigit() || it == '.' || it == ',' } },
+                    label = {
+                        Text(
+                            if (mode == StockAdjustMode.EXACT) "Lo que hay ahora (${ingredient.effectiveBaseUnit})"
+                            else "Cantidad (${ingredient.effectiveBaseUnit})"
+                        )
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (mode == StockAdjustMode.EXACT && delta != null && delta != 0.0) {
+                    Text(
+                        text = "Se registrará como ${if (delta > 0) "+" else ""}${formatStockDisplay(delta, ingredient)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                OutlinedTextField(
+                    value = reason,
+                    onValueChange = { reason = it },
+                    label = { Text("Motivo (opcional)") },
+                    placeholder = { Text("Ej. conteo inicial, merma detectada...") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = canConfirm,
+                onClick = {
+                    val branch = selectedBranch ?: return@TextButton
+                    val d = delta ?: return@TextButton
+                    val notes = buildString {
+                        append(
+                            when (mode) {
+                                StockAdjustMode.ENTRY -> "Ingreso manual"
+                                StockAdjustMode.EXIT -> "Egreso manual"
+                                StockAdjustMode.EXACT -> "Conteo físico (ajustado a ${formatStockDisplay(enteredValue ?: 0.0, ingredient)})"
+                            }
+                        )
+                        if (reason.isNotBlank()) append(" — $reason")
+                    }
+                    onConfirm(branch.id, branch.name, d, notes)
+                }
+            ) { Text("Guardar") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancelar") }
+        }
+    )
+}
 
 @Composable
 private fun TabSectionTitle(title: String) {

@@ -206,6 +206,8 @@ class FirebaseRecipeRepository(
         "stageCount" to 0,
         "yieldCount" to yields.size,
         "notes" to notes,
+        "minBatchFlourGrams" to minBatchFlourGrams,
+        "kneadingTimeSeconds" to kneadingTimeSeconds,
         "active" to active,
         "createdAt" to if (createdAt == 0L) Clock.System.now().toEpochMilliseconds() else createdAt,
         "updatedAt" to Clock.System.now().toEpochMilliseconds()
@@ -230,6 +232,7 @@ class FirebaseRecipeRepository(
         "ingredientName" to ingredientName,
         "ingredientUnit" to ingredientUnit,
         "percentage" to percentage,
+        "inputQuantity" to inputQuantity,
         "isBase" to isBase,
         "order" to order
     )
@@ -259,6 +262,12 @@ class FirebaseRecipeRepository(
         stageCount = get<Long?>("stageCount")?.toInt() ?: 0,
         yieldCount = get<Long?>("yieldCount")?.toInt() ?: 0,
         notes = get<String?>("notes"),
+        minBatchFlourGrams = runCatching {
+            get<Double?>("minBatchFlourGrams")
+        }.getOrNull() ?: 0.0,
+        kneadingTimeSeconds = runCatching {
+            get<Long?>("kneadingTimeSeconds")?.toInt()
+        }.getOrNull() ?: 0,
         active = get<Boolean?>("active") ?: true,
         createdAt = readTimestampAsMillis("createdAt"),
         updatedAt = readTimestampAsMillis("updatedAt")
@@ -281,6 +290,7 @@ class FirebaseRecipeRepository(
         ingredientName = get<String?>("ingredientName") ?: "",
         ingredientUnit = get<String?>("ingredientUnit") ?: "",
         percentage = get<Double?>("percentage") ?: 0.0,
+        inputQuantity = runCatching { get<Double?>("inputQuantity") }.getOrNull() ?: 0.0,
         isBase = get<Boolean?>("isBase") ?: false,
         order = get<Long?>("order")?.toInt() ?: 0
     )

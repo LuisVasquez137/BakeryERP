@@ -15,17 +15,26 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.bakery.erp.ui.LoadingOverlay
 
 @Composable
 fun AuthChoiceScreen(
     onNavigateToRegister: () -> Unit,
     onNavigateToJoinOrg: () -> Unit,
-    onNavigateToLogin: () -> Unit
+    onNavigateToLogin: () -> Unit,
+    viewModel: AuthViewModel
 ) {
+    val state by viewModel.uiState.collectAsState()
+    // Usuario ya autenticado (p.ej. con Google) pero sin organización → onboarding.
+    val isOnboarding = state.user != null
+    val name = state.user?.displayName
+
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
@@ -39,36 +48,64 @@ fun AuthChoiceScreen(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = "BakeryERP",
-            style = MaterialTheme.typography.displaySmall,
-            color = MaterialTheme.colorScheme.primary
+            text = if (isOnboarding && !name.isNullOrBlank()) "¡Hola, $name!" else "BakeOS",
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.primary,
+            textAlign = TextAlign.Center
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(12.dp))
         Text(
-            text = "Gestión inteligente para tu panadería",
-            style = MaterialTheme.typography.bodyMedium,
+            text = "¿Deseas crear una nueva panadería o unirte a una ya existente?",
+            style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
-        Spacer(Modifier.height(64.dp))
+        Spacer(Modifier.height(48.dp))
 
         Button(
             onClick = onNavigateToRegister,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Crear nueva panadería")
+            Text("Crear una nueva panadería")
         }
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = "Serás el propietario y podrás invitar a tu equipo.",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(Modifier.height(24.dp))
         OutlinedButton(
             onClick = onNavigateToJoinOrg,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Unirme con un código")
+            Text("Unirme a una panadería existente")
         }
-        Spacer(Modifier.height(32.dp))
-        TextButton(onClick = onNavigateToLogin) {
-            Text("¿Ya tienes cuenta? Inicia sesión")
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = "Ingresa el código de invitación que te compartieron.",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(Modifier.height(40.dp))
+        // Onboarding (Google): la sesión ya está iniciada → ofrecer cerrar sesión,
+        // no "iniciar sesión". Registro por email: volver al login.
+        if (isOnboarding) {
+            TextButton(onClick = { viewModel.signOut() }) {
+                Text("Cerrar sesión")
+            }
+        } else {
+            TextButton(onClick = onNavigateToLogin) {
+                Text("¿Ya tienes cuenta? Inicia sesión")
+            }
         }
     }
+
+    // Overlay mientras se cierra la sesión / verifica el estado.
+    LoadingOverlay(visible = state.isLoading)
     }
 }

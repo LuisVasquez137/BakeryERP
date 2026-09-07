@@ -69,9 +69,11 @@ import com.bakery.erp.model.User
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.ui.AdaptiveContainer
 import com.bakery.erp.ui.ImagePickerButton
+import com.bakery.erp.ui.LoadingOverlay
 import kotlin.time.Clock
+import com.bakery.erp.ui.theme.BrandColors.Primary as PrimaryBlue
+import com.bakery.erp.ui.theme.BrandColors
 
-private val PrimaryBlue = Color(0xFF005B8D)
 
 private val DAY_LABELS = listOf("L", "M", "X", "J", "V", "S", "D")
 private val DAY_NUMBERS = listOf(1, 2, 3, 4, 5, 6, 7)
@@ -136,7 +138,7 @@ fun EmployeeFormScreen(
                     )
                 )
             },
-            containerColor = Color(0xFFFDFBF7)
+            containerColor = BrandColors.Ivory
         ) { padding ->
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
@@ -342,6 +344,7 @@ private fun EmployeeFormContent(
         )
     }
 
+    Box(Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -365,7 +368,7 @@ private fun EmployeeFormContent(
                 )
             )
         },
-        containerColor = Color(0xFFFDFBF7)
+        containerColor = BrandColors.Ivory
     ) { padding ->
         AdaptiveContainer(modifier = Modifier.padding(padding)) {
             Column(
@@ -873,6 +876,8 @@ private fun EmployeeFormContent(
                 Spacer(Modifier.height(16.dp))
             }
         }
+    }
+    LoadingOverlay(visible = isLoading)
     }
 }
 

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Tema del splash nativo (Android 12+). Solo muestra el fondo ivory un instante para evitar el
+      flash blanco; NO usa windowSplashScreenAnimatedIcon porque el logo es horizontal y el splash
+      nativo enmascara el icono a un círculo (lo cortaría). El logo completo lo enseña el
+      SplashScreen de Compose. postSplashScreenTheme apunta al tema normal de la app.
+    -->
+    <style name="Theme.BakeOS.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">#FDFBF7</item>
+        <item name="postSplashScreenTheme">@android:style/Theme.Material.Light.NoActionBar</item>
+    </style>
+</resources>

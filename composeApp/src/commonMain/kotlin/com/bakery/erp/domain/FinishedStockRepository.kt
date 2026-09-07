@@ -1,0 +1,44 @@
+package com.bakery.erp.domain
+
+import com.bakery.erp.domain.report.StockMovementSummary
+import com.bakery.erp.model.FinishedProductStock
+import com.bakery.erp.model.FinishedStockMovement
+import kotlinx.coroutines.flow.Flow
+
+interface FinishedStockRepository {
+
+    suspend fun getStock(companyId: String, branchId: String, productId: String): FinishedProductStock?
+
+    suspend fun getStocksForBranch(companyId: String, branchId: String): List<FinishedProductStock>
+
+    fun observeStocksForBranch(companyId: String, branchId: String): Flow<List<FinishedProductStock>>
+
+    suspend fun getMovementsForProduct(
+        companyId: String,
+        branchId: String,
+        productId: String,
+        fromMillis: Long? = null,
+        untilMillis: Long? = null
+    ): List<FinishedStockMovement>
+
+    /**
+     * Aplica un movimiento al stock terminado:
+     *  - signed `quantity > 0` → ingreso (RECEPCION). Recalcula `avgUnitCost` ponderado.
+     *  - signed `quantity < 0` → salida (MERMA/VENTA/AJUSTE/TRANSFERENCIA). Mantiene avgUnitCost.
+     *  - Crea el doc de stock si no existía.
+     *  - Escribe el movimiento en el Kardex.
+     */
+    suspend fun applyMovement(companyId: String, movement: FinishedStockMovement)
+
+    /**
+     * Agrega los movimientos del Kardex de terminado en rango. Si [branchId] está vacío,
+     * agrega para toda la organización. Calcula receivedUnits / soldUnits / mermaUnits +
+     * mermaValue (suma de |quantity| × unitPriceAtMovement de movimientos MERMA).
+     */
+    suspend fun aggregateMovementsInRange(
+        companyId: String,
+        branchId: String,
+        fromMillis: Long,
+        untilMillis: Long
+    ): StockMovementSummary
+}

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Honey Gold de la marca: tinta el icono pequeño de las notificaciones.
+         Se usa el dorado y no el azul porque Android pinta ese icono sobre un
+         fondo claro y el azul oscuro se pierde. -->
+    <color name="notification_accent">#FF9800</color>
+</resources>

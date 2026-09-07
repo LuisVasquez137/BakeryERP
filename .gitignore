@@ -22,3 +22,28 @@ node_modules/
 keystore.properties
 *.jks
 *.keystore
+
+# Respaldos de limpiezas puntuales de Firestore (datos de la empresa)
+functions/tools/backup_*.json
+
+# Llave de firma exportada de Play Console: es un PKCS#12, no lleva extensión,
+# así que las reglas *.jks / *.keystore de arriba NO la atrapan.
+bakeos-release
+# Certificado público del upload key: se descarga de Play Console cuando hace falta.
+upload_certificate.pem
+
+# Volcados de Firestore con datos reales de la empresa (mismo criterio que
+# functions/tools/backup_*.json).
+/br.json
+/pr.json
+/us.json
+
+# Basura de la JVM y del dev server
+hs_err_pid*.log
+replay_pid*.log
+*.stackdump
+web-dev-server.log
+
+# Copias sueltas en la raíz de assets que ya viven en composeApp/src
+/rain_icon.png
+/kitchen_timer.mp3

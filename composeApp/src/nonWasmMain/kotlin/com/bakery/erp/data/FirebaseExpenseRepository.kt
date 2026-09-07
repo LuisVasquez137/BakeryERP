@@ -35,6 +35,22 @@ class FirebaseExpenseRepository(
         col(companyId).document(expenseId).delete()
     }
 
+    override suspend fun replaceExpensesForPurchase(
+        companyId: String,
+        purchaseId: String,
+        expenses: List<Expense>
+    ) {
+        // Igualdad simple sobre un campo: no necesita índice compuesto.
+        val existing = runCatching {
+            col(companyId).where { "sourcePurchaseId" equalTo purchaseId }.get().documents
+        }.getOrElse { emptyList() }
+        existing.forEach { col(companyId).document(it.id).delete() }
+        expenses.forEach { expense ->
+            val docRef = col(companyId).document
+            docRef.set(expense.copy(id = docRef.id, sourcePurchaseId = purchaseId).toMap())
+        }
+    }
+
     override suspend fun getExpensesForPeriod(companyId: String, period: String): List<Expense> =
         col(companyId).get().documents.map { it.toExpense() }.filter { it.period == period }
 
@@ -75,6 +91,8 @@ class FirebaseExpenseRepository(
         "amount" to amount,
         "period" to period,
         "notes" to notes,
+        "sourcePurchaseId" to sourcePurchaseId,
+        "sourcePurchaseLineId" to sourcePurchaseLineId,
         "createdAt" to if (createdAt == 0L) Clock.System.now().toEpochMilliseconds() else createdAt,
         "updatedAt" to Clock.System.now().toEpochMilliseconds()
     )
@@ -91,6 +109,8 @@ class FirebaseExpenseRepository(
         amount = get<Double?>("amount") ?: get<Long?>("amount")?.toDouble() ?: 0.0,
         period = get<String?>("period") ?: "",
         notes = get<String?>("notes"),
+        sourcePurchaseId = runCatching { get<String?>("sourcePurchaseId") }.getOrNull() ?: "",
+        sourcePurchaseLineId = runCatching { get<String?>("sourcePurchaseLineId") }.getOrNull() ?: "",
         createdAt = readTimestampAsMillis("createdAt"),
         updatedAt = readTimestampAsMillis("updatedAt")
     )

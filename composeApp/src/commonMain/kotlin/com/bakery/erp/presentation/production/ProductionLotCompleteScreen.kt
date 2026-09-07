@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.ProductionLotLine
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.presentation.products.ProductViewModel
+import com.bakery.erp.ui.theme.BrandColors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -80,7 +81,17 @@ fun ProductionLotCompleteScreen(
     }
 
     val lot = state.selectedLot
-    val lines = state.editableLotLines
+    // Mismo orden que la orden de producción: el panadero acaba de trabajar esa
+    // secuencia y confirma las cantidades leyendo la lista en el mismo orden.
+    val productionSortOrder = state.lotBranch?.productionSortOrder.orEmpty()
+    val lines = remember(state.editableLotLines, productionSortOrder) {
+        applyProductSortOrder(
+            items = state.editableLotLines,
+            sortOrder = productionSortOrder,
+            productIdOf = { it.productId },
+            nameOf = { it.productName }
+        )
+    }
 
     // Prefill una sola vez por carga: si una línea tiene producedQuantity = 0 y
     // plannedQuantity > 0, asumimos "salió lo mismo que se pidió" (el panadero
@@ -201,7 +212,7 @@ fun ProductionLotCompleteScreen(
                 )
             )
         },
-        containerColor = Color(0xFFFDFBF7)
+        containerColor = BrandColors.Ivory
     ) { padding ->
         if (state.isDetailLoading || lot == null) {
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
@@ -221,7 +232,7 @@ fun ProductionLotCompleteScreen(
                         Text(
                             "Cantidades producidas (${lines.size} productos)",
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF005B8D),
+                            color = BrandColors.Primary,
                             style = MaterialTheme.typography.titleSmall
                         )
                         Text(
@@ -313,7 +324,7 @@ private fun CompletingLotOverlay() {
                     "Estamos descontando el stock del inventario",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFF005B8D)
+                    color = BrandColors.Primary
                 )
                 Text(
                     "No cierres la aplicación. Esto puede tardar unos segundos…",
@@ -349,10 +360,10 @@ private fun CompleteTable(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("Producto", style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold, color = Color(0xFF005B8D),
+                        fontWeight = FontWeight.Bold, color = BrandColors.Primary,
                         modifier = Modifier.weight(2.2f))
                     Text("Receta", style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold, color = Color(0xFF005B8D),
+                        fontWeight = FontWeight.Bold, color = BrandColors.Primary,
                         modifier = Modifier.weight(1.6f))
                     Text("Pedido", style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold, color = Color(0xFF555555),
@@ -361,7 +372,7 @@ private fun CompleteTable(
                         fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32),
                         modifier = Modifier.width(if (editMode) 130.dp else 80.dp))
                     Text("Diferencia", style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold, color = Color(0xFF8A6420),
+                        fontWeight = FontWeight.Bold, color = BrandColors.AccentDeep,
                         modifier = Modifier.width(110.dp))
                 }
             }
@@ -392,7 +403,7 @@ private fun CompleteTableRow(
     val diff = produced - planned
     val diffColor = when {
         diff > 0 -> Color(0xFF2E7D32)
-        diff < 0 -> Color(0xFFD9A441)
+        diff < 0 -> BrandColors.AccentDeep
         else     -> Color.Gray
     }
     val diffText = when {
@@ -410,7 +421,7 @@ private fun CompleteTableRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(2.2f)) {
-                Text(line.productName, fontWeight = FontWeight.SemiBold, color = Color(0xFF005B8D))
+                Text(line.productName, fontWeight = FontWeight.SemiBold, color = BrandColors.Primary)
                 if (line.productUnit.isNotEmpty()) {
                     Text(line.productUnit, style = MaterialTheme.typography.labelSmall, color = Color.Gray)
                 }
@@ -477,7 +488,7 @@ private fun LotLineSummaryCard(
     val diff = produced - planned
     val diffColor = when {
         diff > 0 -> Color(0xFF2E7D32)
-        diff < 0 -> Color(0xFFD9A441)
+        diff < 0 -> BrandColors.AccentDeep
         else     -> Color.Gray
     }
     val diffText = when {
@@ -493,7 +504,7 @@ private fun LotLineSummaryCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(line.productName, fontWeight = FontWeight.SemiBold, color = Color(0xFF005B8D))
+                    Text(line.productName, fontWeight = FontWeight.SemiBold, color = BrandColors.Primary)
                     if (line.recipeId.isNotEmpty()) {
                         Text(
                             "Receta: ${line.recipeName}",

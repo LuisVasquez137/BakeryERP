@@ -40,7 +40,8 @@ actual fun ImagePickerButton(
     currentImageUrl: String?,
     selectedBytes: ByteArray?,
     onImageSelected: (ByteArray) -> Unit,
-    modifier: Modifier
+    modifier: Modifier,
+    @Suppress("UNUSED_PARAMETER") allowCamera: Boolean
 ) {
     val preview: ImageBitmap? = remember(selectedBytes) {
         selectedBytes?.let {

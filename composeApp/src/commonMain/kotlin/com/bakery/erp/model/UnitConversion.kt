@@ -30,6 +30,60 @@ fun toBaseUnit(value: Double, fromUnit: String): Double = when (fromUnit) {
     else  -> value
 }
 
+// ── Conteo ↔ peso ────────────────────────────────────────────────────────────
+//
+// El huevo se compra y se cuenta por unidad, pero la receta lo necesita en peso:
+// el % del panadero es una razón entre pesos, y "6" no es un peso. El puente es
+// `Ingredient.unitWeightGrams` (cuánto pesa UNA unidad). Sin ese dato la
+// conversión no existe y estas funciones devuelven null en vez de inventar un
+// número — antes `toBaseUnit` devolvía el valor tal cual y 6 huevos entraban a
+// la receta como 6 gramos.
+
+/** Cuántas unidades sueltas trae una unidad de conteo. null = sin equivalencia fija. */
+fun countUnitsPer(unit: String): Double? = when (unit) {
+    "unidad" -> 1.0
+    "docena" -> 12.0
+    // "saco" depende del insumo (saco de harina ≠ saco de azúcar): lo resuelve
+    // el formato de compra, no una constante.
+    else     -> null
+}
+
+/**
+ * Convierte [value] [fromUnit] a gramos, incluyendo unidades de conteo vía
+ * [unitWeightGrams] (peso de UNA unidad del insumo).
+ *
+ * Devuelve null cuando no hay conversión posible: unidad de conteo sin peso
+ * unitario configurado, "saco", o unidad desconocida. El volumen se aproxima
+ * 1 ml ≈ 1 g, como siempre lo ha hecho el resto del sistema.
+ */
+fun toGramsOrNull(value: Double, fromUnit: String, unitWeightGrams: Double): Double? =
+    when (unitFamily(fromUnit)) {
+        UnitFamily.WEIGHT, UnitFamily.VOLUME -> toBaseUnit(value, fromUnit)
+        UnitFamily.COUNT -> {
+            val perUnit = countUnitsPer(fromUnit)
+            if (perUnit == null || unitWeightGrams <= 0.0) null
+            else value * perUnit * unitWeightGrams
+        }
+        null -> null
+    }
+
+/**
+ * Inverso de [toGramsOrNull]: pasa [grams] a [toUnit] para poder descontar del
+ * stock en la unidad en que realmente se guarda el insumo (el huevo se descuenta
+ * en unidades, no en gramos). Devuelve null si la conversión no es posible.
+ */
+fun gramsToUnitOrNull(grams: Double, toUnit: String, unitWeightGrams: Double): Double? =
+    when (unitFamily(toUnit)) {
+        UnitFamily.WEIGHT -> convertUnits(grams, "gr", toUnit)
+        UnitFamily.VOLUME -> convertUnits(grams, "ml", toUnit)
+        UnitFamily.COUNT -> {
+            val perUnit = countUnitsPer(toUnit)
+            val gramsPer = if (perUnit == null) 0.0 else perUnit * unitWeightGrams
+            if (gramsPer <= 0.0) null else grams / gramsPer
+        }
+        null -> null
+    }
+
 /** Devuelve la unidad "mayor" de la lista para uso como fallback sin formato de compra. */
 fun largestUnit(units: List<String>): String {
     val weightOrder = listOf("kg", "lb", "oz", "gr")

@@ -1,0 +1,17 @@
+{
+  "name": "bakeos-functions",
+  "description": "Entrega de push para los avisos de BakeOS",
+  "main": "index.js",
+  "engines": {
+    "node": "22"
+  },
+  "scripts": {
+    "deploy": "firebase deploy --only functions",
+    "logs": "firebase functions:log"
+  },
+  "dependencies": {
+    "firebase-admin": "^14.2.0",
+    "firebase-functions": "^7.3.2"
+  },
+  "private": true
+}
