@@ -388,6 +388,7 @@ fun DeliveryRunFormScreen(
                                 NoteCheckRow(
                                     note = note,
                                     checked = note.id in selectedNoteIds,
+                                    tripWarning = state.candidateNoteTripWarnings[note.id],
                                     onCheckedChange = { checked ->
                                         selectedNoteIds = if (checked) selectedNoteIds + note.id
                                                            else selectedNoteIds - note.id
@@ -549,7 +550,8 @@ private fun ShiftHeaderRow(
 private fun NoteCheckRow(
     note: DispatchNote,
     checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
+    onCheckedChange: (Boolean) -> Unit,
+    tripWarning: String? = null
 ) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable { onCheckedChange(!checked) },
@@ -573,6 +575,19 @@ private fun NoteCheckRow(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                // El turno de esta nota no es el viaje en que su sucursal recibe. No
+                // bloquea nada —el pan salió del único turno que lo hornea— pero es la
+                // línea que evita que la nota se quede esperando un viaje que no le toca.
+                // Naranja porque es estado que necesita tus ojos, y AccentDeep porque es
+                // el único naranja legible como texto sobre blanco (ver paleta).
+                if (tripWarning != null) {
+                    Text(
+                        tripWarning,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Medium,
+                        color = BrandColors.AccentDeep
+                    )
+                }
             }
         }
     }

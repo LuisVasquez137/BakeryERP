@@ -71,6 +71,29 @@ interface DispatchRepository {
     )
 
     /**
+     * Crea las notas que falten para los lotes ya iniciados de `(planta, día, turno)`.
+     *
+     * Existe porque las notas nacen en `startLot`, que las escribe **una por pedido fuente y
+     * en serie**: si ese recorrido muere a media pasada —la tablet se durmió, se cerró la app,
+     * se cayó la red— las sucursales que quedaban del arreglo se quedan sin nota y nada
+     * reintenta hasta `completeLot`, que es justo lo que el empaque no puede esperar (la
+     * encargada cuenta mientras los panaderos siguen produciendo). El fallo además es
+     * invisible: el pedido está completo y el lote trae las cantidades, pero la sucursal
+     * simplemente no aparece en la matriz.
+     *
+     * Se llama al abrir el empaque, que es donde el hueco se notaría. Apoyado en la
+     * idempotencia por `(lotId, sourceOrderId)` de [createDispatchNotesForLot]: si no falta
+     * nada, no escribe. Devuelve las notas creadas (vacío en el caso normal).
+     */
+    suspend fun ensureNotesForStartedLots(
+        companyId: String,
+        producingBranchId: String,
+        dayMillis: Long,
+        shiftId: String,
+        currentUser: User
+    ): List<DispatchNote>
+
+    /**
      * Listener en vivo de las notas DRAFT de una planta productora para un día calendario y
      * turno específicos. Sirve a la matriz de empaque, donde una sola vista combina todas las
      * sucursales destino de ese turno.

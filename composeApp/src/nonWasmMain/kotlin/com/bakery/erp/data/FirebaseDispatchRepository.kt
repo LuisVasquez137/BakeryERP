@@ -18,6 +18,7 @@ import com.bakery.erp.model.FinishedMovementReference
 import com.bakery.erp.model.FinishedMovementType
 import com.bakery.erp.model.FinishedStockMovement
 import com.bakery.erp.model.PriceSourceTag
+import com.bakery.erp.model.ProductionLotStatus
 import com.bakery.erp.model.ProductionLot
 import com.bakery.erp.model.ProductionLotLine
 import com.bakery.erp.model.User
@@ -142,12 +143,23 @@ class FirebaseDispatchRepository(
             // declaró la encargada al pedirlos —o 0— y NO cuentan para
             // `hasPriceMissing`. Si contaran, un encargo de 5 panes dejaría toda
             // la nota atorada en DRAFT y con ella el reparto del día.
+            //
+            // En paralelo y no en serie: `resolveWholesalePrice` hace varias lecturas por
+            // producto, y con 30 productos × 5 sucursales el recorrido secuencial tardaba
+            // 1-2.5 minutos. Ese era el problema real, no la lentitud en sí: como esto
+            // corre desde `startLot`, en la pantalla del panadero, cualquier corte en esa
+            // ventana (tablet dormida, app cerrada, red caída) dejaba sin nota a las
+            // sucursales que faltaban del arreglo. Ver `ensureNotesForStartedLots`.
             val resolutions: List<Pair<com.bakery.erp.model.ProductionOrderLine, ResolvedPrice?>> =
-                orderLinesForNote.map { line ->
-                    if (line.isSpecial) line to null
-                    else line to priceListRepository.resolveWholesalePrice(
-                        companyId, order.sellingBranchId, line.productId
-                    )
+                coroutineScope {
+                    orderLinesForNote.map { line ->
+                        async {
+                            if (line.isSpecial) line to null
+                            else line to priceListRepository.resolveWholesalePrice(
+                                companyId, order.sellingBranchId, line.productId
+                            )
+                        }
+                    }.awaitAll()
                 }
             val firstResolved = resolutions.firstNotNullOfOrNull { it.second }
             val listId = firstResolved?.priceListId.orEmpty()
@@ -177,7 +189,10 @@ class FirebaseDispatchRepository(
             )
             noteRef.set(note.toMap())
 
-            resolutions.forEach { (line, resolved) ->
+            // Las líneas también en paralelo: son una escritura por producto y en serie
+            // dominaban lo que queda del tiempo de creación de la nota.
+            coroutineScope {
+            resolutions.map { (line, resolved) -> async {
                 val lineRef = linesCol(companyId, noteRef.id).document
                 val sourceTag = when {
                     resolved == null             -> PriceSourceTag.SPECIAL_ORDER
@@ -200,6 +215,7 @@ class FirebaseDispatchRepository(
                     specialRecipeName = line.specialRecipeName
                 )
                 lineRef.set(dispatchLine.toMap())
+            } }.awaitAll()
             }
             created.add(
                 note.copy(
@@ -280,6 +296,36 @@ class FirebaseDispatchRepository(
         notesCol(companyId).document(noteId).update(
             mapOf("updatedAt" to Clock.System.now().toEpochMilliseconds()).firestoreSafe()
         )
+    }
+
+    override suspend fun ensureNotesForStartedLots(
+        companyId: String,
+        producingBranchId: String,
+        dayMillis: Long,
+        shiftId: String,
+        currentUser: User
+    ): List<DispatchNote> {
+        // Solo lotes ya arrancados: uno todavía OPEN no debería tener notas.
+        val lots = productionRepository
+            .getActiveLotsForBranchDate(companyId, producingBranchId, dayMillis)
+            .filter {
+                it.shiftId == shiftId &&
+                    (it.status == ProductionLotStatus.IN_PROGRESS ||
+                        it.status == ProductionLotStatus.COMPLETED)
+            }
+        if (lots.isEmpty()) return emptyList()
+
+        val created = mutableListOf<DispatchNote>()
+        for (lot in lots) {
+            // Barato en el caso normal: una consulta por lote y, si están todas, no escribe.
+            val existing = notesCol(companyId).where { "lotId" equalTo lot.id }.get().documents
+                .map { it.get<String?>("sourceOrderId") ?: "" }
+                .toSet()
+            if (lot.sourceOrderIds.all { it in existing }) continue
+            val lines = productionRepository.getLotLines(companyId, lot.id)
+            created += createDispatchNotesForLot(companyId, lot, lines, currentUser)
+        }
+        return created
     }
 
     override fun observePackingViewForBranchDateShift(

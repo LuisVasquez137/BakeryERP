@@ -2,6 +2,9 @@ package com.bakery.erp.util
 
 import kotlin.math.abs
 import kotlin.math.roundToLong
+import kotlin.time.Instant
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 
 fun Double.fmt(decimals: Int = 2): String {
     if (decimals <= 0) return roundToLong().toString()
@@ -59,4 +62,22 @@ fun Double.fmtMoney(decimals: Int = 2): String {
     val sign = if (negative) "-" else ""
     return if (decimals <= 0) "$sign$withSeparators"
     else "$sign$withSeparators.${decPart.toString().padStart(decimals, '0')}"
+}
+
+/**
+ * Hora de reloj de un epoch-millis, en 12 horas ("2:35 p.m.") — que es como se lee una hora
+ * acá y como la muestra ComandaYa. Devuelve "" si no hay marca.
+ */
+fun Long.fmtClockTime(): String {
+    if (this <= 0L) return ""
+    val t = Instant.fromEpochMilliseconds(this)
+        .toLocalDateTime(TimeZone.currentSystemDefault())
+    val h24 = t.hour
+    val h12 = when {
+        h24 == 0 -> 12
+        h24 > 12 -> h24 - 12
+        else -> h24
+    }
+    val suffix = if (h24 < 12) "a.m." else "p.m."
+    return "$h12:${t.minute.toString().padStart(2, '0')} $suffix"
 }

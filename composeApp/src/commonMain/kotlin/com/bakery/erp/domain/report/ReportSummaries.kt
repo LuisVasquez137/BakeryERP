@@ -8,6 +8,8 @@ data class SalesSummary(
     val unitsSold: Double = 0.0,
     val avgTicket: Double = 0.0,
     val byPaymentMethod: Map<String, MoneyAndCount> = emptyMap(),
+    /** Canal (`SalesChannel`) -> monto y tickets. Separa pan de restaurante. */
+    val byChannel: Map<String, MoneyAndCount> = emptyMap(),
     val byCashier: List<CashierSalesStat> = emptyList(),
     val byBranch: List<BranchSalesStat> = emptyList(),
     val topProducts: List<ProductSalesStat> = emptyList(),

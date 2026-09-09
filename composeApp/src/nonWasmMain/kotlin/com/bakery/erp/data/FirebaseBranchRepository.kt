@@ -62,6 +62,19 @@ class FirebaseBranchRepository(
         )
     }
 
+    override suspend fun updateDispatchBranchOrder(
+        companyId: String,
+        branchId: String,
+        destinationBranchIds: List<String>
+    ) {
+        col(companyId).document(branchId).update(
+            firestoreSafeOf(
+                "dispatchBranchOrder" to destinationBranchIds,
+                "updatedAt" to Clock.System.now().toEpochMilliseconds()
+            )
+        )
+    }
+
     override suspend fun updateLocation(
         companyId: String,
         branchId: String,
@@ -92,6 +105,7 @@ class FirebaseBranchRepository(
         "defaultPriceListId" to defaultPriceListId,
         "productSortOrder" to productSortOrder,
         "productionSortOrder" to productionSortOrder,
+        "dispatchBranchOrder" to dispatchBranchOrder,
         "closedWeekdays" to closedWeekdays,
         "receivesOnlyInTrip" to receivesOnlyInTrip,
         "latitude" to latitude,
@@ -123,6 +137,9 @@ class FirebaseBranchRepository(
         }.getOrElse { emptyList() },
         productionSortOrder = runCatching {
             get<List<String>?>("productionSortOrder") ?: emptyList()
+        }.getOrElse { emptyList() },
+        dispatchBranchOrder = runCatching {
+            get<List<String>?>("dispatchBranchOrder") ?: emptyList()
         }.getOrElse { emptyList() },
         closedWeekdays = runCatching {
             get<List<Long>?>("closedWeekdays")?.map { it.toInt() } ?: emptyList()

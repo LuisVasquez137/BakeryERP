@@ -125,3 +125,8 @@ exports.sendNotificationPush = onDocumentCreated(
     await Promise.allSettled(staleDeletes);
   }
 );
+
+// ── Puente con ComandaYa (solo Sabreopan) ────────────────────────────────────
+// Vive en su propio archivo: no tiene nada que ver con el push y conviene poder
+// desplegarlo solo (`firebase deploy --only functions:ingestExternalSale`).
+exports.ingestExternalSale = require("./externalSales").ingestExternalSale;

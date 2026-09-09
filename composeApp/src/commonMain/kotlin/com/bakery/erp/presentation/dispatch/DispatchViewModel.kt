@@ -23,6 +23,7 @@ import com.bakery.erp.model.NotificationType
 import com.bakery.erp.model.Permission
 import com.bakery.erp.model.ProductionShift
 import com.bakery.erp.model.User
+import com.bakery.erp.model.applyBranchOrder
 import com.bakery.erp.model.canAccessBranch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -103,7 +104,13 @@ data class PackingMatrixUiState(
      * verlo y reponerlo. No se arrastra a mañana a propósito — nuevo día, nuevo
      * pedido — pero dentro del mismo día el pan todavía se puede mandar.
      */
-    val shortfallFromEarlierShifts: Map<String, ShiftShortfall> = emptyMap()
+    val shortfallFromEarlierShifts: Map<String, ShiftShortfall> = emptyMap(),
+    /**
+     * Orden en que la planta quiere ver las sucursales al empacar
+     * ([Branch.dispatchBranchOrder]). Vacío = alfabético. Se guarda en la planta y
+     * no en el dispositivo: es el orden físico en que se arman las canastas.
+     */
+    val branchOrder: List<String> = emptyList()
 )
 
 /** Unidades que un viaje anterior del día dejó debiendo, con el motivo que se anotó. */
@@ -130,6 +137,9 @@ class DispatchViewModel(
 
     private var observeJob: Job? = null
     private var packingObserveJob: Job? = null
+
+    /** Usuario de la sesión, sembrado por [setupPackingFor]. Ver su comentario. */
+    private var packingUser: User? = null
 
     init {
         _uiState.update { it.copy(dayAnchorMillis = startOfToday()) }
@@ -399,6 +409,10 @@ class DispatchViewModel(
      */
     fun setupPackingFor(companyId: String, user: User) {
         if (companyId.isEmpty()) return
+        // Lo guardamos para `ensureNotesForStartedLots`: la reparación de notas
+        // faltantes se dispara desde `restartPackingListener`, al que se llega
+        // también por los cambios de día y de turno, que no reciben el usuario.
+        packingUser = user
         viewModelScope.launch {
             _packingState.update { it.copy(isLoading = true, error = null) }
             runCatching {
@@ -411,7 +425,12 @@ class DispatchViewModel(
                 val selected = current.producingBranchId.takeIf { id -> producing.any { it.id == id } }
                     ?: producing.firstOrNull()?.id ?: ""
                 _packingState.update {
-                    it.copy(producingBranches = producing, producingBranchId = selected)
+                    it.copy(
+                        producingBranches = producing,
+                        producingBranchId = selected,
+                        branchOrder = producing.find { b -> b.id == selected }?.dispatchBranchOrder
+                            ?: emptyList()
+                    )
                 }
                 if (selected.isNotEmpty()) loadShiftsAndStartListener(companyId, selected)
                 else _packingState.update { it.copy(shifts = emptyList(), shiftId = "", notes = emptyList(), isLoading = false) }
@@ -423,8 +442,57 @@ class DispatchViewModel(
 
     fun selectPackingBranch(companyId: String, branchId: String) {
         if (branchId == _packingState.value.producingBranchId) return
-        _packingState.update { it.copy(producingBranchId = branchId, shiftId = "", notes = emptyList()) }
+        _packingState.update {
+            it.copy(
+                producingBranchId = branchId,
+                shiftId = "",
+                notes = emptyList(),
+                // Cada planta tiene su propio orden de empaque.
+                branchOrder = it.producingBranches.find { b -> b.id == branchId }?.dispatchBranchOrder
+                    ?: emptyList()
+            )
+        }
         viewModelScope.launch { loadShiftsAndStartListener(companyId, branchId) }
+    }
+
+    /**
+     * Guarda el orden en que esta planta quiere ver las sucursales al empacar.
+     *
+     * Escritura parcial ([BranchRepository.updateDispatchBranchOrder]): un `set()`
+     * desde acá sobreescribiría la ficha entera de la sucursal. Se aplica en
+     * memoria de inmediato para que la matriz se reacomode sin esperar al servidor.
+     */
+    fun saveDispatchBranchOrder(companyId: String, newOrder: List<String>) {
+        val plantId = _packingState.value.producingBranchId
+        if (companyId.isEmpty() || plantId.isEmpty()) return
+        // El diálogo solo lista las sucursales que HOY tienen nota. Las que no
+        // pidieron hoy no pueden perder la posición que ya tenían configurada: se
+        // conservan detrás, y quedan recolocables el día que vuelvan a aparecer.
+        // Sin esto, ordenar un domingo flojo borraría del orden a media empresa.
+        val orderedBranchIds =
+            if (newOrder.isEmpty()) emptyList() // volver a alfabético limpia todo, a propósito
+            else newOrder + _packingState.value.branchOrder.filterNot { it in newOrder }
+        _packingState.update { state ->
+            state.copy(
+                branchOrder = orderedBranchIds,
+                notes = applyBranchOrder(
+                    state.notes, orderedBranchIds,
+                    { it.destinationBranchId }, { it.destinationBranchName }
+                ),
+                producingBranches = state.producingBranches.map {
+                    if (it.id == plantId) it.copy(dispatchBranchOrder = orderedBranchIds) else it
+                }
+            )
+        }
+        viewModelScope.launch {
+            runCatching {
+                branchRepository.updateDispatchBranchOrder(companyId, plantId, orderedBranchIds)
+            }.onFailure { err ->
+                _packingState.update {
+                    it.copy(error = "No se pudo guardar el orden — ${err.message}")
+                }
+            }
+        }
     }
 
     fun selectPackingShift(companyId: String, shiftId: String) {
@@ -781,6 +849,33 @@ class DispatchViewModel(
         }
         _packingState.update { it.copy(isLoading = true, error = null) }
         viewModelScope.launch { loadShortfallFromEarlierShifts(companyId) }
+        // Rellenar las notas que `startLot` no alcanzó a crear. Corre aparte del
+        // listener: si falla, la matriz igual muestra lo que sí existe. Lo que no
+        // puede hacer es fallar callado, que es lo que dejó a una sucursal entera
+        // fuera del despacho sin que nadie se enterara hasta el mediodía.
+        packingUser?.let { user ->
+            viewModelScope.launch {
+                runCatching {
+                    repository.ensureNotesForStartedLots(
+                        companyId, s.producingBranchId, s.dayMillis, s.shiftId, user
+                    )
+                }.onSuccess { repaired ->
+                    if (repaired.isNotEmpty()) {
+                        val names = repaired.map { it.destinationBranchName }.distinct().sorted()
+                        _packingState.update {
+                            it.copy(
+                                error = "Faltaba el listado de ${names.joinToString(", ")} " +
+                                    "en este turno. Ya se generó."
+                            )
+                        }
+                    }
+                }.onFailure { err ->
+                    _packingState.update {
+                        it.copy(error = "No se pudo verificar si faltan listados — ${err.message}")
+                    }
+                }
+            }
+        }
         packingObserveJob = viewModelScope.launch {
             // El observer del listener vivo trae las notas HEADER. Necesitamos también las
             // líneas, así que las hidratamos por cada cambio — en paralelo, porque
@@ -798,7 +893,17 @@ class DispatchViewModel(
                             }
                         }.awaitAll()
                     }
-                    _packingState.update { it.copy(notes = withLines.withPendingEdits(), isLoading = false) }
+                    // El repositorio las trae alfabéticas; el orden que manda es el
+                    // que configuró la planta (ver `dispatchBranchOrder`). Se aplica
+                    // acá y no en cada pantalla para que la matriz de tablet y las
+                    // pestañas de teléfono no puedan divergir.
+                    val ordered = applyBranchOrder(
+                        withLines.withPendingEdits(),
+                        _packingState.value.branchOrder,
+                        { it.destinationBranchId },
+                        { it.destinationBranchName }
+                    )
+                    _packingState.update { it.copy(notes = ordered, isLoading = false) }
                 }
         }
     }

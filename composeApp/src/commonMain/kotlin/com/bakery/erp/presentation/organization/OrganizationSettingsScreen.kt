@@ -49,6 +49,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.bakery.erp.model.UserRole
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.ui.AdaptiveContainer
 import com.bakery.erp.ui.shareText
@@ -69,10 +70,17 @@ fun OrganizationSettingsScreen(
     val state by viewModel.uiState.collectAsState()
     val authState by authViewModel.uiState.collectAsState()
     val orgId = authState.user?.orgId ?: ""
+    val isOwner = authState.user?.role == UserRole.OWNER
     val snackbarHostState = remember { SnackbarHostState() }
     var showRegenerateDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(orgId) { viewModel.loadOrganization(orgId) }
+    LaunchedEffect(state.rebuildMessage) {
+        state.rebuildMessage?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearRebuildMessage()
+        }
+    }
     LaunchedEffect(state.justSavedDelivery) {
         if (state.justSavedDelivery) {
             snackbarHostState.showSnackbar("Configuración guardada")
@@ -334,6 +342,63 @@ fun OrganizationSettingsScreen(
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MutedText
                                         )
+                                    }
+                                }
+                            }
+                        }
+
+                        // ── Mantenimiento (solo dueño) ─────────────────────
+                        if (isOwner) {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = Color.White),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Column(Modifier.padding(16.dp)) {
+                                    Text(
+                                        "Mantenimiento",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = PrimaryBlue,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Spacer(Modifier.size(10.dp))
+                                    Text(
+                                        "Recalcular los resúmenes diarios de ventas.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = PrimaryBlue,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Spacer(Modifier.size(4.dp))
+                                    Text(
+                                        "Los reportes y la pantalla de inicio leen estos resúmenes en vez de " +
+                                            "recorrer venta por venta. Corre esto UNA vez para que aparezca lo " +
+                                            "vendido antes de que existieran, y después solo si algún día " +
+                                            "quedara con números raros. Es la operación más pesada de la app: " +
+                                            "lee cada venta de los últimos 2 años.",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MutedText
+                                    )
+                                    Spacer(Modifier.size(12.dp))
+                                    OutlinedButton(
+                                        onClick = { viewModel.rebuildSalesRollups(orgId) },
+                                        enabled = !state.isRebuildingRollups && orgId.isNotEmpty()
+                                    ) {
+                                        if (state.isRebuildingRollups) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(16.dp),
+                                                strokeWidth = 2.dp
+                                            )
+                                            Spacer(Modifier.size(8.dp))
+                                            Text("Recalculando…")
+                                        } else {
+                                            Icon(
+                                                Icons.Default.Autorenew,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Spacer(Modifier.size(8.dp))
+                                            Text("Recalcular resúmenes de ventas")
+                                        }
                                     }
                                 }
                             }

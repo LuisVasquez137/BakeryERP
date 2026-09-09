@@ -3,17 +3,22 @@ package com.bakery.erp.presentation.delivery
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bakery.erp.domain.AuthRepository
+import com.bakery.erp.domain.BranchRepository
 import com.bakery.erp.domain.DeliveryRepository
 import com.bakery.erp.domain.DispatchRepository
 import com.bakery.erp.domain.FixedAssetRepository
+import com.bakery.erp.domain.ProductionRepository
 import com.bakery.erp.model.AssetStatus
 import com.bakery.erp.model.DeliveryRun
+import com.bakery.erp.model.DISPATCH_TRIP_BOTH
 import com.bakery.erp.model.DispatchNote
 import com.bakery.erp.model.FixedAsset
 import com.bakery.erp.model.Permission
 import com.bakery.erp.model.User
 import com.bakery.erp.model.canAccessBranch
 import com.bakery.erp.model.hasPermission
+import com.bakery.erp.model.runFormLabel
+import com.bakery.erp.model.tripMismatchFor
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,6 +40,14 @@ data class DeliveryUiState(
     val selectedRun: DeliveryRun? = null,
     val notesForSelectedRun: List<DispatchNote> = emptyList(),
     val candidateNotes: List<DispatchNote> = emptyList(),
+    /**
+     * `noteId → aviso` de las notas cuyo turno pertenece a un viaje que su sucursal
+     * no recibe. Ver [com.bakery.erp.model.tripMismatchFor]: el pan de una masa que
+     * solo se hornea en un turno sale en ese turno, aunque la sucursal reciba en el
+     * otro viaje, y entonces hay que arrastrar la nota al viaje correcto. El flujo
+     * ya lo permitía; lo que faltaba era decirlo donde se arma el camión.
+     */
+    val candidateNoteTripWarnings: Map<String, String> = emptyMap(),
     val driverCandidates: List<User> = emptyList(),
     val vehicleCandidates: List<FixedAsset> = emptyList(),
     val isLoading: Boolean = false,
@@ -52,7 +65,9 @@ class DeliveryViewModel(
     private val repository: DeliveryRepository,
     private val dispatchRepository: DispatchRepository,
     private val authRepository: AuthRepository,
-    private val fixedAssetRepository: FixedAssetRepository
+    private val fixedAssetRepository: FixedAssetRepository,
+    private val branchRepository: BranchRepository,
+    private val productionRepository: ProductionRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(DeliveryUiState())
@@ -96,6 +111,42 @@ class DeliveryViewModel(
         observeDay(companyId, startOfToday())
     }
 
+    private data class RunFormData(
+        val drivers: List<User>,
+        val vehicles: List<FixedAsset>,
+        val notes: List<DispatchNote>,
+        val tripWarnings: Map<String, String>
+    )
+
+    /**
+     * Marca las notas cuyo turno pertenece a un viaje que su sucursal destino no
+     * recibe — ver [tripMismatchFor].
+     *
+     * Nunca lanza: es una etiqueta de ayuda, y si los turnos o las sucursales no se
+     * pudieron leer, la hoja de reparto se tiene que poder armar igual.
+     */
+    private suspend fun tripWarningsFor(
+        companyId: String,
+        producingBranchId: String,
+        notes: List<DispatchNote>
+    ): Map<String, String> {
+        if (notes.isEmpty()) return emptyMap()
+        val branches = runCatching { branchRepository.getBranches(companyId) }.getOrNull()
+            ?: return emptyMap()
+        val restrictedByBranch = branches.associate { it.id to it.receivesOnlyInTrip }
+        if (restrictedByBranch.values.all { it == DISPATCH_TRIP_BOTH }) return emptyMap()
+        val shifts = runCatching { productionRepository.getShiftsForBranch(companyId, producingBranchId) }
+            .getOrNull() ?: return emptyMap()
+        val tripByShift = shifts.associate { it.id to it.dispatchOrder }
+        return notes.mapNotNull { note ->
+            tripMismatchFor(
+                branchName = note.destinationBranchName,
+                restrictedTrip = restrictedByBranch[note.destinationBranchId] ?: DISPATCH_TRIP_BOTH,
+                noteTripOrder = tripByShift[note.shiftId] ?: 0
+            )?.let { note.id to it.runFormLabel() }
+        }.toMap()
+    }
+
     /** Carga datos para el form: candidatos a repartidor + notas READY/IN_TRANSIT del run. */
     fun loadFormData(
         companyId: String,
@@ -119,14 +170,16 @@ class DeliveryViewModel(
                 val notes = if (originBranchId.isNotEmpty() && dayMillis > 0)
                     dispatchRepository.getNotesForRunForm(companyId, originBranchId, dayMillis, currentRunId)
                 else emptyList()
-                Triple(users, vehicles, notes)
-            }.onSuccess { (users, vehicles, notes) ->
+                val warnings = tripWarningsFor(companyId, originBranchId, notes)
+                RunFormData(users, vehicles, notes, warnings)
+            }.onSuccess { data ->
                 _uiState.update {
                     it.copy(
                         isLoading = false,
-                        driverCandidates = users,
-                        vehicleCandidates = vehicles,
-                        candidateNotes = notes
+                        driverCandidates = data.drivers,
+                        vehicleCandidates = data.vehicles,
+                        candidateNotes = data.notes,
+                        candidateNoteTripWarnings = data.tripWarnings
                     )
                 }
             }.onFailure { err ->

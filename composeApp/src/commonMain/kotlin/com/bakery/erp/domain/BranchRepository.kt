@@ -31,6 +31,17 @@ interface BranchRepository {
     )
 
     /**
+     * Actualiza solo [Branch.dispatchBranchOrder] — el orden en que la planta ve
+     * las sucursales destino al empacar. Mismo criterio de escritura parcial: se
+     * configura desde la matriz de empaque, que no tiene el documento completo.
+     */
+    suspend fun updateDispatchBranchOrder(
+        companyId: String,
+        branchId: String,
+        destinationBranchIds: List<String>
+    )
+
+    /**
      * Actualiza solo [Branch.latitude]/[Branch.longitude]. Escritura parcial:
      * se llama desde el formulario de pedido, donde no se tiene el documento
      * completo, y un `.set()` lo sobreescribiría. Una sola vez por sucursal

@@ -3394,6 +3394,20 @@ class ProductionViewModel(
                             lotLines,
                             currentUser
                         )
+                        // No se compara cuántas notas salieron contra cuántos pedidos fuente
+                        // hay: un pedido al que este turno no le hornea nada legítimamente no
+                        // genera nota, y eso daría un falso aviso todos los días. El hueco
+                        // real —el recorrido que murió a medias— lo detecta y lo repara
+                        // `ensureNotesForStartedLots` al abrir el empaque, que sí distingue
+                        // los dos casos.
+                    }.onFailure { err ->
+                        _uiState.update {
+                            it.copy(
+                                error = "El lote inició, pero no se pudieron crear los " +
+                                    "listados de despacho — ${err.message}. Se reintenta " +
+                                    "solo al abrir Despacho."
+                            )
+                        }
                     }
 
                     // Avisar a las sucursales que su pan ya está en el horno.

@@ -29,8 +29,11 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.LocalShipping
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Today
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.AlertDialog
@@ -61,13 +64,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.DispatchNote
 import com.bakery.erp.model.DispatchNoteLine
@@ -76,6 +83,8 @@ import com.bakery.erp.model.User
 import com.bakery.erp.presentation.production.ProductionViewModel
 import com.bakery.erp.presentation.production.RecipeRef
 import com.bakery.erp.presentation.production.groupByMasa
+import com.bakery.erp.ui.SortableItem
+import com.bakery.erp.ui.SortableItemsDialog
 import com.bakery.erp.util.fmt
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
@@ -124,6 +133,7 @@ fun PackingMatrixContent(
 ) {
     val state by viewModel.packingState.collectAsState()
     val recipeRefByProductId = productionViewModel.uiState.collectAsState().value.recipeRefByProductId
+    var showBranchOrderDialog by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(companyId, user.id) {
         if (companyId.isNotEmpty()) viewModel.setupPackingFor(companyId, user)
@@ -137,9 +147,34 @@ fun PackingMatrixContent(
         // confirma; aquí sería el lugar de un snackbar si se quiere en el futuro.
     }
 
+    // En teléfono el encabezado (planta + turno + día) se comía cerca de un tercio
+    // de la pantalla, y lo que se vino a hacer acá es contar pan. Los selectores se
+    // tocan una vez al entrar y no se vuelven a mirar, así que se pliegan a una
+    // línea de resumen en cuanto ya hay planta y turno elegidos. Si falta elegir
+    // algo, se muestran igual — plegar lo que todavía hay que tocar sería esconder
+    // el trabajo pendiente.
+    val windowInfo = LocalWindowInfo.current
+    val density = LocalDensity.current
+    val isPhone = with(density) { windowInfo.containerSize.width.toDp() < 720.dp }
+    var headerExpanded by rememberSaveable { mutableStateOf(false) }
+    val mustExpand = state.producingBranchId.isEmpty() || state.shiftId.isEmpty()
+    val showSelectors = !isPhone || headerExpanded || mustExpand
+
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
+        if (isPhone && !mustExpand) {
+            CompactHeaderSummary(
+                plantName = state.producingBranches.find { it.id == state.producingBranchId }?.name.orEmpty(),
+                shiftName = state.shifts.find { it.id == state.shiftId }?.name.orEmpty(),
+                dayMillis = state.dayMillis,
+                expanded = headerExpanded,
+                showSortButton = state.notes.size > 1,
+                onToggle = { headerExpanded = !headerExpanded },
+                onSort = { showBranchOrderDialog = true }
+            )
+        }
+
         // Selector de planta — solo si hay más de una.
-        if (state.producingBranches.size > 1) {
+        if (showSelectors && state.producingBranches.size > 1) {
             Text(
                 "Planta productora",
                 style = MaterialTheme.typography.labelMedium,
@@ -168,14 +203,44 @@ fun PackingMatrixContent(
         }
 
         // Selector de turno
-        if (state.shifts.isNotEmpty()) {
-            Text(
-                "Turno",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = DeepSeaBlue,
-                modifier = Modifier.padding(top = 2.dp, bottom = 4.dp)
-            )
+        if (showSelectors && state.shifts.isNotEmpty()) {
+            // El botón de ordenar va en la misma fila que el rótulo "Turno", que
+            // tenía toda la derecha vacía. En su propia fila costaba ~48dp, y en
+            // teléfono el encabezado (planta + turno + día) ya deja poca lista
+            // visible: cada fila que se agrega se la quita al conteo, que es a lo
+            // que se vino la pantalla.
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "Turno",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = DeepSeaBlue,
+                    modifier = Modifier.weight(1f)
+                )
+                if (state.notes.size > 1) {
+                    TextButton(
+                        onClick = { showBranchOrderDialog = true },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        modifier = Modifier.height(28.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.SwapVert,
+                            contentDescription = null,
+                            tint = BrandColors.Primary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            "Ordenar sucursales",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = BrandColors.Primary
+                        )
+                    }
+                }
+            }
             Row(
                 modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -194,7 +259,7 @@ fun PackingMatrixContent(
                 }
             }
             Spacer(Modifier.height(6.dp))
-        } else if (state.producingBranchId.isNotEmpty() && !state.isLoading) {
+        } else if (showSelectors && state.producingBranchId.isNotEmpty() && !state.isLoading) {
             Text(
                 "La planta no tiene turnos activos configurados.",
                 style = MaterialTheme.typography.bodySmall,
@@ -203,14 +268,35 @@ fun PackingMatrixContent(
             )
         }
 
-        // Navegador de día
-        DayNavigator(
-            dayMillis = state.dayMillis,
-            onPrev = { viewModel.shiftPackingDay(companyId, -1) },
-            onNext = { viewModel.shiftPackingDay(companyId, +1) },
-            onToday = { viewModel.goToTodayPacking(companyId) },
-            onPickDay = { viewModel.goToPackingDay(companyId, it) }
-        )
+        // Navegador de día. En teléfono va compacto (una línea en vez de tres) y solo
+        // cuando el encabezado está desplegado: plegado, la fecha ya la dice el resumen.
+        if (showSelectors) {
+            DayNavigator(
+                dayMillis = state.dayMillis,
+                onPrev = { viewModel.shiftPackingDay(companyId, -1) },
+                onNext = { viewModel.shiftPackingDay(companyId, +1) },
+                onToday = { viewModel.goToTodayPacking(companyId) },
+                onPickDay = { viewModel.goToPackingDay(companyId, it) },
+                compact = isPhone
+            )
+        }
+
+        if (showBranchOrderDialog) {
+            SortableItemsDialog(
+                title = "Orden de las sucursales",
+                description = "El orden en que aparecen al empacar. Se guarda para " +
+                    "esta planta, así que lo ve quien cuente el pan en cualquier " +
+                    "dispositivo. Las sucursales nuevas se agregan al final.",
+                items = state.notes.map {
+                    SortableItem(it.destinationBranchId, it.destinationBranchName)
+                },
+                onDismiss = { showBranchOrderDialog = false },
+                onSave = { ordered ->
+                    viewModel.saveDispatchBranchOrder(companyId, ordered)
+                    showBranchOrderDialog = false
+                }
+            )
+        }
 
         // Contenido principal
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -280,6 +366,69 @@ fun PackingMatrixContent(
     }
 }
 
+// ── Encabezado plegado (teléfono) ────────────────────────────────────────────
+
+/**
+ * Resumen de una línea de lo que está seleccionado, para recuperar en teléfono el
+ * espacio que se llevaban los tres selectores.
+ *
+ * Toda la fila abre y cierra, y lleva chevron: un resumen que no se ve tocable
+ * dejaría a la encargada sin forma evidente de cambiar de turno. El botón de
+ * ordenar viaja acá también — si viviera solo en la fila desplegada, plegar el
+ * encabezado lo escondería justo mientras se cuenta, que es cuando se usa.
+ */
+@Composable
+private fun CompactHeaderSummary(
+    plantName: String,
+    shiftName: String,
+    dayMillis: Long,
+    expanded: Boolean,
+    showSortButton: Boolean,
+    onToggle: () -> Unit,
+    onSort: () -> Unit
+) {
+    val dayLabel = remember(dayMillis) { formatDayLabel(dayMillis) }
+    val summary = listOf(plantName, shiftName, dayLabel).filter { it.isNotBlank() }.joinToString(" · ")
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+        shape = RoundedCornerShape(10.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        elevation = CardDefaults.cardElevation(1.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().clickable { onToggle() }
+                .padding(start = 10.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                summary,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = DeepSeaBlue,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            if (showSortButton) {
+                IconButton(onClick = onSort, modifier = Modifier.size(34.dp)) {
+                    Icon(
+                        Icons.Default.SwapVert,
+                        "Ordenar sucursales",
+                        tint = BrandColors.Primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+            Icon(
+                if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                if (expanded) "Ocultar selectores" else "Cambiar planta, turno o día",
+                tint = BrandColors.AccentDeep,
+                modifier = Modifier.size(22.dp)
+            )
+        }
+    }
+}
+
 // ── Navegador de día ─────────────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -289,7 +438,13 @@ internal fun DayNavigator(
     onPrev: () -> Unit,
     onNext: () -> Unit,
     onToday: () -> Unit,
-    onPickDay: (Long) -> Unit = {}
+    onPickDay: (Long) -> Unit = {},
+    /**
+     * Una sola línea en vez de tres. En teléfono los rótulos "Para entregar el" y
+     * "Tocá para elegir fecha" cuestan ~30dp de lista y solo se leen la primera vez:
+     * el gesto de tocar la fecha sigue abriendo el calendario igual.
+     */
+    compact: Boolean = false
 ) {
     val label = remember(dayMillis) { formatDayLabel(dayMillis) }
     var showDatePicker by remember { mutableStateOf(false) }
@@ -331,22 +486,27 @@ internal fun DayNavigator(
                 modifier = Modifier.weight(1f).clickable { showDatePicker = true },
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text(
-                    "Para entregar el",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                if (!compact) {
+                    Text(
+                        "Para entregar el",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 Text(
                     label,
-                    style = MaterialTheme.typography.titleMedium,
+                    style = if (compact) MaterialTheme.typography.bodyMedium
+                            else MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = DeepSeaBlue
                 )
-                Text(
-                    "Tocá para elegir fecha",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = BrandColors.AccentDeep
-                )
+                if (!compact) {
+                    Text(
+                        "Tocá para elegir fecha",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BrandColors.AccentDeep
+                    )
+                }
             }
             IconButton(onClick = onToday) {
                 Icon(Icons.Default.Today, "Hoy", tint = BrandColors.AccentDeep, modifier = Modifier.size(18.dp))

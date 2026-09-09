@@ -23,6 +23,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.SwapHoriz
@@ -45,6 +47,7 @@ import com.bakery.erp.model.POSCategory
 import com.bakery.erp.model.Product
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.ui.ProductImage
+import com.bakery.erp.util.fmt
 import com.bakery.erp.util.fmtMoney
 import kotlinx.coroutines.launch
 import com.bakery.erp.ui.theme.BrandColors
@@ -78,6 +81,14 @@ fun POSScreen(
     LaunchedEffect(state.error) {
         state.error?.let { snackbar.showSnackbar(it); viewModel.clearError() }
     }
+    LaunchedEffect(state.justCollected) {
+        state.justCollected?.let { collected ->
+            snackbar.showSnackbar(
+                "Recibido: ${collected.externalTableLabel.ifEmpty { "cuenta" }} · Q ${collected.total.fmt(2)}"
+            )
+            viewModel.clearJustCollected()
+        }
+    }
     // El snackbar se elimina — ahora la confirmación de venta se muestra en SaleSuccessDialog
     // (ver más abajo). Mantenemos clearLastSaleSummary para no dejar el flag colgado.
 
@@ -88,6 +99,8 @@ fun POSScreen(
     var cartSheetOpen by remember { mutableStateOf(false) }
     var btPickerOpen by remember { mutableStateOf(false) }
     var showTransfer by remember { mutableStateOf(false) }
+    var pendingSheetOpen by remember { mutableStateOf(false) }
+    var overflowOpen by remember { mutableStateOf(false) }
 
     fun handlePrintRequest() {
         if (bluetoothPrinterManager.isPlatformSupported &&
@@ -139,19 +152,38 @@ fun POSScreen(
 
     BoxWithConstraints {
         val wide = maxWidth >= 1000.dp
+        // Teléfono (sobre todo en vertical): no caben cinco acciones en la barra. Las dos que
+        // no son de uso continuo se van a un menú.
+        val compact = maxWidth < 700.dp
 
         Scaffold(
             topBar = {
                 TopAppBar(
                     title = {
+                        // `maxLines = 1` no es cosmético: el TopAppBar le cede el ancho a las
+                        // acciones, y en teléfono vertical el título quedaba con espacio para
+                        // una letra — el nombre de la sucursal se dibujaba en vertical, una
+                        // letra por renglón. Con una sola línea se recorta con puntos suspensivos.
                         Column {
-                            Text(state.branch?.name ?: "Punto de Venta",
-                                 fontWeight = FontWeight.SemiBold)
                             Text(
-                                "${state.session?.registerName.orEmpty()} · ${state.session?.cashierName.orEmpty()} · " +
-                                "Ventas: Q ${(state.session?.totalSales ?: 0.0).fmtMoney(2)} · " +
-                                "#${state.session?.saleCount ?: 0}",
-                                style = MaterialTheme.typography.labelSmall
+                                state.branch?.name ?: "Punto de Venta",
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                // En teléfono se omite el nombre del cajero: es quien está
+                                // parado frente a la pantalla y no necesita que se lo digan,
+                                // mientras que el total y el número de ventas sí se consultan.
+                                if (compact)
+                                    "Q ${(state.session?.totalSales ?: 0.0).fmtMoney(2)} · #${state.session?.saleCount ?: 0}"
+                                else
+                                    "${state.session?.registerName.orEmpty()} · ${state.session?.cashierName.orEmpty()} · " +
+                                        "Ventas: Q ${(state.session?.totalSales ?: 0.0).fmtMoney(2)} · " +
+                                        "#${state.session?.saleCount ?: 0}",
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     },
@@ -161,6 +193,24 @@ fun POSScreen(
                         }
                     },
                     actions = {
+                        // Cuentas del restaurante pendientes de entregar a caja. El botón
+                        // solo existe cuando hay algo: en una sucursal sin restaurante nunca
+                        // aparece, sin necesidad de configurar nada.
+                        if (state.pendingCollections.isNotEmpty()) {
+                            BadgedBox(
+                                badge = {
+                                    Badge(
+                                        containerColor = BrandColors.Accent,
+                                        contentColor = BrandColors.OnAccent
+                                    ) { Text("${state.pendingCollections.size}") }
+                                },
+                                modifier = Modifier.padding(end = 4.dp)
+                            ) {
+                                IconButton(onClick = { pendingSheetOpen = true }) {
+                                    Icon(Icons.Default.Restaurant, "Cuentas del restaurante")
+                                }
+                            }
+                        }
                         IconButton(onClick = { pickerSearchOpen = true }) {
                             Icon(Icons.Default.Search, "Buscar producto")
                         }
@@ -186,11 +236,33 @@ fun POSScreen(
                             }
                         }
                         state.session?.let { sess ->
-                            IconButton(onClick = { showTransfer = true }) {
-                                Icon(Icons.Default.SwapHoriz, "Transferir efectivo a otra caja")
-                            }
-                            TextButton(onClick = { onNavigateToClose(sess.id) }) {
-                                Text("Cerrar caja", color = MaterialTheme.colorScheme.onPrimary)
+                            if (compact) {
+                                Box {
+                                    IconButton(onClick = { overflowOpen = true }) {
+                                        Icon(Icons.Default.MoreVert, "Más opciones")
+                                    }
+                                    DropdownMenu(
+                                        expanded = overflowOpen,
+                                        onDismissRequest = { overflowOpen = false }
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = { Text("Transferir efectivo") },
+                                            onClick = { overflowOpen = false; showTransfer = true },
+                                            leadingIcon = { Icon(Icons.Default.SwapHoriz, null) }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Cerrar caja") },
+                                            onClick = { overflowOpen = false; onNavigateToClose(sess.id) }
+                                        )
+                                    }
+                                }
+                            } else {
+                                IconButton(onClick = { showTransfer = true }) {
+                                    Icon(Icons.Default.SwapHoriz, "Transferir efectivo a otra caja")
+                                }
+                                TextButton(onClick = { onNavigateToClose(sess.id) }) {
+                                    Text("Cerrar caja", color = MaterialTheme.colorScheme.onPrimary)
+                                }
                             }
                         }
                     },
@@ -427,6 +499,17 @@ fun POSScreen(
                     .heightIn(min = 240.dp)
             )
         }
+    }
+
+    if (pendingSheetOpen) {
+        PendingCollectionsSheet(
+            pending = state.pendingCollections,
+            isCollecting = state.isCollecting,
+            onCollect = { sale ->
+                user?.let { viewModel.collectPendingSale(companyId, sale, it) }
+            },
+            onDismiss = { pendingSheetOpen = false }
+        )
     }
 
     if (showTransfer && user != null) {

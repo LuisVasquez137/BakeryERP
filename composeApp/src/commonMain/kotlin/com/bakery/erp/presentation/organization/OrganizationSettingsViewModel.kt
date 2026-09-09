@@ -3,11 +3,19 @@ package com.bakery.erp.presentation.organization
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bakery.erp.domain.AuthRepository
+import com.bakery.erp.domain.SaleRepository
 import com.bakery.erp.model.Organization
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlin.time.Clock
+import kotlinx.datetime.DatePeriod
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.atStartOfDayIn
+import kotlinx.datetime.minus
+import kotlinx.datetime.plus
+import kotlinx.datetime.toLocalDateTime
 
 /** Los flujos de compra opcionales. La materia prima no está: es el flujo base. */
 enum class PurchaseFlowSetting(val title: String, val on: String, val off: String) {
@@ -34,11 +42,14 @@ data class OrganizationSettingsUiState(
     val isSaving: Boolean = false,
     val justRegeneratedCode: Boolean = false,
     val justSavedDelivery: Boolean = false,
+    val isRebuildingRollups: Boolean = false,
+    val rebuildMessage: String? = null,
     val error: String? = null
 )
 
 class OrganizationSettingsViewModel(
-    private val authRepository: AuthRepository
+    private val authRepository: AuthRepository,
+    private val saleRepository: SaleRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(OrganizationSettingsUiState())
@@ -117,6 +128,44 @@ class OrganizationSettingsViewModel(
                 }
         }
     }
+
+    /**
+     * Recalcula los resúmenes diarios de ventas de los últimos [monthsBack] meses.
+     *
+     * Hace falta una sola vez, al estrenar los resúmenes: las ventas cobradas antes de que
+     * existieran no aportaron a ningún resumen, y los reportes leen de ahí — sin esto el
+     * histórico se vería vacío. Después queda como reparación, por si un día quedó torcido.
+     *
+     * Es la operación más cara de la app (lee cada venta del período y sus líneas), por eso
+     * es un botón explícito y no algo que corra solo al abrir una pantalla.
+     */
+    fun rebuildSalesRollups(orgId: String, monthsBack: Int = 24) {
+        if (orgId.isEmpty()) return
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isRebuildingRollups = true, rebuildMessage = null, error = null)
+            val tz = TimeZone.currentSystemDefault()
+            val today = Clock.System.now().toLocalDateTime(tz).date
+            val from = today.minus(DatePeriod(months = monthsBack)).atStartOfDayIn(tz).toEpochMilliseconds()
+            // Hasta el final de hoy: el día en curso también tiene que quedar bien.
+            val until = today.plus(DatePeriod(days = 1)).atStartOfDayIn(tz).toEpochMilliseconds()
+            runCatching { saleRepository.rebuildDailyRollups(orgId, from, until) }
+                .onSuccess { days ->
+                    _uiState.value = _uiState.value.copy(
+                        isRebuildingRollups = false,
+                        rebuildMessage = if (days == 0) "No había ventas que recalcular."
+                                         else "Listo: se recalcularon $days días de ventas."
+                    )
+                }
+                .onFailure {
+                    _uiState.value = _uiState.value.copy(
+                        isRebuildingRollups = false,
+                        error = it.message ?: "No se pudo recalcular"
+                    )
+                }
+        }
+    }
+
+    fun clearRebuildMessage() { _uiState.value = _uiState.value.copy(rebuildMessage = null) }
 
     fun clearJustSavedDelivery() {
         _uiState.value = _uiState.value.copy(justSavedDelivery = false)

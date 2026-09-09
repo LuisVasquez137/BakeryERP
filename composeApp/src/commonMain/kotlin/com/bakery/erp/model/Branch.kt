@@ -32,6 +32,21 @@ data class Branch(
      */
     val productionSortOrder: List<String> = emptyList(),
     /**
+     * Orden en que esta planta quiere ver las **sucursales destino** al empacar
+     * (`branchId` en el orden deseado). Las que no estén en la lista van después,
+     * alfabéticamente. Vacío = todo alfabético, como siempre.
+     *
+     * Es de la planta y no del dispositivo por la misma razón que
+     * [productSortOrder]: el orden que quiere quien cuenta el pan es el orden
+     * físico en que arma las canastas o en que carga el camión, y eso es de la
+     * planta. Guardarlo por dispositivo lo perdería al cambiar de tablet y
+     * dejaría a dos personas empacando en órdenes distintos.
+     *
+     * Separado de [productSortOrder] y [productionSortOrder] porque ordena otra
+     * cosa (sucursales, no productos) y lo decide otro rol.
+     */
+    val dispatchBranchOrder: List<String> = emptyList(),
+    /**
      * Días de la semana (ISO 1=lunes…7=domingo) en que esta planta NO recibe
      * pedidos — su día de descanso. Vacío = trabaja todos los días. Solo
      * aplica cuando esta sucursal actúa como planta productora: bloquea la

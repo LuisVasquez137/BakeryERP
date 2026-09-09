@@ -161,7 +161,7 @@ actual fun createAppViewModels(): AppViewModels {
         fixedAsset = FixedAssetViewModel(fixedAssetRepo, assetHistoryRepo, JsAssetImageUploader(storage)),
         priceList = PriceListViewModel(priceListRepo),
         dispatch = DispatchViewModel(dispatchRepo, deliveryRepo, branchRepo, productionRepo, notificationRepo, finishedStockRepo),
-        delivery = DeliveryViewModel(deliveryRepo, dispatchRepo, authRepo, fixedAssetRepo),
+        delivery = DeliveryViewModel(deliveryRepo, dispatchRepo, authRepo, fixedAssetRepo, branchRepo, productionRepo),
         finishedStock = FinishedStockViewModel(finishedStockRepo, branchRepo),
         pos = POSViewModel(
             saleRepo, posCategoryRepo, cashSessionRepo, productRepoJs,
@@ -191,7 +191,7 @@ actual fun createAppViewModels(): AppViewModels {
         externalCustomer = ExternalCustomerViewModel(
             externalCustomerRepo, priceListRepo, branchRepo, productionRepo
         ),
-        organizationSettings = OrganizationSettingsViewModel(authRepo),
+        organizationSettings = OrganizationSettingsViewModel(authRepo, saleRepo),
         resellerSetup = ResellerSetupViewModel(authRepo, branchRepo),
         reseller = ResellerViewModel(
             externalCustomerRepo, customerOrderRepo, productRepoJs, priceListRepo, branchRepo

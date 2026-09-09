@@ -156,6 +156,9 @@ fun BranchFormScreen(
         // `set`) los borraría.
         productSortOrder = existing?.productSortOrder ?: emptyList(),
         productionSortOrder = existing?.productionSortOrder ?: emptyList(),
+        // updateBranch hace set(): sin arrastrarlo, guardar la ficha borraria el
+        // orden de empaque que configuro la planta.
+        dispatchBranchOrder = existing?.dispatchBranchOrder ?: emptyList(),
         closedWeekdays = closedWeekdays.toList(),
         receivesOnlyInTrip = receivesOnlyInTrip,
         active = active

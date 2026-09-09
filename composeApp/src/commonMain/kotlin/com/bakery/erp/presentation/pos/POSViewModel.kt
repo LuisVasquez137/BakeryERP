@@ -28,7 +28,10 @@ import com.bakery.erp.model.SalePaymentMethod
 import com.bakery.erp.model.User
 import kotlin.time.Clock
 import kotlin.time.Instant
+import kotlinx.datetime.DatePeriod
 import kotlinx.datetime.TimeZone
+import kotlinx.datetime.atStartOfDayIn
+import kotlinx.datetime.plus
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -77,7 +80,15 @@ data class POSUiState(
     val lastSaleSummary: LastSaleSummary? = null,
     /** Datos del ticket de la venta recién confirmada — para el diálogo de éxito + impresión. */
     val lastReceiptData: ReceiptData? = null,
-    val isPrintingAvailable: Boolean = false
+    val isPrintingAvailable: Boolean = false,
+    /**
+     * Cuentas del restaurante ya cobradas al cliente cuyo efectivo todavía no entró a
+     * ninguna gaveta. Todas las cajas de la sucursal ven la misma lista.
+     */
+    val pendingCollections: List<Sale> = emptyList(),
+    val isCollecting: Boolean = false,
+    /** Cuenta recién recibida — para el acuse; se limpia al cerrarlo. */
+    val justCollected: Sale? = null
 )
 
 data class LastSaleSummary(
@@ -108,6 +119,7 @@ class POSViewModel(
     private var stockObserveJob: Job? = null
     private var categoriesObserveJob: Job? = null
     private var sessionObserveJob: Job? = null
+    private var pendingObserveJob: Job? = null
     private var retailPriceListId: String = ""
     private var retailPriceFactor: Double? = null
 
@@ -157,6 +169,7 @@ class POSViewModel(
                 loadIngredientStock(companyId, result.session.branchId, result.products)
                 observePOSCategories(companyId, result.session.branchId)
                 observeSession(companyId, result.session.id)
+                observePendingCollections(companyId, result.session.branchId)
             }.onFailure { err ->
                 _uiState.update { it.copy(isLoading = false, error = err.message) }
             }
@@ -213,6 +226,60 @@ class POSViewModel(
                 .collect { session -> _uiState.update { it.copy(session = session) } }
         }
     }
+
+    /**
+     * Cuentas del restaurante pendientes de entregar a caja, en vivo. En una sucursal sin
+     * restaurante la lista simplemente nunca trae nada y no se muestra el botón.
+     */
+    private fun observePendingCollections(companyId: String, branchId: String) {
+        pendingObserveJob?.cancel()
+        // Solo las de HOY. Una cuenta que nadie entregó ayer no puede seguir apareciendo:
+        // el día siguiente arranca de cero. El rango se fija al abrir la caja — una sesión
+        // que cruce la medianoche seguirá mostrando el día en que se abrió, que es lo que
+        // espera quien la está atendiendo.
+        val tz = TimeZone.currentSystemDefault()
+        val today = Clock.System.now().toLocalDateTime(tz).date
+        val from = today.atStartOfDayIn(tz).toEpochMilliseconds()
+        val until = today.plus(DatePeriod(days = 1)).atStartOfDayIn(tz).toEpochMilliseconds()
+        pendingObserveJob = viewModelScope.launch {
+            saleRepository.observePendingCollections(companyId, branchId, from, until)
+                .catch { e -> _uiState.update { it.copy(error = e.message) } }
+                .collect { list -> _uiState.update { it.copy(pendingCollections = list) } }
+        }
+    }
+
+    /**
+     * El mesero entrega el efectivo y esta caja lo recibe.
+     *
+     * No es un segundo cobro: el cliente ya pagó en ComandaYa. Lo que se registra acá es que
+     * el dinero cambió de manos y ya está en ESTA gaveta — el único dato que ningún
+     * algoritmo puede deducir cuando la sucursal tiene dos cajas y cualquiera puede recibir.
+     */
+    fun collectPendingSale(companyId: String, sale: Sale, currentUser: User) {
+        val session = _uiState.value.session ?: return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isCollecting = true, error = null) }
+            runCatching {
+                saleRepository.collectPendingSale(
+                    companyId = companyId,
+                    saleId = sale.id,
+                    sessionId = session.id,
+                    registerId = session.registerId,
+                    registerName = session.registerName,
+                    cashierId = currentUser.id,
+                    cashierName = currentUser.displayName
+                )
+            }.onSuccess { collected ->
+                // La fila desaparece sola: el listener ya no la trae porque dejó de estar
+                // pendiente. No hace falta quitarla a mano.
+                _uiState.update { it.copy(isCollecting = false, justCollected = collected) }
+            }.onFailure { e ->
+                _uiState.update { it.copy(isCollecting = false, error = e.message) }
+            }
+        }
+    }
+
+    fun clearJustCollected() { _uiState.update { it.copy(justCollected = null) } }
 
     // ── Carrito ───────────────────────────────────────────────────────────
 

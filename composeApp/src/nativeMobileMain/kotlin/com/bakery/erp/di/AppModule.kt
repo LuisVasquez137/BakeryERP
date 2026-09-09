@@ -189,7 +189,7 @@ val appModule = module {
     single { ProductionViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { NotificationViewModel(get(), get()) }
     single { DispatchViewModel(get(), get(), get(), get(), get(), get()) }
-    single { DeliveryViewModel(get(), get(), get(), get()) }
+    single { DeliveryViewModel(get(), get(), get(), get(), get(), get()) }
     single { FinishedStockViewModel(get(), get()) }
     single { SupplierViewModel(get()) }
     single { RecipeViewModel(get(), get()) }
@@ -216,7 +216,7 @@ val appModule = module {
     single { FinancialReportViewModel(get(), get(), get(), get(), get(), get()) }
     single { ExternalCustomerViewModel(get(), get(), get(), get()) }
     single { CustomerOrderViewModel(get(), get(), get(), get(), get(), get()) }
-    single { OrganizationSettingsViewModel(get()) }
+    single { OrganizationSettingsViewModel(get(), get()) }
     single { ResellerSetupViewModel(get(), get()) }
     single { ResellerViewModel(get(), get(), get(), get(), get()) }
 }

@@ -10,14 +10,22 @@ import com.bakery.erp.domain.report.DailySalesPoint
 import com.bakery.erp.domain.report.MoneyAndCount
 import com.bakery.erp.domain.report.ProductSalesStat
 import com.bakery.erp.domain.report.SalesSummary
+import com.bakery.erp.domain.report.salesSummaryFromDaily
 import com.bakery.erp.model.FinishedMovementReference
 import com.bakery.erp.model.FinishedMovementType
 import com.bakery.erp.model.FinishedStockMovement
 import com.bakery.erp.model.Sale
+import com.bakery.erp.model.SaleContribution
 import com.bakery.erp.model.SaleLine
 import com.bakery.erp.model.SaleLinePriceSource
+import com.bakery.erp.model.SaleSource
+import com.bakery.erp.model.SalesChannel
+import com.bakery.erp.model.effectivePaymentBreakdown
 import com.bakery.erp.model.SalePaymentMethod
 import com.bakery.erp.model.SaleStatus
+import com.bakery.erp.model.SalesDaily
+import com.bakery.erp.model.plus
+import com.bakery.erp.model.salesDailyId
 import com.bakery.erp.model.StockMovement
 import com.bakery.erp.model.ingredientUnitsConsumed
 import com.bakery.erp.model.isIngredientBacked
@@ -51,6 +59,36 @@ class FirebaseSaleRepository(
 
     private fun linesCol(companyId: String, saleId: String) =
         firestore.collection("companies/$companyId/sales/$saleId/lines")
+
+    private fun dailyCol(companyId: String) =
+        firestore.collection("companies/$companyId/salesDaily")
+
+    /**
+     * Ventas de la empresa acotadas por fecha **en el servidor**. Todas las lecturas por
+     * rango pasan por aquí.
+     *
+     * Antes cada una hacía `.get()` (o peor, `.snapshots`) sobre la colección entera y
+     * filtraba la fecha en memoria: abrir el Home leía todas las ventas de la historia tres
+     * veces, y el costo crecía con cada venta registrada. El rango se aplicaba igual, pero
+     * después de haber pagado la lectura.
+     *
+     * `createdAt` se compara como `Double` a propósito: `firestoreSafeOf` convierte todo
+     * `Long` a `Double` al escribir, así que el campo guardado es numérico — y un `Long` de
+     * Kotlin no es un número para Firestore JS (ver `FirestoreSafe.kt`). Comparar contra un
+     * `Long` dejaría la query sin devolver nada en web.
+     *
+     * El límite superior es **inclusivo**, igual que el `in fromMillis..untilMillis` que
+     * reemplaza, para no cambiar ningún resultado en este paso.
+     *
+     * La sucursal se sigue filtrando en memoria: cruzarla con el rango exige un índice
+     * compuesto `(branchId, createdAt)` que este proyecto no despliega hoy, y las sucursales
+     * son pocas. Si el volumen lo pide, ése es el siguiente escalón.
+     */
+    private fun salesInRange(companyId: String, fromMillis: Long, untilMillis: Long) =
+        salesCol(companyId).where {
+            ("createdAt" greaterThanOrEqualTo fromMillis.toDouble()) and
+                ("createdAt" lessThanOrEqualTo untilMillis.toDouble())
+        }
 
     override suspend fun createSale(
         companyId: String, sale: Sale, lines: List<SaleLine>
@@ -177,6 +215,12 @@ class FirebaseSaleRepository(
         lineWrites.awaitAll()
         sessionInc.await()
 
+        // 5. Aporte al resumen del día. Va al final y con la falla contenida a propósito:
+        //    la venta ya está registrada y el stock ya se movió, así que un problema acá no
+        //    puede tumbar un cobro que el cliente ya pagó. El resumen se repara corriendo
+        //    `rebuildDailyRollups`, que recalcula desde las ventas — la fuente de verdad.
+        runCatching { addToDailyRollup(companyId, contributionOf(finalSale, resolvedLines)) }
+
         finalSale
     }
 
@@ -191,140 +235,198 @@ class FirebaseSaleRepository(
             .map { it.toSale() }
             .sortedByDescending { it.createdAt }
 
+    // El listener va sobre la sesión, no sobre la colección completa: un `snapshots` sin
+    // filtro descarga TODAS las ventas de la empresa al suscribirse y vuelve a cobrar por
+    // cada documento que cambie, aunque sea de otro turno de hace meses.
     override fun observeSalesForSession(
         companyId: String, sessionId: String
     ): Flow<List<Sale>> =
-        salesCol(companyId).snapshots.map { snapshot ->
+        salesCol(companyId).where { "sessionId" equalTo sessionId }.snapshots.map { snapshot ->
             snapshot.documents
                 .map { it.toSale() }
-                .filter { it.sessionId == sessionId }
                 .sortedByDescending { it.createdAt }
         }
 
     override suspend fun getSalesForBranchInRange(
         companyId: String, branchId: String, fromMillis: Long, untilMillis: Long
-    ): List<Sale> = salesCol(companyId).where { "branchId" equalTo branchId }.get().documents
+    ): List<Sale> = salesInRange(companyId, fromMillis, untilMillis).get().documents
         .map { it.toSale() }
-        .filter { it.createdAt in fromMillis..untilMillis }
+        .filter { it.branchId == branchId }
         .sortedByDescending { it.createdAt }
 
     override fun observeSalesForBranchInRange(
         companyId: String, branchId: String, fromMillis: Long, untilMillis: Long
     ): Flow<List<Sale>> =
-        salesCol(companyId).snapshots.map { snapshot ->
+        salesInRange(companyId, fromMillis, untilMillis).snapshots.map { snapshot ->
             snapshot.documents
                 .map { it.toSale() }
-                .filter { it.branchId == branchId && it.createdAt in fromMillis..untilMillis }
+                .filter { it.branchId == branchId }
                 .sortedByDescending { it.createdAt }
         }
+
+    override fun observePendingCollections(
+        companyId: String, branchId: String, fromMillis: Long, untilMillis: Long
+    ): Flow<List<Sale>> =
+        // Se consulta por rango de fecha (índice de un solo campo) y se filtran estado y
+        // sucursal en memoria. Al revés —filtrar el estado en el servidor y la fecha acá—
+        // haría que el listener creciera con cada cuenta que alguien nunca entregó.
+        salesInRange(companyId, fromMillis, untilMillis).snapshots.map { snapshot ->
+            snapshot.documents
+                .map { it.toSale() }
+                .filter { it.branchId == branchId && it.status == SaleStatus.PENDING_COLLECTION }
+                .sortedBy { it.externalOrderAt.takeIf { t -> t > 0 } ?: it.createdAt }
+        }
+
+    override suspend fun collectPendingSale(
+        companyId: String,
+        saleId: String,
+        sessionId: String,
+        registerId: String,
+        registerName: String,
+        cashierId: String,
+        cashierName: String
+    ): Sale {
+        val ref = salesCol(companyId).document(saleId)
+        val collected = firestore.runTransaction {
+            val snapshot = get(ref)
+            if (!snapshot.exists) error("La cuenta ya no existe.")
+            val sale = snapshot.toSale()
+            // La guarda que importa: N cajas ven la misma lista. Si otra ya la recibió, ésta
+            // tiene que fallar — si no, el mismo dinero entraría a dos gavetas.
+            if (sale.status != SaleStatus.PENDING_COLLECTION) {
+                error(
+                    if (sale.cashierName.isNotEmpty()) "Esta cuenta ya la recibió ${sale.cashierName}."
+                    else "Esta cuenta ya fue recibida."
+                )
+            }
+            val updated = sale.copy(
+                status = SaleStatus.COMPLETED,
+                sessionId = sessionId,
+                registerId = registerId,
+                registerName = registerName,
+                cashierId = cashierId,
+                cashierName = cashierName,
+                collectedAt = Clock.System.now().toEpochMilliseconds()
+            )
+            set(ref, updated.toMap())
+            updated
+        }
+
+        // Los totales de la gaveta van FUERA de la transacción, y por método: el efectivo se
+        // cuadra contra el conteo físico y la tarjeta contra los vouchers guardados en esa
+        // misma caja. Se hace después de fijar el estado, así un fallo acá no puede dejar la
+        // cuenta reclamable dos veces.
+        collected.effectivePaymentBreakdown.forEach { (method, amount) ->
+            cashSessionRepository.incrementSaleTotals(companyId, sessionId, method, amount)
+        }
+        return collected
+    }
 
     override suspend fun aggregateSalesInRange(
         companyId: String,
         branchIds: List<String>?,
         fromMillis: Long,
         untilMillis: Long
-    ): SalesSummary = coroutineScope {
-        // 1. Cargar todas las ventas COMPLETED del rango. Filtramos client-side por sucursal
-        //    porque no hay índice por (branchId, createdAt) — leyendo branchId server-side
-        //    requeriría una query por sucursal.
-        val allSales = salesCol(companyId).get().documents
+    ): SalesSummary {
+        // El rango se compara contra el INICIO del día de cada resumen. Todos los llamadores
+        // pasan `[inicio, finExclusivo)` en fronteras de día (ver `rangeFor` en los reportes),
+        // así que el límite superior es estricto: con `<=`, un rango que termina en el inicio
+        // de mañana se llevaría el día de mañana entero.
+        val dailies = dailyCol(companyId).where {
+            ("dateMillis" greaterThanOrEqualTo fromMillis.toDouble()) and
+                ("dateMillis" lessThan untilMillis.toDouble())
+        }.get().documents
+            .map { it.toSalesDaily() }
+            .filter { branchIds.isNullOrEmpty() || it.branchId in branchIds }
+
+        return salesSummaryFromDaily(dailies)
+    }
+
+    override suspend fun rebuildDailyRollups(
+        companyId: String,
+        fromMillis: Long,
+        untilMillis: Long
+    ): Int = coroutineScope {
+        val sales = salesInRange(companyId, fromMillis, untilMillis).get().documents
             .map { it.toSale() }
-            .filter {
-                it.status == SaleStatus.COMPLETED &&
-                    it.createdAt in fromMillis..untilMillis &&
-                    (branchIds.isNullOrEmpty() || it.branchId in branchIds)
-            }
+            // Las pendientes de entregar a caja YA son ingreso: el cliente pagó. Filtrar por
+            // COMPLETED dejaría la reconstrucción por debajo del camino incremental.
+            .filter { SaleStatus.countsAsRevenue(it.status) }
 
-        if (allSales.isEmpty()) return@coroutineScope SalesSummary()
+        if (sales.isEmpty()) return@coroutineScope 0
 
-        // 2. Líneas de todas las ventas en paralelo (una query por venta).
-        val linesPerSale = allSales.map { sale ->
-            async { sale to getSaleLines(companyId, sale.id) }
+        // Una query de líneas por venta: el camino caro, y por eso vive solo acá. Es el
+        // precio de reconstruir desde la fuente de verdad, que es justo lo que se pide.
+        val contributions = sales.map { sale ->
+            async { contributionOf(sale, getSaleLines(companyId, sale.id)) }
         }.awaitAll()
 
+        val rebuilt = contributions
+            .groupBy { salesDailyId(it.branchId, it.businessDate) }
+            .map { (_, group) -> group.fold(SalesDaily()) { acc, c -> acc + c } }
+
+        val now = Clock.System.now().toEpochMilliseconds()
+        rebuilt.map { daily ->
+            async {
+                dailyCol(companyId).document(daily.id).set(daily.copy(updatedAt = now).toMap())
+            }
+        }.awaitAll()
+
+        rebuilt.size
+    }
+
+    /**
+     * Aporte de una venta a su resumen diario. **Único** lugar donde venta+líneas se traducen
+     * a [SaleContribution], para que el aporte incremental del cobro y la reconstrucción
+     * histórica no puedan calcular cosas distintas.
+     */
+    private fun contributionOf(sale: Sale, lines: List<SaleLine>): SaleContribution {
         val tz = TimeZone.currentSystemDefault()
-        val totalRevenue = allSales.sumOf { it.total }
-        val transactionCount = allSales.size
-        val unitsSold = linesPerSale.sumOf { (_, lines) -> lines.sumOf { it.quantity } }
-
-        // Por método de pago
-        val byPaymentMethod = allSales.groupBy { it.paymentMethod }
-            .mapValues { (_, sales) -> MoneyAndCount(sales.sumOf { it.total }, sales.size) }
-
-        // Por cajero
-        val byCashier = allSales.groupBy { it.cashierId to it.cashierName }
-            .map { (key, sales) ->
-                val total = sales.sumOf { it.total }
-                CashierSalesStat(
-                    cashierId = key.first,
-                    cashierName = key.second,
-                    transactionCount = sales.size,
-                    total = total,
-                    avgTicket = total / sales.size
-                )
-            }
-            .sortedByDescending { it.total }
-
-        // Por sucursal
-        val byBranch = allSales.groupBy { it.branchId to it.branchName }
-            .map { (key, sales) ->
-                BranchSalesStat(
-                    branchId = key.first,
-                    branchName = key.second,
-                    transactionCount = sales.size,
-                    total = sales.sumOf { it.total }
-                )
-            }
-            .sortedByDescending { it.total }
-
-        // Top productos (de las líneas)
-        val productAccum = HashMap<String, Triple<String, Double, Double>>() // pid -> (name, qty, revenue)
-        linesPerSale.forEach { (_, lines) ->
-            lines.forEach { line ->
-                val pid = line.productId ?: return@forEach
-                val (name, qty, rev) = productAccum[pid] ?: Triple(line.productName, 0.0, 0.0)
-                productAccum[pid] = Triple(name, qty + line.quantity, rev + line.subtotal)
-            }
-        }
-        val topProducts = productAccum.entries
-            .map { (pid, t) -> ProductSalesStat(pid, t.first, t.second, t.third) }
-            .sortedByDescending { it.revenue }
-            .take(20)
-
-        // Histograma horario y por día
-        val hourAccum = HashMap<Int, Double>()
-        val dayAccum = HashMap<String, Pair<Long, Pair<Double, Int>>>() // key=yyyy-MM-dd -> (startMillis, (rev, count))
-        allSales.forEach { sale ->
-            val ldt = Instant.fromEpochMilliseconds(sale.createdAt).toLocalDateTime(tz)
-            hourAccum[ldt.hour] = (hourAccum[ldt.hour] ?: 0.0) + sale.total
-            val dateKey = ldt.date.toString()
-            val startMillis = ldt.date.atStartOfDayIn(tz).toEpochMilliseconds()
-            val (_, pair) = dayAccum[dateKey] ?: (startMillis to (0.0 to 0))
-            dayAccum[dateKey] = startMillis to (pair.first + sale.total to pair.second + 1)
-        }
-        val byDay = dayAccum.entries
-            .sortedBy { it.value.first }
-            .map { (label, value) ->
-                DailySalesPoint(
-                    dateMillis = value.first,
-                    dateLabel = label,
-                    revenue = value.second.first,
-                    transactionCount = value.second.second
-                )
-            }
-
-        SalesSummary(
-            totalRevenue = totalRevenue,
-            transactionCount = transactionCount,
-            unitsSold = unitsSold,
-            avgTicket = totalRevenue / transactionCount,
-            byPaymentMethod = byPaymentMethod,
-            byCashier = byCashier,
-            byBranch = byBranch,
-            topProducts = topProducts,
-            hourHistogram = hourAccum,
-            byDay = byDay
+        val ldt = Instant.fromEpochMilliseconds(sale.createdAt).toLocalDateTime(tz)
+        // Las líneas express no tienen producto: suman a las unidades y al total, pero no
+        // pueden entrar al desglose por producto.
+        val withProduct = lines.filter { !it.productId.isNullOrEmpty() }
+        return SaleContribution(
+            branchId = sale.branchId,
+            branchName = sale.branchName,
+            businessDate = ldt.date.toString(),
+            dateMillis = ldt.date.atStartOfDayIn(tz).toEpochMilliseconds(),
+            hour = ldt.hour,
+            total = sale.total,
+            paymentMethod = sale.paymentMethod,
+            // Una venta del restaurante todavía sin recibir en caja no tiene cajero: quien
+            // la atendió es el mesero. Sin este respaldo, reconstruir los resúmenes le
+            // borraría la atribución que sí escribe el camino incremental.
+            cashierId = sale.cashierId.ifEmpty { sale.externalUserId },
+            cashierName = sale.cashierName.ifEmpty { sale.externalUserName },
+            channel = sale.salesChannel,
+            units = lines.sumOf { it.quantity },
+            productName = withProduct.associate { it.productId!! to it.productName },
+            productQty = withProduct.groupBy { it.productId!! }
+                .mapValues { (_, ls) -> ls.sumOf { it.quantity } },
+            productRevenue = withProduct.groupBy { it.productId!! }
+                .mapValues { (_, ls) -> ls.sumOf { it.subtotal } }
         )
+    }
+
+    /**
+     * Suma la venta al resumen de su día.
+     *
+     * Va en transacción y no en un leer-modificar-escribir suelto porque dos cajas de la
+     * misma sucursal cobran a la vez y la segunda pisaría a la primera. No se usa
+     * `FieldValue.increment` porque GitLive 2.1.0 solo lo ofrece para enteros y esto es
+     * dinero.
+     */
+    private suspend fun addToDailyRollup(companyId: String, c: SaleContribution) {
+        val ref = dailyCol(companyId).document(salesDailyId(c.branchId, c.businessDate))
+        firestore.runTransaction {
+            val snapshot = get(ref)
+            val current = if (snapshot.exists) snapshot.toSalesDaily() else SalesDaily()
+            val updated = (current + c).copy(
+                updatedAt = Clock.System.now().toEpochMilliseconds()
+            )
+            set(ref, updated.toMap())
+        }
     }
 
     // ── Serialización ────────────────────────────────────────────────────────
@@ -347,6 +449,16 @@ class FirebaseSaleRepository(
         "status" to status,
         "lineCount" to lineCount,
         "linkedCustomerOrderId" to linkedCustomerOrderId,
+        "source" to source,
+        "salesChannel" to salesChannel,
+        "externalId" to externalId,
+        "externalUserId" to externalUserId,
+        "externalUserName" to externalUserName,
+        "externalTableLabel" to externalTableLabel,
+        "externalOrderNumber" to externalOrderNumber,
+        "externalOrderAt" to externalOrderAt,
+        "paymentBreakdown" to paymentBreakdown,
+        "collectedAt" to collectedAt,
         "createdAt" to createdAt
     )
 
@@ -368,6 +480,17 @@ class FirebaseSaleRepository(
         status = get<String?>("status") ?: SaleStatus.COMPLETED,
         lineCount = (get<Double?>("lineCount") ?: 0.0).toInt(),
         linkedCustomerOrderId = get<String?>("linkedCustomerOrderId") ?: "",
+        // Las ventas anteriores a estos campos son, por definición, pan cobrado en el POS.
+        source = get<String?>("source") ?: SaleSource.POS,
+        salesChannel = get<String?>("salesChannel") ?: SalesChannel.BAKERY,
+        externalId = get<String?>("externalId") ?: "",
+        externalUserId = get<String?>("externalUserId") ?: "",
+        externalUserName = get<String?>("externalUserName") ?: "",
+        externalTableLabel = get<String?>("externalTableLabel") ?: "",
+        externalOrderNumber = get<String?>("externalOrderNumber") ?: "",
+        externalOrderAt = readMillis("externalOrderAt"),
+        paymentBreakdown = get<Map<String, Double>?>("paymentBreakdown") ?: emptyMap(),
+        collectedAt = readMillis("collectedAt"),
         createdAt = readMillis("createdAt")
     )
 
@@ -407,6 +530,58 @@ class FirebaseSaleRepository(
         linkedIngredientId = runCatching { get<String?>("linkedIngredientId") }.getOrNull() ?: "",
         linkedIngredientName = runCatching { get<String?>("linkedIngredientName") }.getOrNull() ?: "",
         ingredientUnitsPerSale = runCatching { get<Double?>("ingredientUnitsPerSale") }.getOrNull() ?: 0.0
+    )
+
+    private fun SalesDaily.toMap(): Map<String, Any?> = firestoreSafeOf(
+        "id" to id,
+        "branchId" to branchId,
+        "branchName" to branchName,
+        "businessDate" to businessDate,
+        "dateMillis" to dateMillis,
+        "revenue" to revenue,
+        "transactionCount" to transactionCount,
+        "unitsSold" to unitsSold,
+        "paymentTotal" to paymentTotal,
+        "paymentCount" to paymentCount,
+        "cashierName" to cashierName,
+        "cashierTotal" to cashierTotal,
+        "cashierCount" to cashierCount,
+        "hourTotal" to hourTotal,
+        "productName" to productName,
+        "productQty" to productQty,
+        "productRevenue" to productRevenue,
+        "channelRevenue" to channelRevenue,
+        "channelCount" to channelCount,
+        "channelUnits" to channelUnits,
+        "updatedAt" to updatedAt
+    )
+
+    // Los mapas se leen con su tipo concreto y SIN runCatching: `get<Map<String, Any?>>()`
+    // revienta con "Serializer for Any not found", y taparlo devolvería resúmenes en cero
+    // sin que nadie se entere — que es exactamente cómo se perdieron las sugerencias de
+    // pedidos en su momento. Si algo se rompe acá, tiene que romperse fuerte.
+    private fun DocumentSnapshot.toSalesDaily() = SalesDaily(
+        id = id,
+        branchId = get<String?>("branchId") ?: "",
+        branchName = get<String?>("branchName") ?: "",
+        businessDate = get<String?>("businessDate") ?: "",
+        dateMillis = readMillis("dateMillis"),
+        revenue = get<Double?>("revenue") ?: 0.0,
+        transactionCount = (get<Double?>("transactionCount") ?: 0.0).toInt(),
+        unitsSold = get<Double?>("unitsSold") ?: 0.0,
+        paymentTotal = get<Map<String, Double>?>("paymentTotal") ?: emptyMap(),
+        paymentCount = get<Map<String, Int>?>("paymentCount") ?: emptyMap(),
+        cashierName = get<Map<String, String>?>("cashierName") ?: emptyMap(),
+        cashierTotal = get<Map<String, Double>?>("cashierTotal") ?: emptyMap(),
+        cashierCount = get<Map<String, Int>?>("cashierCount") ?: emptyMap(),
+        hourTotal = get<Map<String, Double>?>("hourTotal") ?: emptyMap(),
+        productName = get<Map<String, String>?>("productName") ?: emptyMap(),
+        productQty = get<Map<String, Double>?>("productQty") ?: emptyMap(),
+        productRevenue = get<Map<String, Double>?>("productRevenue") ?: emptyMap(),
+        channelRevenue = get<Map<String, Double>?>("channelRevenue") ?: emptyMap(),
+        channelCount = get<Map<String, Int>?>("channelCount") ?: emptyMap(),
+        channelUnits = get<Map<String, Double>?>("channelUnits") ?: emptyMap(),
+        updatedAt = readMillis("updatedAt")
     )
 
     private fun DocumentSnapshot.readMillis(field: String): Long =
