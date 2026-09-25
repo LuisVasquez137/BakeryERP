@@ -1889,7 +1889,9 @@ defecto").
   los arrastra: `updateBranch` hace `set()` y guardar la ficha borraría el NIT. La asignación se
   escribe parcial (`assignBranches`), y desmarcar una sucursal la deja sin NIT.
 
-**Pendiente**: desplegar las funciones (sin eso guardar un NIT falla), Fase 3 (cobro, ticket con QR,
+**Desplegadas** las seis funciones `fel*` en `bakery-erp-saas` (2026-09-25).
+
+**Pendiente**: Fase 3 (cobro, ticket con QR,
 anulación), Fase 4 (puente con ComandaYa y crédito compartido; y arreglar que
 `ingestExternalSale` hace `set` sin merge y reabre una venta ya recibida en caja).
 
