@@ -1829,6 +1829,48 @@ cuaderno se carga como ajuste "Saldo anterior (cuaderno)".
   línea (medio centavo sube); el pan de grupo y el restaurante no descuentan. Va a
   `Sale.discount` + `discountAccountId/Label`. Lo fiado, con tarjeta o transferencia: sin descuento.
 
+### Facturación electrónica (FEL Guatemala, Digifact) — en construcción
+
+Réplica en BakeOS de lo que ComandaYa ya factura (mismo certificador, mismo NIT, mismos
+códigos de establecimiento). Sucursales con el NIT 59325216: **Bombero (1), Pacaja (2),
+Democracia (3)**; Calvario y Salida tienen otro NIT (después). Decisiones: facturar es
+opcional con switch "por defecto" por sucursal; si Digifact falla se cobra igual y la factura
+queda PENDIENTE con reintento automático; la cuenta del restaurante agregada al carrito se
+factura JUNTO con el pan en un solo DTE y BakeOS le avisa a ComandaYa (que no la vuelva a
+facturar y descuente el crédito del paquete compartido de DTEs).
+
+**Fase 1 (hecha, sin desplegar): servidor** — `functions/fel/`:
+- `digifactClient.js`: portado de ComandaYa (`OrderApp/functions/fel`), con `fetch` nativo y
+  firebase-admin modular. Login con NIT a 12 dígitos, certificar NUC, anular (CANCEL FEL, no
+  NCRE: la NCRE no acepta CF), GetDocument, consulta de NIT. `serieYNumero` lee del XML
+  certificado porque Digifact devuelve `serial`/`batch` al revés.
+- `felCredenciales.js`: credenciales POR NIT en la colección de nivel superior
+  `FelCredentials/{companyId}__{profileId}` — las reglas no la abren (la de `companies/**`
+  deja leer todo a cualquier empleado). El token se cachea ahí mismo.
+- `felEmisor.js`: `companies/{c}/felProfiles/{pid}` (datos SAT, sin secretos) + en la sucursal
+  `felProfileId` y `felCodigoEstablecimiento`.
+- `nucXmlBuilder.js`: XML NUC desde líneas genéricas **con descuento por línea**
+  (`<Discounts>`; ComandaYa no los mandaba). Total = Qty×Price−Descuento, IVA sobre eso, todo al
+  centavo y totales sumados de los items. `prorateDiscount` reparte el descuento del encabezado
+  de la venta. Referencia interna `BKOS-…` (no choca con ComandaYa) en modo VALIDAR. Validado
+  contra `NUCSchema.xsd` oficial; tests en `nucXmlBuilder.test.js` (`npm test`).
+- `felFunctions.js`: `felCertificarVenta` (varias ventas de un cobro → un DTE;
+  `dte_<huella>` determinista + candado en transacción; duplicado 9022 → recupera el DTE),
+  `felConsultarNit`, `felAnularDte`, `felObtenerPdf`, `felGuardarPerfil` (solo OWNER; prueba el
+  login antes de guardar), `felReintentarPendientes` (cada 5 min, cola `felPendientes`,
+  espera 2^n min, tope 12). Estados: CERTIFICANDO / CERTIFICADO / PENDIENTE (transitorio) /
+  RECHAZADO (contenido o configuración) / ANULADO. La venta lleva `dteId` + `invoiceStatus` +
+  serie/número.
+- `tools/fel-probar.js`: prueba de punta a punta contra Digifact con credenciales por env;
+  `fel-probar-sabropan.js` la corre con los datos de emisor de Sabro Pan y `fel-login.js` solo
+  prueba el login. **Verificado en PRODUCCIÓN el 2026-09-25**: certificó una FPEQ de Q1.90 y la
+  anuló. No hay ambiente de pruebas para este NIT: certificar es una factura real. En
+  PowerShell la contraseña va con `$env:DIGIFACT_PASSWORD = '...'` (comillas simples por el `$`).
+
+**Pendiente**: Fase 2 (perfiles y sucursales en la app), Fase 3 (cobro, ticket con QR,
+anulación), Fase 4 (puente con ComandaYa y crédito compartido; y arreglar que
+`ingestExternalSale` hace `set` sin merge y reabre una venta ya recibida en caja).
+
 ### Empleados
 CRUD perfil + documentos + historial + nómina. Modo kiosko (reloj de turno biométrico en tablet). Historial de asistencia con mes/año navegable.
 

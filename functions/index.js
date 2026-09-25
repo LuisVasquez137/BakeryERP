@@ -130,3 +130,14 @@ exports.sendNotificationPush = onDocumentCreated(
 // Vive en su propio archivo: no tiene nada que ver con el push y conviene poder
 // desplegarlo solo (`firebase deploy --only functions:ingestExternalSale`).
 exports.ingestExternalSale = require("./externalSales").ingestExternalSale;
+
+// ── Facturación electrónica (FEL, Digifact) ──────────────────────────────────
+// Ver fel/felFunctions.js. Las credenciales de cada NIT viven en `FelCredentials`, una
+// colección que las reglas no abren a la app.
+const fel = require("./fel/felFunctions");
+exports.felCertificarVenta = fel.felCertificarVenta;
+exports.felConsultarNit = fel.felConsultarNit;
+exports.felAnularDte = fel.felAnularDte;
+exports.felObtenerPdf = fel.felObtenerPdf;
+exports.felGuardarPerfil = fel.felGuardarPerfil;
+exports.felReintentarPendientes = fel.felReintentarPendientes;
