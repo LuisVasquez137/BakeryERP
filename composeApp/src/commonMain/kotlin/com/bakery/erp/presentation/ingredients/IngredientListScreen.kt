@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Kitchen
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -66,6 +67,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.IngredientUsage
 import com.bakery.erp.model.INGREDIENT_CATEGORIES
+import com.bakery.erp.model.SUPPLY_CATEGORIES
 import com.bakery.erp.model.Ingredient
 import com.bakery.erp.model.Permission
 import com.bakery.erp.model.formatStockDisplay
@@ -129,10 +131,27 @@ fun IngredientListScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
                     }
                 },
+                actions = {
+                    // El catálogo se lee una sola vez por sesión (ver loadIngredients), así que
+                    // un precio que cambió al registrar una factura desde otra pantalla no se
+                    // vería hasta volver a entrar. Esto es esa salida, a un toque.
+                    IconButton(
+                        onClick = {
+                            if (companyId.isNotEmpty()) {
+                                viewModel.loadIngredients(companyId, force = true)
+                                viewModel.refreshSelectedBranchStocks(companyId)
+                            }
+                        },
+                        enabled = !state.isLoading
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Actualizar")
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     titleContentColor = MaterialTheme.colorScheme.onPrimary,
-                    navigationIconContentColor = MaterialTheme.colorScheme.onPrimary
+                    navigationIconContentColor = MaterialTheme.colorScheme.onPrimary,
+                    actionIconContentColor = MaterialTheme.colorScheme.onPrimary
                 )
             )
         },
@@ -254,7 +273,12 @@ fun IngredientListScreen(
                                 onClick = { selectedCategory = null }
                             )
                         }
-                        items(INGREDIENT_CATEGORIES) { cat ->
+                        // Las del catálogo que se está viendo: con los chips fijos en materia
+                        // prima, una categoría de suministro no se podía filtrar nunca.
+                        items(
+                            if (hasSupplies && usageFilter == IngredientUsage.SUPPLY) SUPPLY_CATEGORIES
+                            else INGREDIENT_CATEGORIES
+                        ) { cat ->
                             CategoryChip(
                                 label = cat,
                                 icon = CATEGORY_ICONS[cat] ?: Icons.Default.Category,

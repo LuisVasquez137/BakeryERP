@@ -68,6 +68,9 @@ class FirebasePOSCategoryRepository(
         "color" to color,
         "sortOrder" to sortOrder,
         "active" to active,
+        "sellAsGroup" to sellAsGroup,
+        "groupUnitPrice" to groupUnitPrice,
+        "groupLabel" to groupLabel,
         "createdAt" to createdAt,
         "updatedAt" to updatedAt
     )
@@ -80,6 +83,9 @@ class FirebasePOSCategoryRepository(
         color = get<String?>("color") ?: "#0D7A8C",
         sortOrder = (get<Double?>("sortOrder") ?: 0.0).toInt(),
         active = get<Boolean?>("active") ?: true,
+        sellAsGroup = get<Boolean?>("sellAsGroup") ?: false,
+        groupUnitPrice = runCatching { get<Double?>("groupUnitPrice") }.getOrNull() ?: 0.0,
+        groupLabel = get<String?>("groupLabel") ?: "",
         createdAt = readMillis("createdAt"),
         updatedAt = readMillis("updatedAt")
     )

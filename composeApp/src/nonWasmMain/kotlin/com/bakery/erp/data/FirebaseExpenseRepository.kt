@@ -4,6 +4,7 @@ import com.bakery.erp.domain.ExpenseRepository
 import com.bakery.erp.domain.report.BranchExpenseStat
 import com.bakery.erp.domain.report.ExpenseSummary
 import com.bakery.erp.model.Expense
+import com.bakery.erp.model.isFromPurchase
 import com.bakery.erp.model.ExpenseCategory
 import dev.gitlive.firebase.firestore.DocumentSnapshot
 import dev.gitlive.firebase.firestore.FirebaseFirestore
@@ -75,7 +76,10 @@ class FirebaseExpenseRepository(
             total = total,
             recordsCount = expenses.size,
             byCategory = byCategory,
-            byBranch = byBranch
+            byBranch = byBranch,
+            // Sin este corte, el flujo de caja restaría dos veces los suministros y los
+            // servicios: una dentro de la compra que los generó y otra como gasto del mes.
+            fromPurchases = expenses.filter { it.isFromPurchase }.sumOf { it.amount }
         )
     }
 
@@ -93,6 +97,10 @@ class FirebaseExpenseRepository(
         "notes" to notes,
         "sourcePurchaseId" to sourcePurchaseId,
         "sourcePurchaseLineId" to sourcePurchaseLineId,
+        "paidFrom" to paidFrom,
+        "cashSessionId" to cashSessionId,
+        "cashRegisterName" to cashRegisterName,
+        "photoUrl" to photoUrl,
         "createdAt" to if (createdAt == 0L) Clock.System.now().toEpochMilliseconds() else createdAt,
         "updatedAt" to Clock.System.now().toEpochMilliseconds()
     )
@@ -109,6 +117,10 @@ class FirebaseExpenseRepository(
         amount = get<Double?>("amount") ?: get<Long?>("amount")?.toDouble() ?: 0.0,
         period = get<String?>("period") ?: "",
         notes = get<String?>("notes"),
+        paidFrom = get<String?>("paidFrom") ?: "",
+        cashSessionId = get<String?>("cashSessionId") ?: "",
+        cashRegisterName = get<String?>("cashRegisterName") ?: "",
+        photoUrl = get<String?>("photoUrl") ?: "",
         sourcePurchaseId = runCatching { get<String?>("sourcePurchaseId") }.getOrNull() ?: "",
         sourcePurchaseLineId = runCatching { get<String?>("sourcePurchaseLineId") }.getOrNull() ?: "",
         createdAt = readTimestampAsMillis("createdAt"),

@@ -59,6 +59,11 @@ import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.BreadCountLine
 import com.bakery.erp.model.BreadCountReason
 import com.bakery.erp.model.BreadCountStatus
+import com.bakery.erp.model.GroupAllocation
+import com.bakery.erp.model.GroupSalesWindow
+import com.bakery.erp.model.allocateGroupSales
+import com.bakery.erp.model.shortage
+import androidx.compose.material.icons.filled.Refresh
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.ui.AdaptiveContainer
 import com.bakery.erp.util.fmt
@@ -102,11 +107,22 @@ fun BreadCountFormScreen(
     val header = state.currentCount
     val lines = state.currentLines
     val isClosed = header?.status == BreadCountStatus.CLOSED
-    val totalShortage = lines.filter { it.difference < 0 }
-        .sumOf { kotlin.math.abs(it.difference) * it.unitCostSnapshot }
+    val window = state.groupWindow
+    val groupOfProduct = window?.groupOfProduct.orEmpty()
+    // Del faltante de un pan del grupo, lo primero que se descuenta es lo vendido como grupo;
+    // solo el resto es merma. Cerrado, manda lo que quedó escrito en la línea.
+    val allocation = remember(lines, window) {
+        if (window == null) GroupAllocation()
+        else allocateGroupSales(window.unitsByGroup, window.groupProductIds, lines)
+    }
+    fun soldOf(line: BreadCountLine) =
+        if (isClosed) line.soldAsGroup else allocation.soldOf(line.productId)
+    fun wasteOf(line: BreadCountLine) = (line.shortage - soldOf(line)).coerceAtLeast(0.0)
+    val totalShortage = lines.sumOf { wasteOf(it) * it.unitCostSnapshot }
     val totalSurplus = lines.filter { it.difference > 0 }
         .sumOf { it.difference * it.unitCostSnapshot }
-    val missingReasons = lines.filter { it.difference < 0 && it.reason.isBlank() }
+    // La razón se pide solo sobre la merma: el pan que se vendió como grupo no se perdió.
+    val missingReasons = lines.filter { wasteOf(it) > 0 && it.reason.isBlank() }
 
     Scaffold(
         topBar = {
@@ -170,6 +186,17 @@ fun BreadCountFormScreen(
                         value = "Q ${totalSurplus.fmtMoney(2)}",
                         color = if (totalSurplus > 0) Color(0xFF1B5E20) else MaterialTheme.colorScheme.onSurface)
                 }
+                if (window != null && window.groupProductIds.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    GroupSalesCard(
+                        window = window,
+                        allocation = allocation,
+                        isClosed = isClosed,
+                        closedUnexplained = header.unexplainedGroupUnits,
+                        isRefreshing = state.isGroupWindowLoading,
+                        onRefresh = { viewModel.refreshGroupSales(companyId, countId) }
+                    )
+                }
                 Spacer(Modifier.height(8.dp))
                 HorizontalDivider()
                 Spacer(Modifier.height(8.dp))
@@ -179,6 +206,8 @@ fun BreadCountFormScreen(
                     items(lines, key = { it.id }) { line ->
                         LineRow(
                             line = line,
+                            groupName = groupOfProduct[line.productId]?.let { window?.groupNames?.get(it) },
+                            soldAsGroup = soldOf(line),
                             readOnly = isClosed,
                             onChange = { updated -> viewModel.updateLine(companyId, countId, updated) }
                         )
@@ -202,7 +231,11 @@ fun BreadCountFormScreen(
                     ) {
                         Icon(Icons.Default.Save, null)
                         Spacer(Modifier.width(8.dp))
-                        Text("Cerrar conteo y aplicar mermas", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            if (window?.hasGroupSales == true) "Cerrar conteo y repartir ventas"
+                            else "Cerrar conteo y aplicar mermas",
+                            fontWeight = FontWeight.SemiBold
+                        )
                     }
                     if (missingReasons.isNotEmpty()) {
                         Spacer(Modifier.height(4.dp))
@@ -220,9 +253,14 @@ fun BreadCountFormScreen(
             onDismissRequest = { showConfirm = false },
             title = { Text("¿Cerrar conteo?") },
             text = {
-                Text("Esto aplicará automáticamente las mermas (Q ${totalShortage.fmtMoney(2)}) y " +
+                Text(
+                    (if (allocation.totalAllocated > 0)
+                        "Se registrarán como venta ${allocation.totalAllocated.fmt(0)} panes vendidos por grupo, " +
+                            "repartidos según lo que falta de cada uno. " else "") +
+                    "Se aplicarán las mermas (Q ${totalShortage.fmtMoney(2)}) y " +
                     "los sobrantes (Q ${totalSurplus.fmtMoney(2)}) al stock terminado. " +
-                    "El conteo quedará inmutable.")
+                    "Las ventas de grupo se vuelven a leer al cerrar. El conteo quedará inmutable."
+                )
             },
             confirmButton = {
                 TextButton(onClick = {
@@ -245,8 +283,72 @@ private fun KpiBox(label: String, value: String, color: Color) {
 }
 
 @Composable
+private fun GroupSalesCard(
+    window: GroupSalesWindow,
+    allocation: GroupAllocation,
+    isClosed: Boolean,
+    closedUnexplained: Double,
+    isRefreshing: Boolean,
+    onRefresh: () -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(10.dp),
+        colors = CardDefaults.cardColors(containerColor = BrandColors.PrimaryContainer)
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Vendido por grupo de precio", fontWeight = FontWeight.SemiBold,
+                        color = BrandColors.Primary)
+                    Text("Desde ${formatTimestamp(window.fromMillis)}" +
+                            if (isClosed) " hasta ${formatTimestamp(window.untilMillis)}" else " hasta ahora",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (!isClosed) {
+                    if (isRefreshing) CircularProgressIndicator(Modifier.height(20.dp).width(20.dp), strokeWidth = 2.dp)
+                    else IconButton(onClick = onRefresh) {
+                        Icon(Icons.Default.Refresh, "Actualizar ventas", tint = BrandColors.Primary)
+                    }
+                }
+            }
+            window.groupProductIds.keys.forEach { gid ->
+                val sold = allocation.soldByGroup[gid] ?: window.unitsByGroup[gid] ?: 0.0
+                val missing = allocation.shortageByGroup[gid] ?: 0.0
+                val waste = (missing - sold).coerceAtLeast(0.0)
+                Text(
+                    "${window.groupNames[gid].orEmpty()}: vendidos ${sold.fmt(0)} · " +
+                        "faltan ${missing.fmt(0)} en el conteo" +
+                        if (waste > 0) " → ${waste.fmt(0)} de merma" else "",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            val unexplained = if (isClosed) closedUnexplained else allocation.totalUnexplained
+            if (unexplained > 0) {
+                Text(
+                    "Se vendieron ${unexplained.fmt(0)} panes de grupo más de los que faltan. " +
+                        "Revisá el conteo, o si entró pan sin registrar su recepción.",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = BrandColors.AccentDeep
+                )
+            }
+            if (!isClosed) {
+                Text(
+                    "Contá solo el pan que está en el estante: lo vendido se descuenta solo.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun LineRow(
     line: BreadCountLine,
+    groupName: String?,
+    soldAsGroup: Double,
     readOnly: Boolean,
     onChange: (BreadCountLine) -> Unit
 ) {
@@ -255,6 +357,8 @@ private fun LineRow(
     }
     val parsed = countedText.toDoubleOrNull() ?: 0.0
     val diff = parsed - line.expectedStock
+    // Solo lo que no explica la venta de grupo es merma y pide razón.
+    val waste = (-diff - soldAsGroup).coerceAtLeast(0.0)
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -297,8 +401,18 @@ private fun LineRow(
                         color = MaterialTheme.colorScheme.outline)
                     Text(diff.fmt(0), fontWeight = FontWeight.SemiBold, color = diffColor)
                 }
+                if (groupName != null && diff < 0) {
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text("Vendido ($groupName)", style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline)
+                        Text("${soldAsGroup.coerceAtMost(-diff).fmt(0)} · merma ${waste.fmt(0)}",
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (waste > 0) Color(0xFFB00020) else BrandColors.Primary)
+                    }
+                }
             }
-            if (diff < 0) {
+            if (waste > 0) {
                 Spacer(Modifier.height(6.dp))
                 ReasonPicker(
                     selected = line.reason,

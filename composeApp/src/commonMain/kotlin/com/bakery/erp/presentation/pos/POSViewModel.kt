@@ -14,9 +14,14 @@ import com.bakery.erp.domain.ReceiptPrinter
 import com.bakery.erp.domain.SaleRepository
 import com.bakery.erp.model.Branch
 import com.bakery.erp.model.CashSession
+import com.bakery.erp.model.expectedCashNow
+import com.bakery.erp.model.CheckoutPayment
+import com.bakery.erp.model.CheckoutRecord
+import com.bakery.erp.model.checkoutsFromSales
 import com.bakery.erp.model.FinishedProductStock
 import com.bakery.erp.model.isIngredientBacked
 import com.bakery.erp.model.POSCategory
+import com.bakery.erp.model.groupDisplayName
 import com.bakery.erp.model.PriceListType
 import com.bakery.erp.model.Product
 import com.bakery.erp.model.ReceiptData
@@ -26,6 +31,8 @@ import com.bakery.erp.model.SaleLine
 import com.bakery.erp.model.SaleLinePriceSource
 import com.bakery.erp.model.SalePaymentMethod
 import com.bakery.erp.model.User
+import com.bakery.erp.util.fmtMoney
+import com.bakery.erp.util.fmtTrim
 import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlinx.datetime.DatePeriod
@@ -43,8 +50,9 @@ import kotlinx.coroutines.launch
 
 /**
  * Línea del carrito antes de confirmar la venta. Vive solo en memoria del ViewModel.
- * Cuando se confirma se convierte en [SaleLine]. Siempre hay un [productId] concreto —
- * la dualidad EXPRESS/DETAILED del diseño anterior fue eliminada.
+ * Cuando se confirma se convierte en [SaleLine]. Vende un producto concreto ([productId]) o
+ * un grupo de precio ([quickGroupId], "Pan Q0.50"): en ése [productId] va vacío y el
+ * inventario lo reparte el conteo de cierre.
  */
 data class CartLine(
     val key: String,                    // único en el carrito
@@ -53,9 +61,19 @@ data class CartLine(
     val quantity: Double = 0.0,
     val unitPrice: Double = 0.0,
     val priceListId: String = "",
-    val priceSource: String = SaleLinePriceSource.PRODUCT_SALE_PRICE
+    val priceSource: String = SaleLinePriceSource.PRODUCT_SALE_PRICE,
+    val quickGroupId: String = "",
+    /**
+     * Cuenta del restaurante (ComandaYa) que el cliente paga junto con su pan. No es una
+     * línea de venta nueva: al cobrar, esa venta ya existente se da por recibida en esta caja.
+     */
+    val pendingSaleId: String = ""
 ) {
     val subtotal: Double get() = quantity * unitPrice
+    val isGroup: Boolean get() = quickGroupId.isNotEmpty()
+    val isRestaurant: Boolean get() = pendingSaleId.isNotEmpty()
+    /** Descuenta o mueve algo del mostrador (no es una cuenta del restaurante). */
+    val isBakery: Boolean get() = !isRestaurant
 }
 
 data class POSUiState(
@@ -74,7 +92,21 @@ data class POSUiState(
     /** Total de categorías que existen en la empresa (sin filtrar por sucursal) — para diagnóstico. */
     val totalCategoriesCount: Int = 0,
     val cart: List<CartLine> = emptyList(),
+    /**
+     * Unidades vendidas en la sucursal los últimos [POPULARITY_DAYS] días, por productId y por
+     * `groupSaleKey` del grupo de precio. Ordena "Todos": lo que más se pide va primero, que es
+     * lo que la cajera busca con la fila esperando.
+     */
+    val popularityByKey: Map<String, Double> = emptyMap(),
     val isLoading: Boolean = false,
+    /**
+     * Solo durante el COBRO, no durante la carga de la pantalla.
+     *
+     * `isLoading` sube también en `load()`, que corre cada vez que se vuelve al POS —por
+     * ejemplo al terminar de anotar un gasto—, y el diálogo colgado de él anunciaba
+     * "Procesando venta… descontando inventario" cuando no se estaba vendiendo nada.
+     */
+    val isCheckingOut: Boolean = false,
     val isPrinting: Boolean = false,
     val error: String? = null,
     val lastSaleSummary: LastSaleSummary? = null,
@@ -87,8 +119,24 @@ data class POSUiState(
      */
     val pendingCollections: List<Sale> = emptyList(),
     val isCollecting: Boolean = false,
+    /**
+     * Últimos cobros de esta caja, el más reciente primero. Para "Último cobro": cuánto se
+     * cobró, con qué billetes pagaron y cuánto vuelto se dio.
+     */
+    val recentCheckouts: List<CheckoutRecord> = emptyList(),
+    val isLoadingCheckouts: Boolean = false,
+    /** Aviso de algo que salió bien (abono cobrado, adelanto entregado) para el snackbar. */
+    val notice: String? = null,
+    val isCreditBusy: Boolean = false,
     /** Cuenta recién recibida — para el acuse; se limpia al cerrarlo. */
     val justCollected: Sale? = null
+)
+
+/** A qué cuenta se carga una venta a crédito y quién se lleva la mercadería. */
+data class CreditCharge(
+    val account: com.bakery.erp.model.CreditAccount,
+    val personId: String = "",
+    val personName: String = ""
 )
 
 data class LastSaleSummary(
@@ -108,7 +156,9 @@ class POSViewModel(
     private val priceListRepository: PriceListRepository,
     private val branchRepository: BranchRepository,
     private val receiptPrinter: ReceiptPrinter,
-    private val authRepository: AuthRepository
+    private val authRepository: AuthRepository,
+    /** Ventas a crédito, abonos cobrados en caja y adelantos a colaboradores. */
+    private val creditRepository: com.bakery.erp.domain.CreditRepository
 ) : ViewModel() {
 
     private var organizationName: String = ""
@@ -170,11 +220,41 @@ class POSViewModel(
                 observePOSCategories(companyId, result.session.branchId)
                 observeSession(companyId, result.session.id)
                 observePendingCollections(companyId, result.session.branchId)
+                loadPopularity(companyId, result.session.branchId)
             }.onFailure { err ->
                 _uiState.update { it.copy(isLoading = false, error = err.message) }
             }
         }
     }
+
+    /**
+     * Sale de los resúmenes diarios (~30 documentos), no de las ventas. Si falla, "Todos"
+     * queda alfabético: el orden es una comodidad y no puede impedir cobrar.
+     */
+    private fun loadPopularity(companyId: String, branchId: String) {
+        // Una lectura por sucursal por día: `load()` corre cada vez que se vuelve al POS (al
+        // terminar de anotar un gasto, por ejemplo) y el orden de ayer sirve igual para hoy.
+        val today = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date.toString()
+        val cacheKey = "$companyId|$branchId|$today"
+        popularityCache[cacheKey]?.let { cached ->
+            _uiState.update { it.copy(popularityByKey = cached) }
+            return
+        }
+        viewModelScope.launch {
+            val now = Clock.System.now().toEpochMilliseconds()
+            val from = now - POPULARITY_DAYS * 24L * 60 * 60 * 1000
+            runCatching {
+                saleRepository.aggregateSalesInRange(companyId, listOf(branchId), from, now)
+                    .unitsByProduct
+            }.onSuccess { units ->
+                popularityCache[cacheKey] = units
+                _uiState.update { it.copy(popularityByKey = units) }
+            }
+        }
+    }
+
+    /** Orden de "Todos" ya leído hoy, por empresa|sucursal|fecha. */
+    private val popularityCache = mutableMapOf<String, Map<String, Double>>()
 
     private data class LoadResult(
         val session: CashSession,
@@ -244,7 +324,21 @@ class POSViewModel(
         pendingObserveJob = viewModelScope.launch {
             saleRepository.observePendingCollections(companyId, branchId, from, until)
                 .catch { e -> _uiState.update { it.copy(error = e.message) } }
-                .collect { list -> _uiState.update { it.copy(pendingCollections = list) } }
+                .collect { list ->
+                    val stillPending = list.map { it.id }.toSet()
+                    _uiState.update { st ->
+                        // Si otra caja recibió una cuenta que estaba en este carrito, se saca:
+                        // cobrarla acá la metería en dos gavetas.
+                        val gone = st.cart.filter { it.isRestaurant && it.pendingSaleId !in stillPending }
+                        st.copy(
+                            pendingCollections = list,
+                            cart = st.cart - gone.toSet(),
+                            error = if (gone.isNotEmpty())
+                                "Otra caja ya recibió ${gone.joinToString { it.productName }}; se quitó del carrito."
+                            else st.error
+                        )
+                    }
+                }
         }
     }
 
@@ -281,6 +375,30 @@ class POSViewModel(
 
     fun clearJustCollected() { _uiState.update { it.copy(justCollected = null) } }
 
+    /**
+     * Pone la cuenta del restaurante en el carrito para cobrarla junto con lo que el cliente
+     * lleve de panadería: un solo pago, un solo vuelto. Se cobra con el resto al confirmar.
+     */
+    fun addPendingToCart(sale: Sale) {
+        if (_uiState.value.cart.any { it.pendingSaleId == sale.id }) return
+        val line = CartLine(
+            key = "rest_${sale.id}",
+            productId = "",
+            productName = restaurantLineName(sale),
+            quantity = 1.0,
+            unitPrice = sale.total,
+            pendingSaleId = sale.id
+        )
+        _uiState.update { it.copy(cart = it.cart + line) }
+    }
+
+    private fun restaurantLineName(sale: Sale): String =
+        listOfNotNull(
+            "Restaurante",
+            sale.externalOrderNumber.takeIf { it.isNotEmpty() }?.let { "#$it" },
+            sale.externalTableLabel.ifEmpty { null }
+        ).joinToString(" · ")
+
     // ── Carrito ───────────────────────────────────────────────────────────
 
     fun addProductToCart(product: Product, quantity: Double) {
@@ -299,6 +417,31 @@ class POSViewModel(
                 unitPrice = unitPrice.first,
                 priceListId = retailPriceListId,
                 priceSource = unitPrice.second
+            )
+        }
+        _uiState.update { it.copy(cart = newCart) }
+    }
+
+    /**
+     * Agrega N panes de un grupo de precio ("Pan Q0.50"). La cajera no elige el tipo: con cola
+     * en el mostrador eso es lento y además da un dato malo. Acumula sobre la misma línea.
+     */
+    fun addGroupToCart(category: POSCategory, quantity: Double) {
+        if (!category.sellAsGroup || quantity <= 0.0) return
+        val key = "grp_${category.id}"
+        val cart = _uiState.value.cart
+        val newCart = if (cart.any { it.key == key }) {
+            cart.map { if (it.key == key) it.copy(quantity = it.quantity + quantity) else it }
+        } else {
+            cart + CartLine(
+                key = key,
+                productId = "",
+                productName = category.groupDisplayName,
+                quantity = quantity,
+                unitPrice = category.groupUnitPrice,
+                priceListId = retailPriceListId,
+                priceSource = SaleLinePriceSource.QUICK_GROUP,
+                quickGroupId = category.id
             )
         }
         _uiState.update { it.copy(cart = newCart) }
@@ -325,11 +468,24 @@ class POSViewModel(
 
     // ── Confirmar venta ───────────────────────────────────────────────────
 
+    /**
+     * Cobra el carrito. [bills] son los billetes que la cajera fue tocando (valor → cantidad);
+     * vacío si tecleó el monto. Se guardan para "Último cobro".
+     *
+     * Si el carrito trae cuentas del restaurante, primero se reciben ésas —si otra caja ya
+     * recibió alguna, el cobro se corta antes de escribir nada del mostrador— y después se
+     * registra la venta de panadería. Todas quedan con el mismo `checkoutId` y los mismos
+     * datos del pago.
+     */
     fun confirmSale(
         companyId: String,
         currentUser: User,
         paymentMethod: String,
-        tenderedAmount: Double
+        tenderedAmount: Double,
+        bills: Map<Int, Int> = emptyMap(),
+        credit: CreditCharge? = null,
+        /** Colaborador que compra pagando en efectivo y tiene descuento configurado. */
+        discountAccount: com.bakery.erp.model.CreditAccount? = null
     ) {
         val state = _uiState.value
         val session = state.session ?: run {
@@ -341,16 +497,48 @@ class POSViewModel(
         if (state.cart.isEmpty()) {
             _uiState.update { it.copy(error = "El carrito está vacío") }; return
         }
-        val total = cartTotal()
+        val isCredit = paymentMethod == SalePaymentMethod.CREDIT
+        // El descuento se recalcula acá desde la cuenta, no se confía en lo que mostró el
+        // diálogo, y solo con efectivo: premia el pago al contado, no el fiado ni la tarjeta.
+        val discountAmount = if (paymentMethod == SalePaymentMethod.CASH &&
+            discountAccount?.isEmployee == true && discountAccount.cashDiscountEligible
+        ) employeeDiscountAmount() else 0.0
+        val total = cartTotal() - discountAmount
+        if (isCredit) {
+            if (credit == null) {
+                _uiState.update { it.copy(error = "Elegí a qué cuenta se carga") }; return
+            }
+            if (credit.account.requiresPerson && credit.personName.isBlank()) {
+                _uiState.update { it.copy(error = "Elegí quién se lleva la mercadería") }; return
+            }
+            // Una cuenta del restaurante ya es una venta cobrada en ComandaYa: fiarla acá la
+            // dejaría como recibida en caja sin que entre un centavo.
+            if (state.cart.any { it.isRestaurant }) {
+                _uiState.update { it.copy(error = "Las cuentas del restaurante no se pueden cargar a crédito") }; return
+            }
+        }
         val effectiveTendered = if (paymentMethod == SalePaymentMethod.CASH) tenderedAmount else total
         if (effectiveTendered < total) {
             _uiState.update { it.copy(error = "Monto recibido menor al total") }; return
         }
         val change = if (paymentMethod == SalePaymentMethod.CASH) effectiveTendered - total else 0.0
+        val cashBills = if (paymentMethod == SalePaymentMethod.CASH) bills.filterValues { it > 0 } else emptyMap()
 
         val snapshotCart = state.cart
+        val bakeryCart = snapshotCart.filter { it.isBakery }
+        val restaurantCart = snapshotCart.filter { it.isRestaurant }
+        val bakeryTotal = bakeryCart.sumOf { it.subtotal }
+        val payment = CheckoutPayment(
+            checkoutId = newCheckoutId(),
+            method = paymentMethod,
+            checkoutTotal = total,
+            tenderedAmount = effectiveTendered,
+            changeAmount = change,
+            billValues = cashBills.keys.map { it.toDouble() },
+            billCounts = cashBills.values.map { it.toDouble() }
+        )
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, error = null) }
+            _uiState.update { it.copy(isLoading = true, isCheckingOut = true, error = null) }
             runCatching {
                 // Revalidar la sesión contra Firestore antes de escribir: debe seguir OPEN y ser
                 // del cajero actual. Evita registrar ventas contra una sesión ya cerrada por un
@@ -363,6 +551,24 @@ class POSViewModel(
                 if (freshSession.cashierId != currentUser.id) {
                     throw IllegalStateException("Esta sesión de caja pertenece a ${freshSession.cashierName}.")
                 }
+
+                // Primero lo del restaurante: su guarda de "ya la recibió otra caja" es la que
+                // puede fallar, y tiene que hacerlo antes de mover inventario del mostrador.
+                val collected = restaurantCart.map { line ->
+                    saleRepository.collectPendingSale(
+                        companyId = companyId,
+                        saleId = line.pendingSaleId,
+                        sessionId = session.id,
+                        registerId = session.registerId,
+                        registerName = session.registerName,
+                        cashierId = currentUser.id,
+                        cashierName = currentUser.displayName,
+                        checkout = payment
+                    )
+                }
+
+                if (bakeryCart.isEmpty()) return@runCatching collected.first()
+
                 val sale = Sale(
                     branchId = branch.id,
                     branchName = branch.name,
@@ -371,14 +577,41 @@ class POSViewModel(
                     sessionId = session.id,
                     cashierId = currentUser.id,
                     cashierName = currentUser.displayName,
-                    subtotal = total,
-                    discount = 0.0,
-                    total = total,
+                    subtotal = bakeryTotal,
+                    discount = discountAmount,
+                    total = bakeryTotal - discountAmount,
+                    discountAccountId = if (discountAmount > 0) discountAccount?.id.orEmpty() else "",
+                    discountLabel = if (discountAmount > 0) "Descuento colaborador: ${discountAccount?.name.orEmpty()}" else "",
                     paymentMethod = paymentMethod,
                     tenderedAmount = effectiveTendered,
-                    changeAmount = change
+                    changeAmount = change,
+                    // Unidades por grupo en el encabezado: el conteo de cierre las reparte
+                    // leyendo solo encabezados, sin abrir las líneas de cada ticket.
+                    groupIds = bakeryCart.filter { it.isGroup }.map { it.quickGroupId },
+                    groupUnits = bakeryCart.filter { it.isGroup }.map { it.quantity },
+                    checkoutId = payment.checkoutId,
+                    checkoutTotal = total,
+                    billValues = payment.billValues,
+                    billCounts = payment.billCounts,
+                    creditAccountId = credit?.account?.id.orEmpty(),
+                    creditAccountName = credit?.account?.name.orEmpty(),
+                    creditPersonName = credit?.personName.orEmpty()
                 )
-                val lines = snapshotCart.map { line ->
+                val lines = bakeryCart.map { line ->
+                    if (line.isGroup) {
+                        return@map SaleLine(
+                            productId = null,
+                            productName = line.productName,
+                            quickGroupId = line.quickGroupId,
+                            quickGroupName = line.productName,
+                            quantity = line.quantity,
+                            unitPrice = line.unitPrice,
+                            subtotal = line.subtotal,
+                            priceListId = line.priceListId,
+                            priceSource = line.priceSource,
+                            stockDeducted = false
+                        )
+                    }
                     // El vínculo con el insumo se snapshotea acá, donde el catálogo está a
                     // mano: así el repositorio de ventas decide a qué inventario pegarle sin
                     // conocer productos, y la venta sigue diciendo de dónde salió aunque
@@ -404,22 +637,250 @@ class POSViewModel(
                         } else 0.0
                     )
                 }
-                saleRepository.createSale(companyId, sale, lines)
+                val created = saleRepository.createSale(companyId, sale, lines)
+                if (isCredit && credit != null) {
+                    // El cargo va DESPUÉS de la venta: sin venta no hay nada que deber. Si
+                    // fallara acá, la venta queda y el error lo dice, para cargarlo a mano.
+                    runCatching {
+                        creditRepository.addMovement(companyId, com.bakery.erp.model.CreditMovement(
+                            accountId = credit.account.id,
+                            accountName = credit.account.name,
+                            type = com.bakery.erp.model.CreditMovementType.SALE,
+                            amount = created.total,
+                            description = bakeryCart.joinToString { l -> "${l.quantity.fmtMoney(0)} ${l.productName}" }
+                                .take(300),
+                            personId = credit.personId,
+                            personName = credit.personName.ifBlank { credit.account.name },
+                            saleId = created.id,
+                            sessionId = session.id,
+                            registerName = session.registerName,
+                            branchId = branch.id,
+                            branchName = branch.name,
+                            createdByUserId = currentUser.id,
+                            createdByUserName = currentUser.displayName
+                        ))
+                    }.onFailure { e ->
+                        throw IllegalStateException(
+                            "La venta se registró pero no se pudo cargar a ${credit.account.name}: ${e.message}. " +
+                                "Cargala desde Créditos → Ajuste."
+                        )
+                    }
+                }
+                created
             }.onSuccess { sale ->
-                val receipt = buildReceiptData(sale, snapshotCart, branch)
+                // El ticket y el acuse muestran el COBRO completo, no solo la venta de pan.
+                val checkoutSale = sale.copy(subtotal = total + discountAmount, discount = discountAmount,
+                    total = total, tenderedAmount = effectiveTendered, changeAmount = change)
+                val receipt = buildReceiptData(checkoutSale, snapshotCart, branch)
+                val record = CheckoutRecord(
+                    checkoutId = payment.checkoutId,
+                    at = Clock.System.now().toEpochMilliseconds(),
+                    method = paymentMethod,
+                    total = total,
+                    tendered = effectiveTendered,
+                    change = change,
+                    bills = cashBills.entries.sortedByDescending { it.key }
+                        .map { it.key.toDouble() to it.value },
+                    items = snapshotCart.map { l ->
+                        if (l.isRestaurant) l.productName
+                        else "${l.quantity.fmtMoney(0)} × ${l.productName}"
+                    } + listOfNotNull(
+                        if (discountAmount > 0) "Descuento ${discountAccount?.name.orEmpty()}: −Q ${discountAmount.fmtMoney(2)}" else null
+                    ),
+                    cashierName = currentUser.displayName
+                )
                 _uiState.update {
                     it.copy(
                         isLoading = false,
+                        isCheckingOut = false,
                         cart = emptyList(),
-                        lastSaleSummary = LastSaleSummary(sale.total, sale.changeAmount, sale.paymentMethod),
-                        lastReceiptData = receipt
+                        lastSaleSummary = LastSaleSummary(total, change, paymentMethod),
+                        lastReceiptData = receipt,
+                        recentCheckouts = (listOf(record) + it.recentCheckouts).take(MAX_RECENT_CHECKOUTS)
                     )
                 }
             }.onFailure { err ->
-                _uiState.update { it.copy(isLoading = false, error = err.message) }
+                _uiState.update { it.copy(isLoading = false, isCheckingOut = false, error = err.message) }
             }
         }
     }
+
+    /**
+     * Carga los cobros de la sesión para "Último cobro". Los de este aparato ya están en
+     * memoria con su detalle; esto cubre el caso de que la app se haya reiniciado a media
+     * jornada, leyendo las ventas de la sesión (sin sus líneas).
+     */
+    fun loadRecentCheckouts(companyId: String) {
+        val session = _uiState.value.session ?: return
+        if (_uiState.value.recentCheckouts.isNotEmpty()) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingCheckouts = true) }
+            runCatching { saleRepository.getSalesForSession(companyId, session.id) }
+                .onSuccess { sales ->
+                    _uiState.update {
+                        it.copy(
+                            isLoadingCheckouts = false,
+                            recentCheckouts = checkoutsFromSales(sales).take(MAX_RECENT_CHECKOUTS)
+                        )
+                    }
+                }
+                .onFailure { e -> _uiState.update { it.copy(isLoadingCheckouts = false, error = e.message) } }
+        }
+    }
+
+    /**
+     * Cobra en ESTA caja un abono a una cuenta de crédito. El efectivo entra a la gaveta como
+     * ingreso (cuenta para el cuadre); tarjeta y transferencia solo bajan la deuda.
+     *
+     * El abono se escribe antes que el movimiento de caja: si la caja fallara, la deuda ya
+     * bajó y el error lo dice — al revés, la gaveta tendría dinero que no le baja a nadie.
+     */
+    fun collectCreditPayment(
+        companyId: String,
+        currentUser: User,
+        account: com.bakery.erp.model.CreditAccount,
+        amount: Double,
+        method: String,
+        tendered: Double,
+        bills: Map<Int, Int>
+    ) {
+        val session = _uiState.value.session ?: return
+        val branch = _uiState.value.branch ?: return
+        if (amount <= 0.0) return
+        val isCash = method == SalePaymentMethod.CASH
+        val effectiveTendered = if (isCash) tendered.coerceAtLeast(amount) else amount
+        val change = if (isCash) effectiveTendered - amount else 0.0
+        viewModelScope.launch {
+            _uiState.update { it.copy(isCreditBusy = true, error = null) }
+            runCatching {
+                val movement = creditRepository.addMovement(companyId, com.bakery.erp.model.CreditMovement(
+                    accountId = account.id,
+                    accountName = account.name,
+                    type = com.bakery.erp.model.CreditMovementType.PAYMENT,
+                    amount = -amount,
+                    method = method,
+                    description = "Pago en caja",
+                    sessionId = session.id,
+                    registerName = session.registerName,
+                    branchId = branch.id,
+                    branchName = branch.name,
+                    createdByUserId = currentUser.id,
+                    createdByUserName = currentUser.displayName
+                ))
+                if (isCash) {
+                    cashSessionRepository.addMovement(companyId, com.bakery.erp.model.CashMovement(
+                        sessionId = session.id,
+                        type = com.bakery.erp.model.CashMovementType.DEPOSIT,
+                        amount = amount,
+                        reason = "Abono a crédito: ${account.name}",
+                        createdByUserId = currentUser.id,
+                        createdByUserName = currentUser.displayName,
+                        sourceCreditMovementId = movement.id
+                    ))
+                }
+            }.onSuccess {
+                val record = CheckoutRecord(
+                    checkoutId = newCheckoutId(),
+                    at = Clock.System.now().toEpochMilliseconds(),
+                    method = method,
+                    total = amount,
+                    tendered = effectiveTendered,
+                    change = change,
+                    bills = bills.filterValues { it > 0 }.entries.sortedByDescending { it.key }
+                        .map { it.key.toDouble() to it.value },
+                    items = listOf("Abono a crédito · ${account.name}"),
+                    cashierName = currentUser.displayName
+                )
+                _uiState.update {
+                    it.copy(
+                        isCreditBusy = false,
+                        notice = "Abono de Q ${amount.fmtMoney(2)} a ${account.name}" +
+                            if (change > 0.004) " · Vuelto Q ${change.fmtMoney(2)}" else "",
+                        recentCheckouts = (listOf(record) + it.recentCheckouts).take(MAX_RECENT_CHECKOUTS)
+                    )
+                }
+            }.onFailure { e -> _uiState.update { it.copy(isCreditBusy = false, error = e.message) } }
+        }
+    }
+
+    /**
+     * Adelanto de salario que sale de ESTA gaveta y se carga a la cuenta del colaborador.
+     * Se valida contra el efectivo de la sesión recién leída: no se entrega dinero que no está.
+     */
+    fun giveEmployeeAdvance(
+        companyId: String,
+        currentUser: User,
+        account: com.bakery.erp.model.CreditAccount,
+        amount: Double,
+        note: String
+    ) {
+        val session = _uiState.value.session ?: return
+        val branch = _uiState.value.branch ?: return
+        if (amount <= 0.0 || !account.isEmployee) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isCreditBusy = true, error = null) }
+            runCatching {
+                val fresh = cashSessionRepository.getSession(companyId, session.id)
+                    ?: throw IllegalStateException("La sesión de caja ya no existe.")
+                if (fresh.status != com.bakery.erp.model.CashSessionStatus.OPEN) {
+                    throw IllegalStateException("La caja fue cerrada.")
+                }
+                if (amount > fresh.expectedCashNow + 0.004) {
+                    throw IllegalStateException(
+                        "En la caja hay Q ${fresh.expectedCashNow.fmtMoney(2)}: no alcanza para un adelanto de Q ${amount.fmtMoney(2)}."
+                    )
+                }
+                val movement = creditRepository.addMovement(companyId, com.bakery.erp.model.CreditMovement(
+                    accountId = account.id,
+                    accountName = account.name,
+                    type = com.bakery.erp.model.CreditMovementType.ADVANCE,
+                    amount = amount,
+                    description = note.ifBlank { "Adelanto de caja" },
+                    personName = account.name,
+                    sessionId = session.id,
+                    registerName = session.registerName,
+                    branchId = branch.id,
+                    branchName = branch.name,
+                    method = SalePaymentMethod.CASH,
+                    createdByUserId = currentUser.id,
+                    createdByUserName = currentUser.displayName
+                ))
+                cashSessionRepository.addMovement(companyId, com.bakery.erp.model.CashMovement(
+                    sessionId = session.id,
+                    type = com.bakery.erp.model.CashMovementType.WITHDRAWAL,
+                    amount = amount,
+                    reason = "Adelanto: ${account.name}" + if (note.isNotBlank()) " · $note" else "",
+                    createdByUserId = currentUser.id,
+                    createdByUserName = currentUser.displayName,
+                    sourceCreditMovementId = movement.id
+                ))
+            }.onSuccess {
+                _uiState.update {
+                    it.copy(isCreditBusy = false,
+                        notice = "Adelanto de Q ${amount.fmtMoney(2)} a ${account.name}. Se descuenta en su planilla.")
+                }
+            }.onFailure { e -> _uiState.update { it.copy(isCreditBusy = false, error = e.message) } }
+        }
+    }
+
+    fun clearNotice() { _uiState.update { it.copy(notice = null) } }
+
+    /**
+     * Cuánto se le descontaría al carrito si lo compra un colaborador con derecho y paga en
+     * efectivo: el % de CADA producto sobre su línea. El pan de grupo y las cuentas del
+     * restaurante no tienen producto, así que no descuentan.
+     */
+    fun employeeDiscountAmount(): Double {
+        val st = _uiState.value
+        val lines = st.cart.filter { it.isBakery && !it.isGroup && it.productId.isNotEmpty() }
+            .map { it.productId to it.subtotal }
+        val percents = st.productsById.mapValues { it.value.employeeDiscountPercent }
+        return com.bakery.erp.model.employeeCashDiscount(lines, percents)
+    }
+
+    private fun newCheckoutId(): String =
+        "co_" + Clock.System.now().toEpochMilliseconds().toString(36) +
+            kotlin.random.Random.nextInt(0, 36 * 36 * 36).toString(36)
 
     /** Dispara la impresión del último ticket. Reporta errores vía `error` en el state. */
     fun printLastReceipt() {
@@ -476,7 +937,11 @@ class POSViewModel(
             subtotal = sale.subtotal,
             discount = sale.discount,
             total = sale.total,
-            paymentMethodLabel = SalePaymentMethod.label(sale.paymentMethod),
+            paymentMethodLabel = if (sale.paymentMethod == SalePaymentMethod.CREDIT)
+                "Crédito · ${sale.creditAccountName}" +
+                    (if (sale.creditPersonName.isNotBlank() && sale.creditPersonName != sale.creditAccountName)
+                        " (llevó ${sale.creditPersonName})" else "")
+            else SalePaymentMethod.label(sale.paymentMethod),
             tenderedAmount = sale.tenderedAmount,
             changeAmount = sale.changeAmount
         )
@@ -524,5 +989,13 @@ class POSViewModel(
      * diferir del sistema, así que se permite vender aunque el stock quede negativo.
      */
     fun oversoldLines(): List<CartLine> =
-        _uiState.value.cart.filter { it.quantity > stockOf(it.productId) }
+        // El grupo de precio no tiene un producto contra el cual comparar: su inventario lo
+        // reparte el conteo de cierre.
+        _uiState.value.cart.filter { !it.isGroup && !it.isRestaurant && it.quantity > stockOf(it.productId) }
 }
+
+/** Ventana de ventas que ordena la pestaña "Todos" del POS. */
+private const val POPULARITY_DAYS = 30
+
+/** Cuántos cobros guarda "Último cobro" para ir hacia atrás. */
+private const val MAX_RECENT_CHECKOUTS = 10

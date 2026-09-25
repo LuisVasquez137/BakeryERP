@@ -43,6 +43,11 @@ fun POSHomeScreen(
     LaunchedEffect(state.error) {
         state.error?.let { snackbar.showSnackbar(it); viewModel.clearError() }
     }
+    // Aviso de las cajas que el sistema cerró solo. Va como snackbar y no en silencio: quien
+    // llega a abrir caja tiene que enterarse de que la de ayer se cerró sin contarse.
+    LaunchedEffect(state.message) {
+        state.message?.let { snackbar.showSnackbar(it); viewModel.clearMessage() }
+    }
 
     Scaffold(
         topBar = {

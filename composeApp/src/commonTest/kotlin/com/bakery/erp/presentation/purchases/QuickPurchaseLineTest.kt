@@ -15,14 +15,14 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * La vuelta del mercado: una salida, muchas cosas, varias sucursales.
+ * La compra rápida: un desembolso, muchas cosas, varias sucursales.
  *
  * Lo que se prueba es la traducción de "papas, Q25, para el restaurante" a una línea con su
  * efecto correcto. Los dos modos de fallo reales son que el monto tecleado no sobreviva la
  * conversión —quien anota escribe el TOTAL, no el precio unitario— y que una fila sin insumo
  * termine intentando mover inventario que nadie declaró.
  */
-class MarketRunLineTest {
+class QuickPurchaseLineTest {
 
     private val restaurante = Branch(id = "b2", name = "Restaurante")
 
@@ -38,22 +38,22 @@ class MarketRunLineTest {
         ingredient: Ingredient? = null,
         quantity: Double = 1.0,
         amount: Double = 25.0,
-        branch: Branch? = null
-    ) = MarketRunDraftLine(
+        branch: Branch? = null,
+        category: ExpenseCategory = ExpenseCategory.OTROS
+    ) = QuickPurchaseDraftLine(
         id = "l1",
         description = description,
         ingredient = ingredient,
         branch = branch,
         placeName = "mercado",
         quantity = quantity,
-        amount = amount
+        amount = amount,
+        expenseCategory = category
     )
 
     @Test
     fun `una fila sin insumo es gasto y no toca inventario`() {
-        val line = fila(description = "Mesita para el teléfono").toPurchaseLine(
-            ExpenseCategory.OTROS.name
-        )
+        val line = fila(description = "Mesita para el teléfono").toPurchaseLine()
         assertEquals(PurchaseLineKind.SERVICE, line.lineKind)
         assertEquals("Mesita para el teléfono", line.conceptName)
         assertTrue(line.ingredientId.isEmpty())
@@ -61,7 +61,7 @@ class MarketRunLineTest {
 
     @Test
     fun `una fila pegada a materia prima entra al inventario`() {
-        val line = fila(ingredient = ingrediente()).toPurchaseLine(ExpenseCategory.OTROS.name)
+        val line = fila(ingredient = ingrediente()).toPurchaseLine()
         assertEquals(PurchaseLineKind.INGREDIENT, line.lineKind)
         assertEquals("i1", line.ingredientId)
     }
@@ -69,15 +69,15 @@ class MarketRunLineTest {
     @Test
     fun `una fila pegada a un suministro entra al inventario y ademas se gasta`() {
         val line = fila(ingredient = ingrediente(IngredientUsage.SUPPLY))
-            .toPurchaseLine(ExpenseCategory.OTROS.name)
+            .toPurchaseLine()
         // SUPPLY es el único tipo que hace las dos cosas — ver PurchaseLineKind.
         assertEquals(PurchaseLineKind.SUPPLY, line.lineKind)
     }
 
     @Test
     fun `el monto tecleado es el total de la fila, no el precio unitario`() {
-        // Quien vuelve del mercado dice "las papas me costaron Q25", no "Q5 la libra".
-        val line = fila(quantity = 5.0, amount = 25.0).toPurchaseLine(ExpenseCategory.OTROS.name)
+        // Quien anota dice "las papas me costaron Q25", no "Q5 la libra".
+        val line = fila(quantity = 5.0, amount = 25.0).toPurchaseLine()
         assertEquals(25.0, line.lineTotal)
         assertEquals(5.0, line.unitCost)
     }
@@ -85,7 +85,7 @@ class MarketRunLineTest {
     @Test
     fun `una fila sin cantidad sigue valiendo lo que costo`() {
         // El campo de cantidad es opcional en el diálogo: nadie pesa lo que trae del mercado.
-        val line = fila(quantity = 0.0, amount = 40.0).toPurchaseLine(ExpenseCategory.OTROS.name)
+        val line = fila(quantity = 0.0, amount = 40.0).toPurchaseLine()
         assertEquals(40.0, line.lineTotal)
         assertEquals(1.0, line.quantityReceived)
     }
@@ -93,27 +93,27 @@ class MarketRunLineTest {
     @Test
     fun `la sucursal de la linea manda sobre la del encabezado`() {
         val purchase = Purchase(
-            id = "p1", kind = PurchaseKind.MARKET_RUN,
+            id = "p1", kind = PurchaseKind.QUICK,
             branchId = "b1", branchName = "Panadería"
         )
-        val propia = fila(branch = restaurante).toPurchaseLine(ExpenseCategory.OTROS.name)
-        val heredada = fila(branch = null).toPurchaseLine(ExpenseCategory.OTROS.name)
+        val propia = fila(branch = restaurante).toPurchaseLine()
+        val heredada = fila(branch = null).toPurchaseLine()
 
         assertEquals("b2", propia.effectiveBranchId(purchase))
         assertEquals("b1", heredada.effectiveBranchId(purchase))
     }
 
     @Test
-    fun `una vuelta a dos sucursales reporta las dos`() {
+    fun `una compra a dos sucursales reporta las dos`() {
         // Es lo que decide a cuántas sucursales hay que reconciliarles los lotes: con una
         // sola, la fruta de la otra quedaría sin registrar en el libro de caducidades.
         val purchase = Purchase(
-            id = "p1", kind = PurchaseKind.MARKET_RUN,
+            id = "p1", kind = PurchaseKind.QUICK,
             branchId = "b1", branchName = "Panadería"
         )
         val lines = listOf(
-            fila(branch = restaurante).toPurchaseLine(ExpenseCategory.OTROS.name),
-            fila(branch = null).toPurchaseLine(ExpenseCategory.OTROS.name)
+            fila(branch = restaurante).toPurchaseLine(),
+            fila(branch = null).toPurchaseLine()
         )
         assertEquals(
             setOf("b1", "b2"),
@@ -126,13 +126,71 @@ class MarketRunLineTest {
         // Los trapos del restaurante no son gasto de la panadería: el reporte financiero
         // desglosa por sucursal y mezclarlos haría inútil ese desglose.
         val purchase = Purchase(
-            id = "p1", kind = PurchaseKind.MARKET_RUN,
+            id = "p1", kind = PurchaseKind.QUICK,
             branchId = "b1", branchName = "Panadería"
         )
         val line = fila(description = "Trapos", branch = restaurante)
-            .toPurchaseLine(ExpenseCategory.OTROS.name)
+            .toPurchaseLine()
         val expense = expensesForPurchase("c1", purchase, listOf(line)).single()
         assertEquals("b2", expense.branchId)
         assertEquals("Restaurante", expense.branchName)
+    }
+
+    // ── Categoría por fila ───────────────────────────────────────────────────
+
+    @Test
+    fun `cada fila lleva su propia categoria de gasto`() {
+        // Una misma salida trae gasolina y trapos. Con una sola categoría para todo el
+        // desembolso el reporte contesta "cuánto" pero nunca "en qué".
+        val gasolina = fila(description = "Gasolina", category = ExpenseCategory.TRANSPORTE)
+            .toPurchaseLine()
+        val trapos = fila(description = "Trapos", category = ExpenseCategory.OTROS)
+            .toPurchaseLine()
+
+        assertEquals(ExpenseCategory.TRANSPORTE.name, gasolina.expenseCategory)
+        assertEquals(ExpenseCategory.OTROS.name, trapos.expenseCategory)
+    }
+
+    @Test
+    fun `la fila reabierta para corregir conserva monto categoria y catalogo`() {
+        val original = fila(
+            description = "Papas",
+            ingredient = ingrediente(),
+            quantity = 20.0,
+            amount = 25.0,
+            branch = restaurante,
+            category = ExpenseCategory.TRANSPORTE
+        )
+        val guardada = original.toPurchaseLine()
+
+        val reabierta = guardada.toQuickDraft(
+            ingredients = listOf(ingrediente()),
+            products = emptyList(),
+            branches = listOf(restaurante)
+        )
+
+        // El monto es el modo de fallo real: se guarda dividido en costo unitario, así que
+        // una ida y vuelta que no lo reconstruya deja la compra cuadrando con otro total.
+        assertEquals(25.0, reabierta.amount, 0.001)
+        assertEquals(20.0, reabierta.quantity, 0.001)
+        assertEquals(ExpenseCategory.TRANSPORTE, reabierta.expenseCategory)
+        assertEquals("i1", reabierta.ingredient?.id)
+        assertEquals("b2", reabierta.branch?.id)
+    }
+
+    @Test
+    fun `un insumo dado de baja no borra la fila al reabrirla`() {
+        // Perder el renglón dejaría el total sin cuadrar con lo que se pagó.
+        val guardada = fila(description = "Papas", ingredient = ingrediente()).toPurchaseLine()
+
+        val reabierta = guardada.toQuickDraft(
+            ingredients = emptyList(),
+            products = emptyList(),
+            branches = emptyList()
+        )
+
+        assertEquals(null, reabierta.ingredient)
+        assertEquals("Papas", reabierta.description)
+        assertEquals(25.0, reabierta.amount, 0.001)
     }
 }

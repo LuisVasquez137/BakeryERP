@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.bakery.erp.domain.BranchRepository
 import com.bakery.erp.domain.CashSessionRepository
 import com.bakery.erp.domain.SpotCashCheckRepository
+import com.bakery.erp.model.expectedCashNow
 import com.bakery.erp.model.Branch
 import com.bakery.erp.model.BranchCapability
 import com.bakery.erp.model.CashSession
@@ -103,8 +104,7 @@ class SpotCashCheckViewModel(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null, savedCheckId = null) }
             val now = Clock.System.now().toEpochMilliseconds()
-            val expected = session.openingBalance + session.totalCashSales +
-                session.totalMovementsIn - session.totalMovementsOut
+            val expected = session.expectedCashNow
             val diff = countedCash - expected
             runCatching {
                 val draftCheck = SpotCashCheck(

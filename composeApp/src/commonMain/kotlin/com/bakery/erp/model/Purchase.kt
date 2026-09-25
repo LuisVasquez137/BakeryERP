@@ -17,16 +17,50 @@ object PurchaseKind {
     const val INVOICE = "INVOICE"
 
     /**
-     * La vuelta del mercado: una salida, muchas cosas chiquitas, muchos lugares distintos y
-     * varias sucursales. No hay factura, ni crédito, ni vencimiento — es efectivo y papel de
-     * cuaderno. Por eso la sucursal y el lugar bajan del encabezado a la línea.
+     * Compra rápida: se paga en el momento, no hay factura ni crédito ni vencimiento, y lo
+     * que se compró son varias cosas chiquitas que pueden ir a sucursales distintas. Por eso
+     * la sucursal y el lugar bajan del encabezado a la línea.
+     *
+     * Se llama por lo que se hace —anotar rápido— y no por quién se movió: cubre igual la
+     * salida al mercado que al repartidor de gaseosas que llegó a tocar la puerta. El nombre
+     * anterior ("vuelta de compras") solo describía el primer caso y dejaba el segundo sin
+     * lugar obvio donde anotarse, que es como los gastos del día terminaban capturándose a
+     * mano en el módulo de Gastos, sin inventario y sin comprobante.
      */
-    const val MARKET_RUN = "MARKET_RUN"
+    const val QUICK = "QUICK"
 
-    fun label(kind: String) = when (kind) {
-        MARKET_RUN -> "Vuelta de compras"
-        else -> "Factura"
-    }
+    /**
+     * Valor con el que se guardaron las compras rápidas antes del cambio de nombre. Se lee,
+     * no se escribe: renombrar el dato guardado obligaría a migrar documentos para arreglar
+     * una etiqueta que el usuario nunca ve.
+     */
+    const val LEGACY_MARKET_RUN = "MARKET_RUN"
+
+    /** `true` si el valor guardado —nuevo o viejo— corresponde a una compra rápida. */
+    fun isQuick(kind: String): Boolean = kind == QUICK || kind == LEGACY_MARKET_RUN
+
+    fun label(kind: String) = if (isQuick(kind)) "Compra rápida" else "Factura"
+}
+
+/** Ver [PurchaseKind.isQuick]. Tolera el valor con el que se guardaron las compras viejas. */
+val Purchase.isQuick: Boolean
+    get() = PurchaseKind.isQuick(kind)
+
+/**
+ * Con qué nombre se reconoce la compra en la lista.
+ *
+ * Una factura se busca por proveedor. Una compra rápida no tiene, así que salía como
+ * "Sin proveedor" y todas se veían iguales — imposible encontrar la de las sandías entre
+ * treinta filas idénticas. Se identifican por lo que traen, que es como uno se acuerda de
+ * ellas, y sale de [itemNames], ya denormalizado para la búsqueda: no hay que leer la
+ * subcolección de cada una ni migrar nada.
+ */
+fun Purchase.listTitle(maxItems: Int = 3): String {
+    if (!isQuick) return supplierName.ifEmpty { "Sin proveedor" }
+    if (itemNames.isEmpty()) return supplierName.ifEmpty { "Compra rápida" }
+    val shown = itemNames.take(maxItems).joinToString(", ")
+    val rest = itemNames.size - maxItems
+    return if (rest > 0) "$shown +$rest" else shown
 }
 
 data class Purchase(
@@ -34,7 +68,7 @@ data class Purchase(
     /** Ver [PurchaseKind]. Las compras anteriores no lo traen y son todas facturas. */
     val kind: String = PurchaseKind.INVOICE,
     /**
-     * En una factura es LA sucursal que recibe. En una vuelta es solo el default de las
+     * En una factura es LA sucursal que recibe. En una compra rápida es solo el default de las
      * líneas: cada una puede ir a otra. Ver `PurchaseLine.effectiveBranchId`.
      */
     val branchId: String = "",
@@ -42,7 +76,7 @@ data class Purchase(
     /**
      * Proveedor del catálogo. **Puede ir vacío** con [supplierName] lleno: es el proveedor
      * ocasional —la tienda de la esquina, el puesto del mercado— al que no vale la pena dar
-     * de alta para una compra que no se repite. En una vuelta va vacío siempre: ahí el lugar
+     * de alta para una compra que no se repite. En una compra rápida va vacío siempre: ahí el lugar
      * es de cada línea, no de la compra.
      */
     val supplierId: String = "",
@@ -59,6 +93,20 @@ data class Purchase(
     // Sin esto la lista no puede mostrar montos ni KPIs sin leer N subcolecciones.
     val totalAmount: Double = 0.0,
     val paidAmount: Double = 0.0,
+    /**
+     * Parte de [totalAmount] que entró a inventario (materia prima y reventa), y parte que
+     * ya se gastó (suministros y servicios).
+     *
+     * Denormalizados desde las líneas por la misma razón que [totalAmount]: el reporte
+     * financiero recorre un mes entero y abrir la subcolección de cada compra sería una
+     * lectura por fila. Ambos en 0 = compra anterior al campo; ver `Purchase.amountSplit()`,
+     * que deduce el reparto del encabezado en ese caso.
+     *
+     * El corte importa porque **el pedazo gastado ya está contado** en `ExpenseSummary`:
+     * sumar la compra entera a los egresos contaría dos veces el cloro y el mantenimiento.
+     */
+    val inventoryAmount: Double = 0.0,
+    val expensedAmount: Double = 0.0,
     /**
      * IVA contenido en [totalAmount]. Los precios se capturan CON IVA incluido —es el número
      * que trae la factura del proveedor— así que el impuesto se despeja hacia atrás y nunca
@@ -101,7 +149,24 @@ data class Purchase(
      * abrir la subcolección de cada una. Vacío en compras anteriores a los tres flujos —
      * ahí se asume materia prima, que es lo único que existía.
      */
-    val lineKinds: List<String> = emptyList()
+    val lineKinds: List<String> = emptyList(),
+    // ── De qué bolsa salió la plata ─────────────────────────────────────
+    /**
+     * Ver `ExpensePaidFrom`. Vacío = compra anterior al campo, o capturada sin declararlo.
+     *
+     * Vive en la compra y no solo en los gastos que genera porque **una compra rápida puede
+     * no generar ninguno**: si todo lo que trae es materia prima o reventa, es inventario y
+     * no hay `Expense` donde colgar la atribución. El efectivo igual salió de la gaveta y
+     * al cuadrar tiene que faltar.
+     */
+    val paidFrom: String = "",
+    /**
+     * Sesión de caja de la que salió el efectivo, cuando [paidFrom] es `CASH_DRAWER`. Es el
+     * vínculo con el `CashMovement` de tipo EXPENSE que baja el efectivo esperado al cierre.
+     */
+    val cashSessionId: String = "",
+    /** Nombre de la caja, para decir "salió de Caja 2" sin leer la sesión. */
+    val cashRegisterName: String = ""
 )
 
 object PurchaseStatus {
@@ -186,6 +251,18 @@ data class PurchaseLine(
      */
     val conceptName: String = "",
     /**
+     * Concepto del catálogo al que apunta la línea (ver [PurchaseConcept]). Vacío = texto
+     * libre, que sigue siendo lo correcto para lo que no se vuelve a comprar.
+     *
+     * Es lo único que permite sumar el historial: sin id estable, el mismo renglón escrito
+     * dos veces distinto son dos cosas distintas y "¿cuántas bolsas le compré?" no se puede
+     * contestar. No reemplaza a [conceptName] — ése se guarda igual como snapshot, así una
+     * factura vieja sigue diciendo lo que decía aunque el concepto se renombre después.
+     */
+    val conceptId: String = "",
+    /** Unidad en que se contó ("bolsa", "caja", "viaje"). Display y agregación, no stock. */
+    val conceptUnit: String = "",
+    /**
      * Categoría del gasto que genera la línea. Se guarda el nombre del enum
      * `ExpenseCategory`; vacío cae a OTROS. Aplica a SERVICE y a SUPPLY.
      */
@@ -203,13 +280,13 @@ data class PurchaseLine(
      * MAINTENANCE, REPAIR…). Solo con [assetId]. Vacío = MAINTENANCE.
      */
     val assetEventType: String = "",
-    // ── Vuelta de compras (Purchase.kind == MARKET_RUN) ──────────────────────
+    // ── Compra rápida (Purchase.kind == QUICK) ──────────────────────────────
     /**
      * Sucursal a la que va ESTA línea. Vacío = la del encabezado.
      *
-     * Existe porque una vuelta al mercado surte a varias sucursales de una sola salida: las
+     * Existe porque una compra rápida surte a varias sucursales de un solo desembolso: las
      * papas al restaurante, la fruta a la panadería, los trapos a la otra. Con la sucursal
-     * solo en el encabezado habría que partir la vuelta en tres compras y el desembolso
+     * solo en el encabezado habría que partirla en tres compras y el desembolso
      * dejaría de ser uno.
      */
     val branchId: String = "",
@@ -255,6 +332,17 @@ object PurchaseLineKind {
     const val SUPPLY = "SUPPLY"
 
     /**
+     * Suministro que NO lleva conteo de existencias (bolsas, bandejas desechables) →
+     * **solo gasto**, sin `BranchStock` ni Kardex.
+     *
+     * Tiene catálogo, presentación y proveedor como cualquier suministro —por eso aparece
+     * como fila en la factura y se captura tecleando la cantidad, no abriendo un diálogo por
+     * renglón— y lo único que no hace es inventario. Lo decide `Ingredient.tracksStock`,
+     * que es por ítem: el cloro se cuenta, la bolsa no.
+     */
+    const val SUPPLY_NO_STOCK = "SUPPLY_NO_STOCK"
+
+    /**
      * Servicio o gasto sin inventario (mantenimiento del horno, combustible, flete) →
      * solo gasto, y opcionalmente una entrada en el historial del activo.
      *
@@ -265,12 +353,13 @@ object PurchaseLineKind {
     const val SERVICE = "SERVICE"
 
     /** Los cuatro, en el orden en que se muestran al capturar. */
-    val ALL = listOf(INGREDIENT, RESALE_PRODUCT, SUPPLY, SERVICE)
+    val ALL = listOf(INGREDIENT, RESALE_PRODUCT, SUPPLY, SUPPLY_NO_STOCK, SERVICE)
 
     fun label(kind: String) = when (kind) {
         INGREDIENT -> "Materia prima"
         RESALE_PRODUCT -> "Reventa"
         SUPPLY -> "Suministros"
+        SUPPLY_NO_STOCK -> "Suministros sin stock"
         SERVICE -> "Servicios y gastos"
         else -> "Otro"
     }
@@ -278,11 +367,13 @@ object PurchaseLineKind {
 
 /** `true` si el tipo de línea mueve algún inventario al guardarse. */
 fun purchaseLineTouchesStock(kind: String): Boolean =
-    kind != PurchaseLineKind.SERVICE
+    kind != PurchaseLineKind.SERVICE && kind != PurchaseLineKind.SUPPLY_NO_STOCK
 
 /** `true` si el tipo de línea genera un `Expense` en el período de la factura. */
 fun purchaseLineIsExpense(kind: String): Boolean =
-    kind == PurchaseLineKind.SUPPLY || kind == PurchaseLineKind.SERVICE
+    kind == PurchaseLineKind.SUPPLY ||
+        kind == PurchaseLineKind.SUPPLY_NO_STOCK ||
+        kind == PurchaseLineKind.SERVICE
 
 /**
  * Id del catálogo al que apunta la línea. Una línea de servicio no apunta a ningún

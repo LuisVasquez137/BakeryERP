@@ -16,6 +16,33 @@ data class ProductionLotLine(
      * `ProductionViewModel.saveProducedQuantities`.
      */
     val producedCountConfirmed: Boolean = false,
+    /**
+     * Unidades que se amasaron y se PERDIERON: se quemaron, se cayeron, salieron mal.
+     *
+     * No baja [producedQuantity] ni toca los pedidos — las sucursales reciben lo suyo
+     * si el panadero repuso lo perdido. Lo único que cambia es el consumo de insumos:
+     * esa masa se gastó igual. Ver [kneadedQuantity] y `ProductionAdjustment.kt`.
+     *
+     * **No entra en la lista de lo que hay que amasar**, a diferencia de
+     * [extraQuantity]: lo quemado ya se amasó una vez, y sumarlo mostraría una amasada
+     * que nunca se hace de un solo golpe.
+     */
+    val wasteQuantity: Double = 0.0,
+    val wasteReason: String = "",
+    val wasteNotes: String = "",
+    /**
+     * Unidades amasadas de MÁS, fuera de lo que pidieron las sucursales: el encargo de
+     * 100 pirujos que llegó a media mañana.
+     *
+     * Consumen insumos y entran al stock terminado de la planta al cerrar el lote, por
+     * el mismo camino que [plantRetainedQuantity] (ver [plantIngestQuantity]). No van
+     * en ninguna nota de despacho, porque ésas se construyen desde los pedidos fuente.
+     *
+     * **Sí entra en la lista de lo que hay que amasar**: todavía no se hizo.
+     */
+    val extraQuantity: Double = 0.0,
+    val extraReason: String = "",
+    val extraNotes: String = "",
     val recipeId: String = "",
     val recipeName: String = "",
     /**

@@ -11,6 +11,7 @@ import com.bakery.erp.model.POSCategory
 import com.bakery.erp.model.Product
 import com.bakery.erp.model.User
 import com.bakery.erp.model.canAccessBranch
+import com.bakery.erp.model.productCategoryConflicts
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -76,20 +77,58 @@ class POSCategoryAdminViewModel(
 
     fun clearSelected() { _uiState.update { it.copy(selectedCategory = null) } }
 
-    fun saveCategory(companyId: String, category: POSCategory) {
+    /**
+     * Guarda la categoría. [movedProductIds] son los productos que el usuario eligió
+     * expresamente pasar desde otra categoría: se quitan de aquélla. Cualquier OTRO choque
+     * (alguien los puso en otra categoría desde otro dispositivo mientras se editaba) corta
+     * el guardado — un producto en dos categorías dejaría sin saber a qué grupo repartirle
+     * la venta en el conteo de cierre.
+     */
+    fun saveCategory(companyId: String, category: POSCategory, movedProductIds: Set<String> = emptySet()) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
-            runCatching { categoryRepository.upsertCategory(companyId, category) }
-                .onSuccess { _uiState.update { it.copy(isLoading = false, isSaved = true) } }
+            runCatching {
+                val fresh = categoryRepository.getCategories(companyId)
+                val conflicts = productCategoryConflicts(category, fresh)
+                    .filterKeys { it in category.productIds }
+                val unexpected = conflicts.filterKeys { it !in movedProductIds }
+                if (unexpected.isNotEmpty()) {
+                    val names = _uiState.value.products.associate { it.id to it.name }
+                    val detail = unexpected.entries.take(3).joinToString {
+                        "${names[it.key] ?: "producto"} (en ${it.value.name})"
+                    }
+                    throw IllegalStateException("Ya están en otra categoría: $detail")
+                }
+                conflicts.values.distinctBy { it.id }.forEach { other ->
+                    categoryRepository.upsertCategory(
+                        companyId,
+                        other.copy(productIds = other.productIds.filterNot { it in conflicts.keys })
+                    )
+                }
+                categoryRepository.upsertCategory(companyId, category)
+                categoryRepository.getCategories(companyId)
+            }
+                .onSuccess { cats -> _uiState.update { it.copy(isLoading = false, isSaved = true, categories = cats) } }
                 .onFailure { err -> _uiState.update { it.copy(isLoading = false, error = err.message) } }
+        }
+    }
+
+    /** Relee las categorías: el formulario las necesita al día para esconder lo ya usado. */
+    fun refreshCategories(companyId: String) {
+        viewModelScope.launch {
+            runCatching { categoryRepository.getCategories(companyId) }
+                .onSuccess { cats -> _uiState.update { it.copy(categories = cats) } }
         }
     }
 
     fun deleteCategory(companyId: String, categoryId: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
-            runCatching { categoryRepository.deleteCategory(companyId, categoryId) }
-                .onSuccess { _uiState.update { it.copy(isLoading = false, isDeleted = true) } }
+            runCatching {
+                categoryRepository.deleteCategory(companyId, categoryId)
+                categoryRepository.getCategories(companyId)
+            }
+                .onSuccess { cats -> _uiState.update { it.copy(isLoading = false, isDeleted = true, categories = cats) } }
                 .onFailure { err -> _uiState.update { it.copy(isLoading = false, error = err.message) } }
         }
     }

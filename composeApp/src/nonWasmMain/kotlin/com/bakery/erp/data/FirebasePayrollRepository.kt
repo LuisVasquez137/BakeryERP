@@ -32,7 +32,7 @@ class FirebasePayrollRepository(
 
     override suspend fun savePayroll(
         companyId: String, employeeId: String, record: PayrollRecord
-    ) {
+    ): PayrollRecord {
         val docRef = if (record.id.isEmpty()) col(companyId, employeeId).document
                      else col(companyId, employeeId).document(record.id)
         val now = Clock.System.now().toEpochMilliseconds()
@@ -43,6 +43,7 @@ class FirebasePayrollRepository(
             createdAt = if (record.createdAt == 0L) now else record.createdAt
         )
         docRef.set(final.toMap())
+        return final
     }
 
     override suspend fun deletePayroll(

@@ -76,6 +76,7 @@ import com.bakery.erp.model.countUnitsPer
 import com.bakery.erp.model.largestUnit
 import com.bakery.erp.util.gramsToOz
 import com.bakery.erp.presentation.auth.AuthViewModel
+import com.bakery.erp.presentation.products.ResalePurchaseFormatDialog
 import com.bakery.erp.presentation.suppliers.SupplierViewModel
 import com.bakery.erp.ui.LoadingOverlay
 import kotlin.random.Random
@@ -115,6 +116,11 @@ fun IngredientFormScreen(
     var barcode by rememberSaveable { mutableStateOf(existing?.barcode ?: "") }
     var categoryExpanded by remember { mutableStateOf(false) }
     var allowedUnits by remember { mutableStateOf(existing?.allowedUnits ?: emptyList<String>()) }
+    // Solo suministros: en qué se cuenta. Texto libre, igual que "Se vende por" en un
+    // producto de reventa — no la rejilla de nueve chips de la materia prima.
+    var supplyUnit by rememberSaveable {
+        mutableStateOf(existing?.allowedUnits?.firstOrNull().orEmpty())
+    }
     // Peso de UNA unidad, en gramos. Solo se pide a insumos que se cuentan (huevo).
     var unitWeightGrams by rememberSaveable {
         mutableStateOf(
@@ -126,6 +132,9 @@ fun IngredientFormScreen(
     var notes by rememberSaveable { mutableStateOf(existing?.notes ?: "") }
     var active by rememberSaveable { mutableStateOf(existing?.active ?: true) }
     var isPerishable by rememberSaveable { mutableStateOf(existing?.isPerishable ?: false) }
+    // Solo aplica a suministros. La materia prima siempre lleva conteo: de ese stock sale el
+    // descuento de producción, y sin él la receta no tendría de dónde restar.
+    var tracksStock by rememberSaveable { mutableStateOf(existing?.tracksStock ?: true) }
     var purchaseFormats by remember { mutableStateOf(existing?.purchaseFormats ?: emptyList<PurchaseFormat>()) }
 
     var showFormatDialog by remember { mutableStateOf(false) }
@@ -140,35 +149,56 @@ fun IngredientFormScreen(
         state.error?.let { snackbarHostState.showSnackbar(it); viewModel.clearError() }
     }
 
+    // Lo que se cuenta cuando el suministro no declara unidad: ya no elige familia de
+    // medida, y "vacío" tiene que significar algo concreto en el stock y en el Kardex.
+    val effectiveSupplyUnit = supplyUnit.trim().ifBlank { "unidad" }
+
     // ── Diálogo de formato de compra ──────────────────────────────────────────
+    val onFormatConfirmed: (PurchaseFormat) -> Unit = { newFormat ->
+        purchaseFormats = if (newFormat.isDefault) {
+            // Solo uno puede ser predeterminado
+            purchaseFormats
+                .filter { it.id != newFormat.id }
+                .map { it.copy(isDefault = false) } + newFormat
+        } else {
+            purchaseFormats.filter { it.id != newFormat.id } + newFormat
+        }
+        // Si solo hay uno, siempre es default
+        if (purchaseFormats.size == 1) {
+            purchaseFormats = listOf(purchaseFormats.first().copy(isDefault = true))
+        }
+        showFormatDialog = false
+        editingFormat = null
+    }
+
     if (showFormatDialog) {
-        PurchaseFormatDialog(
-            format = editingFormat,
-            allowedUnits = allowedUnits,
-            suppliers = supplierState.supplierList,
-            onNavigateToSuppliers = {
-                showFormatDialog = false
-                editingFormat = null
-                onNavigateToSuppliers()
-            },
-            onConfirm = { newFormat ->
-                purchaseFormats = if (newFormat.isDefault) {
-                    // Solo uno puede ser predeterminado
-                    purchaseFormats
-                        .filter { it.id != newFormat.id }
-                        .map { it.copy(isDefault = false) } + newFormat
-                } else {
-                    purchaseFormats.filter { it.id != newFormat.id } + newFormat
-                }
-                // Si solo hay uno, siempre es default
-                if (purchaseFormats.size == 1) {
-                    purchaseFormats = listOf(purchaseFormats.first().copy(isDefault = true))
-                }
-                showFormatDialog = false
-                editingFormat = null
-            },
-            onDismiss = { showFormatDialog = false; editingFormat = null }
-        )
+        // Un suministro se captura igual que un producto de reventa: proveedor, cómo lo
+        // llama él en su factura, el empaque, cuántas trae y el precio. Se reusa EL MISMO
+        // diálogo y no una copia con las mismas etiquetas, porque las dos puntas tienen que
+        // pedir lo mismo con las mismas palabras — es lo que ya dice el KDoc de
+        // `ResaleFormatFields`, y dos formularios gemelos se despegan en cuanto uno cambie.
+        if (usage == IngredientUsage.SUPPLY) {
+            ResalePurchaseFormatDialog(
+                format = editingFormat,
+                saleUnit = effectiveSupplyUnit,
+                suppliers = supplierState.supplierList,
+                onDismiss = { showFormatDialog = false; editingFormat = null },
+                onConfirm = onFormatConfirmed
+            )
+        } else {
+            PurchaseFormatDialog(
+                format = editingFormat,
+                allowedUnits = allowedUnits,
+                suppliers = supplierState.supplierList,
+                onNavigateToSuppliers = {
+                    showFormatDialog = false
+                    editingFormat = null
+                    onNavigateToSuppliers()
+                },
+                onConfirm = onFormatConfirmed,
+                onDismiss = { showFormatDialog = false; editingFormat = null }
+            )
+        }
     }
 
     val categoryOptions = if (usage == IngredientUsage.SUPPLY) SUPPLY_CATEGORIES
@@ -180,13 +210,19 @@ fun IngredientFormScreen(
         category = category,
         usage = usage,
         barcode = barcode.trim(),
-        allowedUnits = allowedUnits,
+        // El suministro guarda UNA unidad: la que se cuenta. La materia prima conserva la
+        // lista, que es la que después se le ofrece al escribirlo en una receta.
+        allowedUnits = if (usage == IngredientUsage.SUPPLY) listOf(effectiveSupplyUnit)
+                       else allowedUnits,
         unitWeightGrams = if (allowedUnits.any { countUnitsPer(it) != null })
             unitWeightGrams.replace(',', '.').toDoubleOrNull()?.takeIf { it > 0.0 } ?: 0.0
         else 0.0,
         purchaseFormats = purchaseFormats,
         stockAlert = stockAlert.toDoubleOrNull(),
         isPerishable = isPerishable,
+        // Un suministro sin conteo no puede quedar con alerta de mínimo: no hay stock contra
+        // el cual dispararla, y guardada quedaría esperando un evento que nunca llega.
+        tracksStock = usage != IngredientUsage.SUPPLY || tracksStock,
         notes = notes.trim().ifEmpty { null },
         active = active
     )
@@ -197,7 +233,13 @@ fun IngredientFormScreen(
             TopAppBar(
                 title = {
                     Text(
-                        if (ingredientId == null) "Nuevo Ingrediente" else "Editar Ingrediente",
+                        // El formulario habla el idioma de lo que se está dando de alta: un
+                        // suministro no es un ingrediente y llamarlo así hace dudar de si se
+                        // eligió bien el tipo. La palabra cambia al tocar los chips de arriba.
+                        buildString {
+                            append(if (ingredientId == null) "Nuevo " else "Editar ")
+                            append(if (usage == IngredientUsage.SUPPLY) "suministro" else "insumo")
+                        }.replaceFirstChar { it.uppercase() },
                         fontWeight = FontWeight.SemiBold
                     )
                 },
@@ -302,8 +344,29 @@ fun IngredientFormScreen(
                     supportingText = "Opcional. Sirve para encontrarlo al capturar una factura."
                 )
 
-                // ── Unidades de medida (multi-selección) ─────────────────────
-                Column(modifier = Modifier.fillMaxWidth()) {
+                // ── En qué se cuenta ─────────────────────────────────────────
+                // Un suministro se cuenta en una sola unidad —la bolsa, el rollo, el
+                // galón— y todo lo demás lo dice su presentación de compra ("Caja de 24").
+                // Los nueve chips le hacían elegir una familia de medida que después nadie
+                // lee (un suministro nunca entra a una receta) y la presentación volvía a
+                // preguntar unidad, cantidad y descripción: el mismo dato, dos veces. Es el
+                // campo "Se vende por" de un producto de reventa, con las mismas palabras.
+                if (usage == IngredientUsage.SUPPLY) {
+                    OutlinedTextField(
+                        value = supplyUnit,
+                        onValueChange = { supplyUnit = it },
+                        label = { Text("Se cuenta por") },
+                        placeholder = { Text("unidad, bolsa, rollo, galón…") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        supportingText = {
+                            Text(
+                                "Es la unidad en que se cuenta el inventario y en que se arman " +
+                                    "las presentaciones. Vacío = se cuenta por unidad."
+                            )
+                        }
+                    )
+                } else Column(modifier = Modifier.fillMaxWidth()) {
                     Text(
                         text = "Unidades de medida *",
                         style = MaterialTheme.typography.labelLarge,
@@ -311,7 +374,13 @@ fun IngredientFormScreen(
                                 else MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "Seleccioná en qué unidades se puede medir este ingrediente. Las mismas aparecerán al crear recetas.",
+                        // Un suministro NUNCA entra a una receta (los pickers filtran con
+                        // `usableInRecipes`), así que prometerle que estas unidades van a
+                        // aparecer ahí es mentira — y hace dudar de si se eligió bien el tipo.
+                        text = if (usage == IngredientUsage.SUPPLY)
+                            "Seleccioná en qué unidades lo comprás y lo contás."
+                        else "Seleccioná en qué unidades se puede medir este insumo. " +
+                            "Las mismas aparecerán al crear recetas.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)
@@ -383,7 +452,10 @@ fun IngredientFormScreen(
                 // El stock del huevo se lleva en unidades, pero la receta lo pide
                 // en peso. Este es el único puente entre ambos: sin él la receta
                 // no puede calcular el % del panadero ni descontar bien el Kardex.
-                if (allowedUnits.any { countUnitsPer(it) != null }) {
+                // Solo materia prima: el peso de una unidad existe para que la receta pueda
+                // calcular el % del panadero, que es una razón entre PESOS. A una bolsa no se
+                // le pesa nada, y el campo solo invitaba a llenar un dato que nadie lee.
+                if (usage != IngredientUsage.SUPPLY && allowedUnits.any { countUnitsPer(it) != null }) {
                     OutlinedTextField(
                         value = unitWeightGrams,
                         onValueChange = { txt ->
@@ -445,7 +517,11 @@ fun IngredientFormScreen(
                         modifier = Modifier.size(18.dp).padding(top = 1.dp)
                     )
                     Text(
-                        text = "Registra cómo comprás este ingrediente: en qué presentación (saco, caja, unidad), con qué unidad y a qué precio. El sistema calcula automáticamente el costo por unidad.",
+                        text = if (usage == IngredientUsage.SUPPLY)
+                            "Cómo te lo vende cada proveedor: la caja, el fardo, el bulto. " +
+                                "Agregá una por cada uno que te lo trae. Al capturar la factura " +
+                                "anotás \"1 caja\" y entran las unidades que trae."
+                        else "Registra cómo comprás este ingrediente: en qué presentación (saco, caja, unidad), con qué unidad y a qué precio. El sistema calcula automáticamente el costo por unidad.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSecondaryContainer
                     )
@@ -498,7 +574,35 @@ fun IngredientFormScreen(
                 // ── Control de stock ───────────────────────────────────────────
                 SectionHeader("Control de Stock")
 
-                OutlinedTextField(
+                // El suministro que no se cuenta: la bolsa, la bandeja, el vaso desechable.
+                // Se compran por fardo y se gastan de a uno con cada venta, y ese consumo no
+                // lo va a registrar nadie — un stock que solo sube miente, y la alerta de
+                // mínimo nunca suena. Sigue siendo un ítem del catálogo del proveedor: se
+                // captura como fila en su factura, con su presentación y su precio.
+                if (usage == IngredientUsage.SUPPLY) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Llevar conteo de existencias", style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                if (tracksStock)
+                                    "Su compra entra al inventario de la sucursal y lleva Kardex."
+                                else "Solo gasto: se registra la compra pero no se cuentan existencias. " +
+                                    "Para lo que se consume sin que nadie lo apunte (bolsas, bandejas).",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(checked = tracksStock, onCheckedChange = { tracksStock = it })
+                    }
+                }
+
+                // Sin conteo no hay contra qué avisar, y un campo que no hace nada se llena
+                // igual y después se espera la alerta que nunca llega.
+                if (usage != IngredientUsage.SUPPLY || tracksStock) OutlinedTextField(
                     value = stockAlert,
                     onValueChange = { stockAlert = it },
                     label = { Text("Alerta de stock mínimo") },
@@ -551,7 +655,11 @@ fun IngredientFormScreen(
                     onClick = {
                         var hasError = false
                         if (name.isBlank()) { nameError = true; hasError = true }
-                        if (allowedUnits.isEmpty()) { allowedUnitsError = true; hasError = true }
+                        // El suministro no elige unidades: se cuenta por lo que diga
+                        // "Se cuenta por", y vacío cae a "unidad".
+                        if (usage != IngredientUsage.SUPPLY && allowedUnits.isEmpty()) {
+                            allowedUnitsError = true; hasError = true
+                        }
                         if (hasError) return@Button
                         viewModel.saveIngredient(companyId, buildIngredient())
                     },
@@ -567,7 +675,11 @@ fun IngredientFormScreen(
                     } else {
                         Icon(Icons.Default.Save, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
-                        Text("Guardar Ingrediente", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            if (usage == IngredientUsage.SUPPLY) "Guardar suministro"
+                            else "Guardar insumo",
+                            fontWeight = FontWeight.SemiBold
+                        )
                     }
                 }
 
@@ -631,6 +743,16 @@ private fun PurchaseFormatItem(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                    // Cómo le llama ESE proveedor en su factura. Es el dato con que se
+                    // encuentra el renglón leyendo el papel, así que tiene que verse.
+                    if (format.supplierItemName.isNotEmpty()) {
+                        Text(
+                            text = format.supplierItemName,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
                 }
 
                 // Acciones
@@ -702,6 +824,7 @@ private fun PurchaseFormatDialog(
     onDismiss: () -> Unit
 ) {
     var description by remember { mutableStateOf(format?.description ?: "") }
+    var supplierItemName by remember { mutableStateOf(format?.supplierItemName.orEmpty()) }
     var selectedSupplierId by remember { mutableStateOf(format?.supplierId ?: "") }
     var selectedSupplierName by remember { mutableStateOf(format?.supplierName ?: "") }
     var supplierExpanded by remember { mutableStateOf(false) }
@@ -730,10 +853,25 @@ private fun PurchaseFormatDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
+                // Cómo lo factura el proveedor, aparte del empaque. Se pide con la MISMA
+                // etiqueta y en el mismo orden que `ResaleFormatFields` —el diálogo que usan
+                // reventa y suministros— porque las dos puntas tienen que pedir lo mismo con
+                // las mismas palabras. Sin este campo, la fila de materia prima de la factura
+                // no tenía qué mostrar y había que traducir cada renglón de memoria.
+                OutlinedTextField(
+                    value = supplierItemName,
+                    onValueChange = { supplierItemName = it },
+                    label = { Text("Descripción de la presentación") },
+                    placeholder = { Text("Ej: Azúcar blanca Don Justo cabal") },
+                    supportingText = { Text("Como lo llama el proveedor en su factura") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
                 OutlinedTextField(
                     value = description,
                     onValueChange = { description = it },
-                    label = { Text("Descripción de la presentación") },
+                    label = { Text("Presentación") },
                     placeholder = { Text("Ej: Saco 50 lb, Caja 12 unid.") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
@@ -905,7 +1043,8 @@ private fun PurchaseFormatDialog(
                             supplierName = selectedSupplierName.trim(),
                             unitsPerPackage = unitsPerPackage.toDoubleOrNull() ?: 1.0,
                             packageCost = packageCost.toDoubleOrNull() ?: 0.0,
-                            isDefault = format?.isDefault ?: isFirstFormat
+                            isDefault = format?.isDefault ?: isFirstFormat,
+                            supplierItemName = supplierItemName.trim()
                         )
                     )
                 },

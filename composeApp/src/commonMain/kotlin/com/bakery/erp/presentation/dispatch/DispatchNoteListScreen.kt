@@ -90,7 +90,7 @@ private val DISPATCH_TABS = listOf(
  * restaurarlo cuando alguien le dio por equivocación.
  *
  * Solo se agrega cuando el día visible tiene alguna cancelada — mismo criterio que las
- * pestañas Facturas/Vueltas de Compras: una sexta pestaña permanente aprieta a las
+ * pestañas Facturas/Compras rápidas de Compras: una sexta pestaña permanente aprieta a las
  * otras cinco todos los días para un caso que casi nunca ocurre.
  */
 private val CANCELLED_TAB = TabSpec("Canceladas", setOf(DispatchStatus.CANCELLED))

@@ -65,6 +65,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.ExpenseCategory
+import com.bakery.erp.model.FIXED_EXPENSE_CATEGORIES
 import com.bakery.erp.model.FixedBudgetItem
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.presentation.branches.BranchViewModel
@@ -425,7 +426,9 @@ fun FixedBudgetFormScreen(
                         modifier = Modifier.fillMaxWidth().menuAnchor()
                     )
                     ExposedDropdownMenu(expanded = categoryExpanded, onDismissRequest = { categoryExpanded = false }) {
-                        ExpenseCategory.entries.forEach { cat ->
+                        // Solo los compromisos del mes. "Limpieza" o "Empaque" son cosas que
+                        // se compran cuando se acaban, no un monto que se presupuesta.
+                        (FIXED_EXPENSE_CATEGORIES + selectedCategory).distinct().forEach { cat ->
                             DropdownMenuItem(
                                 text = { Text(cat.label) },
                                 onClick = { selectedCategory = cat; categoryExpanded = false }

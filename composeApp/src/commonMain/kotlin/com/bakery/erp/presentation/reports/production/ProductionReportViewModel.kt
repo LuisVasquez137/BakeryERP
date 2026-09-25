@@ -4,10 +4,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bakery.erp.domain.BranchRepository
 import com.bakery.erp.domain.DispatchRepository
+import com.bakery.erp.domain.PlantIssueRepository
 import com.bakery.erp.domain.ProductionRepository
 import com.bakery.erp.domain.report.DispatchSummary
 import com.bakery.erp.domain.report.ProductionSummary
 import com.bakery.erp.model.Branch
+import com.bakery.erp.model.PlantIssue
+import com.bakery.erp.model.PlantIssueIngredientSummary
+import com.bakery.erp.model.summarizePlantIssues
 import com.bakery.erp.model.User
 import com.bakery.erp.model.canAccessBranch
 import com.bakery.erp.presentation.reports.shared.ReportPeriod
@@ -35,13 +39,22 @@ data class ProductionReportUiState(
     val branches: List<Branch> = emptyList(),
     val selectedBranchId: String? = null,
     val production: ProductionSummary = ProductionSummary(),
-    val dispatch: DispatchSummary = DispatchSummary()
+    val dispatch: DispatchSummary = DispatchSummary(),
+    /**
+     * Material que salió de bodega sin pasar por una receta (ver `PlantIssue`). Va en
+     * este reporte y no solo en el suyo porque es aquí donde se compara un turno con
+     * otro: dos turnos que hornean lo mismo y gastan el doble de harina de mesa es
+     * información de producción, no de inventario.
+     */
+    val plantIssues: List<PlantIssue> = emptyList(),
+    val plantIssueSummaries: List<PlantIssueIngredientSummary> = emptyList()
 )
 
 class ProductionReportViewModel(
     private val productionRepository: ProductionRepository,
     private val dispatchRepository: DispatchRepository,
-    private val branchRepository: BranchRepository
+    private val branchRepository: BranchRepository,
+    private val plantIssueRepository: PlantIssueRepository
 ) : ViewModel() {
 
     private val tz = TimeZone.currentSystemDefault()
@@ -103,10 +116,31 @@ class ProductionReportViewModel(
                             untilMillis = range.second
                         )
                     }
-                    prodAsync.await() to dispAsync.await()
+                    // Nunca tumba el reporte: el consumo de planta es una sección más,
+                    // y que falte su lectura no puede dejar sin "planeado vs producido"
+                    // a quien vino a ver eso.
+                    val issuesAsync = async {
+                        runCatching {
+                            plantIssueRepository.getIssuesInRange(
+                                companyId = user.orgId,
+                                branchIds = branchIds,
+                                fromMillis = range.first,
+                                untilMillis = range.second
+                            )
+                        }.getOrElse { emptyList() }
+                    }
+                    Triple(prodAsync.await(), dispAsync.await(), issuesAsync.await())
                 }
-            }.onSuccess { (prod, disp) ->
-                _uiState.update { it.copy(isLoading = false, production = prod, dispatch = disp) }
+            }.onSuccess { (prod, disp, issues) ->
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        production = prod,
+                        dispatch = disp,
+                        plantIssues = issues,
+                        plantIssueSummaries = summarizePlantIssues(issues)
+                    )
+                }
             }.onFailure { e ->
                 _uiState.update { it.copy(isLoading = false, error = e.message) }
             }

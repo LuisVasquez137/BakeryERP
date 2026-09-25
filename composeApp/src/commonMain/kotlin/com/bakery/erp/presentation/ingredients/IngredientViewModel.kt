@@ -24,6 +24,11 @@ import kotlin.time.Clock
 
 data class IngredientUiState(
     val ingredientList: List<Ingredient> = emptyList(),
+    /**
+     * Empresa cuyo catálogo está en [ingredientList]. Vacío = todavía no se leyó. Es lo que
+     * permite no releerlo al volver de una pantalla — ver [IngredientViewModel.loadIngredients].
+     */
+    val loadedIngredientsFor: String = "",
     val isLoading: Boolean = false,
     val error: String? = null,
     val selectedIngredient: Ingredient? = null,
@@ -58,11 +63,32 @@ class IngredientViewModel(
     private val _uiState = MutableStateFlow(IngredientUiState())
     val uiState: StateFlow<IngredientUiState> = _uiState.asStateFlow()
 
-    fun loadIngredients(companyId: String) {
+    /**
+     * Lee el catálogo una sola vez por empresa.
+     *
+     * Este ViewModel es singleton y cinco pantallas piden el catálogo al entrar (la lista, el
+     * form de receta, el de preparación, el de producto y el detalle). Sin la guarda, volver
+     * del detalle de un insumo volvía a pagar la consulta entera —1 + N por los formatos— y la
+     * pantalla se quedaba en blanco unos segundos cada vez, para mostrar exactamente lo mismo
+     * que ya tenía.
+     *
+     * [force] para lo que sí cambió: guardar, borrar y el botón de actualizar de la lista. El
+     * stock por sucursal NO se cachea (ver `loadStocksForBranch`) — es una sola consulta y es
+     * el dato que mueven las compras y la producción, así que ése sí conviene releerlo.
+     */
+    fun loadIngredients(companyId: String, force: Boolean = false) {
+        val current = _uiState.value
+        if (!force && current.loadedIngredientsFor == companyId && current.ingredientList.isNotEmpty()) return
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
             runCatching { repository.getIngredients(companyId) }
-                .onSuccess { _uiState.value = _uiState.value.copy(ingredientList = it, isLoading = false) }
+                .onSuccess {
+                    _uiState.value = _uiState.value.copy(
+                        ingredientList = it,
+                        loadedIngredientsFor = companyId,
+                        isLoading = false
+                    )
+                }
                 .onFailure { _uiState.value = _uiState.value.copy(isLoading = false, error = it.message) }
         }
     }
@@ -77,7 +103,7 @@ class IngredientViewModel(
                 else repository.updateIngredient(companyId, finalIngredient)
             }.onSuccess {
                 _uiState.value = _uiState.value.copy(isLoading = false, isSaved = true)
-                loadIngredients(companyId)
+                loadIngredients(companyId, force = true)
             }.onFailure {
                 _uiState.value = _uiState.value.copy(isLoading = false, error = it.message)
             }
@@ -90,7 +116,7 @@ class IngredientViewModel(
             runCatching { repository.deleteIngredient(companyId, ingredientId) }
                 .onSuccess {
                     _uiState.value = _uiState.value.copy(isLoading = false, isDeleted = true)
-                    loadIngredients(companyId)
+                    loadIngredients(companyId, force = true)
                 }
                 .onFailure { _uiState.value = _uiState.value.copy(isLoading = false, error = it.message) }
         }

@@ -12,6 +12,7 @@ import com.bakery.erp.data.FirebaseEmployeeHistoryRepository
 import com.bakery.erp.data.FirebaseExpenseRepository
 import com.bakery.erp.data.FirebaseFixedBudgetRepository
 import com.bakery.erp.data.FirebaseIngredientRepository
+import com.bakery.erp.data.FirebasePlantIssueRepository
 import com.bakery.erp.data.FirebaseJobPositionRepository
 import com.bakery.erp.data.FirebasePayrollRepository
 import com.bakery.erp.data.FirebaseCashRegisterRepository
@@ -31,6 +32,7 @@ import com.bakery.erp.data.FirebasePreparationBatchRepository
 import com.bakery.erp.data.FirebasePreparationRepository
 import com.bakery.erp.data.FirebasePriceListRepository
 import com.bakery.erp.data.FirebaseProductionRepository
+import com.bakery.erp.data.FirebasePurchaseConceptRepository
 import com.bakery.erp.data.FirebasePurchaseRepository
 import com.bakery.erp.data.FirebaseRecipeRepository
 import com.bakery.erp.data.FirebaseSupplierRepository
@@ -64,6 +66,7 @@ import com.bakery.erp.domain.FixedBudgetRepository
 import com.bakery.erp.domain.GoogleAuthHandler
 import com.bakery.erp.domain.ProductRepository
 import com.bakery.erp.domain.IngredientRepository
+import com.bakery.erp.domain.PlantIssueRepository
 import com.bakery.erp.domain.JobPositionRepository
 import com.bakery.erp.domain.PayrollRepository
 import com.bakery.erp.domain.CashRegisterRepository
@@ -85,6 +88,7 @@ import com.bakery.erp.domain.PreparationBatchRepository
 import com.bakery.erp.domain.PreparationRepository
 import com.bakery.erp.domain.PriceListRepository
 import com.bakery.erp.domain.ProductionRepository
+import com.bakery.erp.domain.PurchaseConceptRepository
 import com.bakery.erp.domain.PurchaseRepository
 import com.bakery.erp.domain.RecipeRepository
 import com.bakery.erp.domain.SupplierRepository
@@ -101,6 +105,7 @@ import com.bakery.erp.presentation.employees.JobPositionViewModel
 import com.bakery.erp.presentation.expenses.ExpenseViewModel
 import com.bakery.erp.presentation.expenses.FixedBudgetViewModel
 import com.bakery.erp.presentation.ingredients.IngredientViewModel
+import com.bakery.erp.presentation.plantissues.PlantIssueViewModel
 import com.bakery.erp.presentation.preparationbatches.PreparationBatchViewModel
 import com.bakery.erp.presentation.delivery.DeliveryViewModel
 import com.bakery.erp.presentation.dispatch.DispatchViewModel
@@ -112,6 +117,7 @@ import com.bakery.erp.presentation.pos.CashSessionViewModel
 import com.bakery.erp.presentation.reports.financial.FinancialReportViewModel
 import com.bakery.erp.presentation.reports.production.ProductionReportViewModel
 import com.bakery.erp.presentation.reports.sales.SalesReportViewModel
+import com.bakery.erp.presentation.reports.branchsupply.BranchSupplyReportViewModel
 import com.bakery.erp.presentation.pos.DailyCashCloseViewModel
 import com.bakery.erp.presentation.pos.POSViewModel
 import com.bakery.erp.presentation.pos.SaleHistoryViewModel
@@ -136,11 +142,13 @@ val appModule = module {
     single { Firebase.firestore }
     single<AuthRepository> { FirebaseAuthRepository(get(), get()) }
     single<IngredientRepository> { FirebaseIngredientRepository(get()) }
+    single<PlantIssueRepository> { FirebasePlantIssueRepository(get()) }
     single<SupplierRepository> { FirebaseSupplierRepository(get()) }
     single<RecipeRepository> { FirebaseRecipeRepository(get()) }
     single<BranchRepository> { FirebaseBranchRepository(get()) }
     single<WeatherRepository> { OpenMeteoWeatherRepository() }
     single<PurchaseRepository> { FirebasePurchaseRepository(get()) }
+    single<PurchaseConceptRepository> { FirebasePurchaseConceptRepository(get()) }
     single<ProductionRepository> { FirebaseProductionRepository(get()) }
     single<PreparationRepository> { FirebasePreparationRepository(get()) }
     single<PreparationBatchRepository> { FirebasePreparationBatchRepository(get()) }
@@ -165,7 +173,9 @@ val appModule = module {
     single<CashRegisterRepository> { FirebaseCashRegisterRepository(get()) }
     single<CashSessionRepository> { FirebaseCashSessionRepository(get()) }
     single<SaleRepository> { FirebaseSaleRepository(get(), get(), get(), get()) }
-    single<BreadCountRepository> { FirebaseBreadCountRepository(get(), get()) }
+    single<BreadCountRepository> { FirebaseBreadCountRepository(get(), get(), get(), get()) }
+    single<com.bakery.erp.domain.CreditRepository> { com.bakery.erp.data.FirebaseCreditRepository(get()) }
+    single { com.bakery.erp.presentation.credit.CreditViewModel(get(), get()) }
     single<DailyCashCloseRepository> { FirebaseDailyCashCloseRepository(get(), get()) }
     single<SpotCashCheckRepository> { FirebaseSpotCashCheckRepository(get()) }
     single<ExternalCustomerRepository> { FirebaseExternalCustomerRepository(get()) }
@@ -185,35 +195,37 @@ val appModule = module {
     single { ProductViewModel(get(), get()) }
     single { PriceListViewModel(get()) }
     single { IngredientViewModel(get(), get(), get()) }
-    single { PurchaseViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    single { PlantIssueViewModel(get(), get(), get()) }
+    single { PurchaseViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { ProductionViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { NotificationViewModel(get(), get()) }
     single { DispatchViewModel(get(), get(), get(), get(), get(), get()) }
     single { DeliveryViewModel(get(), get(), get(), get(), get(), get()) }
-    single { FinishedStockViewModel(get(), get()) }
-    single { SupplierViewModel(get()) }
+    single { FinishedStockViewModel(get(), get(), get(), get()) }
+    single { SupplierViewModel(get(), get()) }
     single { RecipeViewModel(get(), get()) }
     single { BranchViewModel(get()) }
     single { ExpenseViewModel(get()) }
     single { FixedBudgetViewModel(get()) }
-    single { EmployeeViewModel(get(), get(), get(), get(), get(), get(), get(), get()) }
+    single { EmployeeViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { JobPositionViewModel(get()) }
     single { UserViewModel(get()) }
     single { PreparationViewModel(get()) }
     single { PreparationBatchViewModel(get(), get(), get(), get()) }
     single { FixedAssetViewModel(get(), get(), get()) }
-    single { POSViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
-    single { CashSessionViewModel(get(), get(), get(), get()) }
+    single { POSViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    single { CashSessionViewModel(get(), get(), get(), get(), get()) }
     single { SaleHistoryViewModel(get(), get(), get()) }
     single { CashRegisterAdminViewModel(get(), get(), get()) }
     single { POSCategoryAdminViewModel(get(), get(), get()) }
     single { BreadCountViewModel(get(), get()) }
     single { DailyCashCloseViewModel(get(), get(), get(), get()) }
     single { SpotCashCheckViewModel(get(), get(), get()) }
-    single { HomeViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    single { HomeViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { SalesReportViewModel(get(), get()) }
-    single { ProductionReportViewModel(get(), get(), get()) }
-    single { FinancialReportViewModel(get(), get(), get(), get(), get(), get()) }
+    single { ProductionReportViewModel(get(), get(), get(), get()) }
+    single { FinancialReportViewModel(get(), get(), get(), get(), get(), get(), get()) }
+    single { BranchSupplyReportViewModel(get(), get(), get(), get()) }
     single { ExternalCustomerViewModel(get(), get(), get(), get()) }
     single { CustomerOrderViewModel(get(), get(), get(), get(), get(), get()) }
     single { OrganizationSettingsViewModel(get(), get()) }

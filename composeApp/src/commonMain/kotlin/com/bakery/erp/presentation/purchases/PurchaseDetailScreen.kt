@@ -67,6 +67,7 @@ import com.bakery.erp.model.PurchaseDisplayStatus
 import com.bakery.erp.model.PurchaseLine
 import com.bakery.erp.model.PurchasePayment
 import com.bakery.erp.model.PurchasePaymentMethod
+import com.bakery.erp.model.isQuick
 import com.bakery.erp.model.PurchaseStatus
 import com.bakery.erp.model.User
 import com.bakery.erp.model.balanceDue
@@ -86,13 +87,19 @@ import com.bakery.erp.util.fmt
 import com.bakery.erp.util.fmtTrim
 import com.bakery.erp.util.fmtMoney
 import kotlin.time.Clock
+import com.bakery.erp.model.Product
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PurchaseDetailScreen(
     purchaseId: String,
     onNavigateBack: () -> Unit,
-    onNavigateToEdit: (String) -> Unit,
+    /**
+     * Id de la compra y si es rápida. El tipo viaja hasta la navegación porque cada uno
+     * tiene su propio formulario: el de la factura no sabe de lugar ni de sucursal por
+     * línea, y reabrir ahí una compra rápida escondía justamente sus datos.
+     */
+    onNavigateToEdit: (String, Boolean) -> Unit,
     authViewModel: AuthViewModel,
     viewModel: PurchaseViewModel
 ) {
@@ -120,7 +127,9 @@ fun PurchaseDetailScreen(
                 },
                 actions = {
                     if (currentUser?.hasPermission(Permission.EDIT_PURCHASES) == true) {
-                        IconButton(onClick = { onNavigateToEdit(purchaseId) }) {
+                        IconButton(onClick = {
+                            onNavigateToEdit(purchaseId, state.selectedPurchase?.isQuick == true)
+                        }) {
                             Icon(Icons.Default.Edit, contentDescription = "Editar compra")
                         }
                     }
@@ -146,6 +155,9 @@ fun PurchaseDetailScreen(
                     purchase = state.selectedPurchase!!,
                     lines = state.selectedPurchaseLines,
                     payments = state.selectedPurchasePayments,
+                    imageByProductId = remember(state.allResaleProducts) {
+                        resaleImagesByProductId(state.allResaleProducts)
+                    },
                     currentUser = currentUser,
                     isProcessing = state.isProcessing,
                     onStatusChange = null,
@@ -241,7 +253,9 @@ internal fun PurchaseDetailContent(
     onDueDateChange: ((Long) -> Unit)? = null,
     onSettleInFull: ((Long, String, String) -> Unit)? = null,
     /** Solo lo manda el panel lateral de la lista; la pantalla completa edita desde su TopAppBar. */
-    onEdit: (() -> Unit)? = null
+    onEdit: (() -> Unit)? = null,
+    /** productId → foto. Vacío cuando el catálogo todavía no se leyó, y la fila sale sin foto. */
+    imageByProductId: Map<String, String> = emptyMap()
 ) {
     val now = remember(purchase.id) { Clock.System.now().toEpochMilliseconds() }
     val total = if (purchase.totalAmount > 0.0) purchase.totalAmount else lines.purchaseTotal()
@@ -615,7 +629,7 @@ internal fun PurchaseDetailContent(
                 }
                 Spacer(Modifier.height(8.dp))
                 lines.forEachIndexed { index, line ->
-                    PurchaseLineRow(line)
+                    PurchaseLineRow(line, imageByProductId[line.productId])
                     if (index < lines.lastIndex) {
                         HorizontalDivider(
                             modifier = Modifier.padding(vertical = 6.dp),
@@ -973,11 +987,35 @@ private fun DetailRow(label: String, value: String) {
 }
 
 @Composable
-private fun PurchaseLineRow(line: PurchaseLine) {
+private fun PurchaseLineRow(line: PurchaseLine, imageUrl: String? = null) {
+    // Quien recibe compara la caja contra el renglón: la miniatura dice "es de esta marca" y
+    // la grande dice "es este sabor y este tamaño".
+    var zoomed by remember { mutableStateOf(false) }
+    if (zoomed && !imageUrl.isNullOrBlank()) {
+        ZoomableImageDialog(imageUrl = imageUrl, title = line.itemName, onDismiss = { zoomed = false })
+    }
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        Text(line.itemName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-        if (line.packageDescription.isNotEmpty()) {
-            Text(line.packageDescription, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // Solo la reventa tiene foto: el `Ingredient` no guarda imagen, y una harina se
+            // reconoce por el nombre del saco. Sin foto no se dibuja nada —un recuadro gris
+            // vacío en cada renglón de insumo sería ruido, no información.
+            if (!imageUrl.isNullOrBlank()) {
+                ProductImage(
+                    imageUrl = imageUrl,
+                    contentDescription = line.itemName,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { zoomed = true }
+                )
+                Spacer(Modifier.width(10.dp))
+            }
+            Column(Modifier.weight(1f)) {
+                Text(line.itemName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                if (line.packageDescription.isNotEmpty()) {
+                    Text(line.packageDescription, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
         }
         Spacer(Modifier.height(4.dp))
         Row(
@@ -1022,6 +1060,14 @@ private fun PurchaseLineRow(line: PurchaseLine) {
         }
     }
 }
+
+/**
+ * Foto por producto, para los renglones de reventa. Vive acá y no en `PurchaseLine` porque
+ * resolverlo contra el catálogo hace que las compras viejas también la muestren — un snapshot
+ * solo serviría de acá en adelante.
+ */
+internal fun resaleImagesByProductId(products: List<Product>): Map<String, String> =
+    products.mapNotNull { p -> p.imageUrl?.takeIf { it.isNotBlank() }?.let { p.id to it } }.toMap()
 
 internal fun formatPurchaseQty(value: Double): String =
     if (value == value.toLong().toDouble()) "${value.toLong()}" else value.fmt(2)

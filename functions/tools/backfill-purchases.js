@@ -12,6 +12,13 @@
  *   itemIds       ids de insumo / producto de reventa, sin repetir
  *   itemNames     nombres visibles, para la búsqueda por contenido
  *   paidAmount    0, o el total si la compra ya estaba marcada como PAID
+ *   inventoryAmount / expensedAmount
+ *                 el corte que el reporte financiero usa para no contar dos veces: lo que
+ *                 entró a inventario (materia prima y reventa) contra lo que ya se gastó
+ *                 (suministros y servicios, que además generaron su propio `Expense`).
+ *                 La app deduce este corte del encabezado cuando falta, pero no puede con
+ *                 las compras MIXTAS anteriores al campo — ésas le salen "sin desglosar".
+ *                 Correr esto las resuelve.
  *   receivedAt    la fecha de la compra, salvo que esté PENDING_RECEIPT
  *   dueDate       date + los días de crédito del proveedor, si tiene
  *
@@ -58,6 +65,15 @@ function lineTotal(l) {
 }
 
 const isResale = (l) => l.lineKind === 'RESALE_PRODUCT';
+
+/**
+ * Espejo de `purchaseLineIsInventory` en Kotlin. Las líneas anteriores a los cuatro tipos no
+ * traen `lineKind` y son materia prima por definición: era lo único que el módulo registraba.
+ */
+const isInventoryLine = (l) => {
+  const kind = l.lineKind || 'INGREDIENT';
+  return kind === 'INGREDIENT' || kind === 'RESALE_PRODUCT';
+};
 const itemId = (l) => (isResale(l) ? l.productId : l.ingredientId) || '';
 const itemName = (l) => (isResale(l) ? l.productName : l.ingredientName) || '';
 
@@ -91,8 +107,22 @@ const cents = (n) => Math.round(n * 100) / 100;
     const ids = [...new Set(lines.map(itemId).filter(Boolean))];
     const names = [...new Set(lines.map(itemName).filter(Boolean))];
 
+    const inventoryAmount = cents(
+      lines.filter(isInventoryLine).reduce((sum, l) => sum + lineTotal(l), 0)
+    );
+    const expensedAmount = cents(
+      lines.filter((l) => !isInventoryLine(l)).reduce((sum, l) => sum + lineTotal(l), 0)
+    );
+
     const patch = {};
     if (!(Number(p.totalAmount) > 0) && total > 0) patch.totalAmount = total;
+    // Se escriben juntos y solo si faltan los dos: uno en cero es un dato válido (una
+    // factura de pura harina no tiene gasto), así que mirarlos por separado haría que el
+    // script los reescribiera para siempre.
+    if (p.inventoryAmount === undefined && p.expensedAmount === undefined && total > 0) {
+      patch.inventoryAmount = inventoryAmount;
+      patch.expensedAmount = expensedAmount;
+    }
     if (!Array.isArray(p.itemIds) && ids.length) patch.itemIds = ids;
     if (!Array.isArray(p.itemNames) && names.length) patch.itemNames = names;
     if (p.lineCount !== lines.length && lines.length > 0) patch.lineCount = lines.length;

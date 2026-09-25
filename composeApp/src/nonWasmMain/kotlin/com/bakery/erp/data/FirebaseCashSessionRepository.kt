@@ -2,6 +2,7 @@ package com.bakery.erp.data
 
 import com.bakery.erp.domain.CashDenominationStage
 import com.bakery.erp.domain.CashSessionRepository
+import com.bakery.erp.model.expectedCashNow
 import com.bakery.erp.model.CashMovement
 import com.bakery.erp.model.CashMovementType
 import com.bakery.erp.model.CashSession
@@ -111,6 +112,11 @@ class FirebaseCashSessionRepository(
                 totalSales = current.totalSales + amount,
                 saleCount = current.saleCount + 1
             )
+            SalePaymentMethod.CREDIT -> current.copy(
+                totalCreditSales = current.totalCreditSales + amount,
+                totalSales = current.totalSales + amount,
+                saleCount = current.saleCount + 1
+            )
             else -> current.copy(
                 totalSales = current.totalSales + amount,
                 saleCount = current.saleCount + 1
@@ -145,13 +151,13 @@ class FirebaseCashSessionRepository(
             .sortedBy { it.createdAt }
 
     override suspend fun closeSession(
-        companyId: String, sessionId: String, countedCash: Double, notes: String?
+        companyId: String, sessionId: String, countedCash: Double, notes: String?,
+        autoClosed: Boolean
     ): CashSession {
         val current = getSession(companyId, sessionId)
             ?: throw IllegalStateException("Sesión no encontrada: $sessionId")
         if (current.status == CashSessionStatus.CLOSED) return current
-        val expected = current.openingBalance + current.totalCashSales +
-                       current.totalMovementsIn - current.totalMovementsOut
+        val expected = current.expectedCashNow
         val now = Clock.System.now().toEpochMilliseconds()
         val closed = current.copy(
             closedAt = now,
@@ -159,10 +165,37 @@ class FirebaseCashSessionRepository(
             countedCash = countedCash,
             difference = countedCash - expected,
             status = CashSessionStatus.CLOSED,
-            notes = notes?.trim()?.ifEmpty { null }
+            notes = notes?.trim()?.ifEmpty { null },
+            autoClosed = autoClosed
         )
         sessionsCol(companyId).document(sessionId).set(closed.toMap())
         return closed
+    }
+
+    override suspend fun autoCloseStaleSessions(companyId: String, todayStartMillis: Long): Int {
+        val stale = sessionsCol(companyId)
+            .where { "status" equalTo CashSessionStatus.OPEN }
+            .get().documents
+            .map { it.toSession() }
+            // El filtro por fecha va en memoria: `openedAt` puede venir como Timestamp en las
+            // sesiones viejas y como número en las nuevas, y Firestore ordena por tipo antes
+            // que por valor — mismo motivo por el que `getPurchases` no filtra en el servidor.
+            .filter { it.openedAt in 1 until todayStartMillis }
+        stale.forEach { session ->
+            runCatching {
+                closeSession(
+                    companyId = companyId,
+                    sessionId = session.id,
+                    // Nadie contó: se asume que se recibió el pago exacto. `autoClosed` es lo
+                    // que impide leer ese cero como un cuadre real.
+                    countedCash = session.expectedCashNow,
+                    notes = "Cerrada automáticamente: quedó abierta del día anterior. " +
+                        "No se contó el efectivo; se asumió pago exacto.",
+                    autoClosed = true
+                )
+            }
+        }
+        return stale.size
     }
 
     override suspend fun saveDenominations(
@@ -332,6 +365,7 @@ class FirebaseCashSessionRepository(
         "totalCashSales" to totalCashSales,
         "totalCardSales" to totalCardSales,
         "totalTransferSales" to totalTransferSales,
+        "totalCreditSales" to totalCreditSales,
         "totalSales" to totalSales,
         "totalMovementsIn" to totalMovementsIn,
         "totalMovementsOut" to totalMovementsOut,
@@ -341,7 +375,8 @@ class FirebaseCashSessionRepository(
         "status" to status,
         "saleCount" to saleCount,
         "notes" to notes,
-        "dailyCloseId" to dailyCloseId
+        "dailyCloseId" to dailyCloseId,
+        "autoClosed" to autoClosed
     )
 
     private fun DocumentSnapshot.toSession() = CashSession(
@@ -358,6 +393,7 @@ class FirebaseCashSessionRepository(
         totalCashSales = get<Double?>("totalCashSales") ?: 0.0,
         totalCardSales = get<Double?>("totalCardSales") ?: 0.0,
         totalTransferSales = get<Double?>("totalTransferSales") ?: 0.0,
+        totalCreditSales = get<Double?>("totalCreditSales") ?: 0.0,
         totalSales = get<Double?>("totalSales") ?: 0.0,
         totalMovementsIn = get<Double?>("totalMovementsIn") ?: 0.0,
         totalMovementsOut = get<Double?>("totalMovementsOut") ?: 0.0,
@@ -367,7 +403,8 @@ class FirebaseCashSessionRepository(
         status = get<String?>("status") ?: CashSessionStatus.OPEN,
         saleCount = (get<Double?>("saleCount") ?: 0.0).toInt(),
         notes = get<String?>("notes"),
-        dailyCloseId = get<String?>("dailyCloseId")
+        dailyCloseId = get<String?>("dailyCloseId"),
+        autoClosed = runCatching { get<Boolean?>("autoClosed") }.getOrNull() ?: false
     )
 
     private fun CashMovement.toMap(): Map<String, Any?> = firestoreSafeOf(
@@ -381,7 +418,10 @@ class FirebaseCashSessionRepository(
         "createdAt" to createdAt,
         "transferId" to transferId,
         "linkedSessionId" to linkedSessionId,
-        "spotCheckId" to spotCheckId
+        "spotCheckId" to spotCheckId,
+        "sourcePurchaseId" to sourcePurchaseId,
+        "sourceMovementId" to sourceMovementId,
+        "sourceCreditMovementId" to sourceCreditMovementId
     )
 
     private fun DocumentSnapshot.toMovement() = CashMovement(
@@ -395,7 +435,10 @@ class FirebaseCashSessionRepository(
         createdAt = readMillis("createdAt"),
         transferId = get<String?>("transferId"),
         linkedSessionId = get<String?>("linkedSessionId"),
-        spotCheckId = get<String?>("spotCheckId")
+        spotCheckId = get<String?>("spotCheckId"),
+        sourcePurchaseId = get<String?>("sourcePurchaseId") ?: "",
+        sourceMovementId = get<String?>("sourceMovementId") ?: "",
+        sourceCreditMovementId = get<String?>("sourceCreditMovementId") ?: ""
     )
 
     private fun DocumentSnapshot.readMillis(field: String): Long =

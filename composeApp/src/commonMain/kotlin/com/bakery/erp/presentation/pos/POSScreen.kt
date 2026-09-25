@@ -20,10 +20,12 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ShoppingCart
@@ -44,6 +46,13 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.bakery.erp.domain.BluetoothPrinterManager
 import com.bakery.erp.model.POSCategory
+import androidx.compose.material.icons.filled.People
+import com.bakery.erp.model.expectedCashNow
+import com.bakery.erp.model.SalePaymentMethod
+import com.bakery.erp.model.hasPermission
+import com.bakery.erp.model.Permission
+import com.bakery.erp.model.groupDisplayName
+import com.bakery.erp.model.groupSaleKey
 import com.bakery.erp.model.Product
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.ui.ProductImage
@@ -63,12 +72,27 @@ fun POSScreen(
     sessionId: String,
     onNavigateBack: () -> Unit,
     onNavigateToClose: (sessionId: String) -> Unit,
+    /**
+     * Anotar un gasto pagado con el efectivo de ESTA caja. Se ofrece desde acá —y no solo
+     * desde el módulo de Gastos— porque es donde está quien tiene la gaveta abierta, y así
+     * la caja no hay que elegirla: sale de la que se está operando.
+     */
+    onNavigateToCashExpense: (sessionId: String) -> Unit,
+    /**
+     * Movimientos de la caja abierta. Es donde la cajera ve lo que se pagó de su gaveta y
+     * puede ir a corregirlo: hasta que existió, anotaba un gasto y no tenía forma de revisarlo
+     * ni de deshacerlo sin cerrar la caja.
+     */
+    onNavigateToSessionDetail: (sessionId: String) -> Unit = {},
     authViewModel: AuthViewModel,
     viewModel: POSViewModel,
     cashSessionViewModel: CashSessionViewModel,
-    bluetoothPrinterManager: BluetoothPrinterManager
+    bluetoothPrinterManager: BluetoothPrinterManager,
+    /** Cuentas de crédito: vender fiado, cobrar abonos y dar adelantos desde la caja. */
+    creditViewModel: com.bakery.erp.presentation.credit.CreditViewModel? = null
 ) {
     val state by viewModel.uiState.collectAsState()
+    val creditState = creditViewModel?.uiState?.collectAsState()?.value
     val authState by authViewModel.uiState.collectAsState()
     val companyId = authState.user?.orgId.orEmpty()
     val user = authState.user
@@ -80,6 +104,27 @@ fun POSScreen(
     }
     LaunchedEffect(state.error) {
         state.error?.let { snackbar.showSnackbar(it); viewModel.clearError() }
+    }
+    val canSellOnCredit = user?.hasPermission(Permission.SELL_ON_CREDIT) == true
+    val canCollectCredit = user?.hasPermission(Permission.COLLECT_CREDIT_PAYMENT) == true
+    val canGiveAdvance = user?.hasPermission(Permission.GIVE_EMPLOYEE_ADVANCE) == true
+    val usesCredit = creditViewModel != null && (canSellOnCredit || canCollectCredit || canGiveAdvance)
+    // Las cuentas se recargan tras cada abono o venta fiada: el saldo que muestra el buscador
+    // es lo que la cajera le dice al cliente.
+    // Se cargan aunque la cajera no maneje créditos: el descuento de colaborador por pagar en
+    // efectivo sale de esas mismas cuentas.
+    LaunchedEffect(companyId, state.notice, state.lastReceiptData) {
+        if (creditViewModel != null && companyId.isNotEmpty()) creditViewModel.load(companyId)
+    }
+    var paymentDiscountAccount by remember { mutableStateOf<com.bakery.erp.model.CreditAccount?>(null) }
+    LaunchedEffect(state.notice) {
+        state.notice?.let { snackbar.showSnackbar(it); viewModel.clearNotice() }
+    }
+    var creditCollectOpen by remember { mutableStateOf(false) }
+    var advanceOpen by remember { mutableStateOf(false) }
+    LaunchedEffect(state.notice, state.isCreditBusy) {
+        // Cerrar el diálogo cuando terminó bien (hay aviso) — si falló, queda abierto con el error.
+        if (!state.isCreditBusy && state.notice != null) { creditCollectOpen = false; advanceOpen = false }
     }
     LaunchedEffect(state.justCollected) {
         state.justCollected?.let { collected ->
@@ -94,13 +139,16 @@ fun POSScreen(
 
     var selectedFilter by rememberSaveable { mutableStateOf(FILTER_ALL) }
     var quantityFor by remember { mutableStateOf<Product?>(null) }
+    var groupQuantityFor by remember { mutableStateOf<POSCategory?>(null) }
     var pickerSearchOpen by remember { mutableStateOf(false) }
     var paymentOpen by remember { mutableStateOf(false) }
     var cartSheetOpen by remember { mutableStateOf(false) }
     var btPickerOpen by remember { mutableStateOf(false) }
     var showTransfer by remember { mutableStateOf(false) }
+    var showIncome by remember { mutableStateOf(false) }
     var pendingSheetOpen by remember { mutableStateOf(false) }
     var overflowOpen by remember { mutableStateOf(false) }
+    var lastCheckoutOpen by remember { mutableStateOf(false) }
 
     fun handlePrintRequest() {
         if (bluetoothPrinterManager.isPlatformSupported &&
@@ -114,7 +162,7 @@ fun POSScreen(
 
     // Mapa productId -> CartLine (para tile selected state y tap-to-deselect)
     val cartByProductId = remember(state.cart) {
-        state.cart.associateBy { it.productId }
+        state.cart.filter { !it.isGroup && !it.isRestaurant }.associateBy { it.productId }
     }
     val cartItemCount = state.cart.sumOf { it.quantity }.toInt()
 
@@ -129,15 +177,34 @@ fun POSScreen(
         prevCartCount = cartItemCount
     }
 
+    val selectedGroup = state.posCategories.firstOrNull { it.id == selectedFilter && it.sellAsGroup }
+
     // Productos filtrados por categoría seleccionada
     val productsToShow = remember(state.products, state.posCategories, selectedFilter) {
-        if (selectedFilter == FILTER_ALL) state.products
-        else {
+        if (selectedFilter == FILTER_ALL) {
+            // Los panes de un grupo de precio no salen sueltos en "Todos": se cobran por su
+            // botón de grupo. Vendidos uno por uno funcionarían, pero invitan a la cajera a
+            // buscar el tipo de pan, que es justo lo que el grupo viene a evitar.
+            val grouped = state.posCategories.filter { it.sellAsGroup }
+                .flatMap { it.productIds }.toSet()
+            state.products.filterNot { it.id in grouped }
+                .sortedWith(
+                    compareByDescending<Product> { state.popularityByKey[it.id] ?: 0.0 }
+                        .thenBy { it.name }
+                )
+        } else {
             val cat = state.posCategories.find { it.id == selectedFilter }
             if (cat == null) state.products
             else state.products.filter { it.id in cat.productIds }
         }
     }
+
+    // En "Todos" cada grupo de precio es una ficha más, ordenada junto a los productos por lo
+    // que más se pide. Tocarla pregunta cuántos panes.
+    val groupTilesInAll = if (selectedFilter == FILTER_ALL)
+        state.posCategories.filter { it.sellAsGroup } else emptyList()
+    val groupQtyInCart = state.cart.filter { it.isGroup }
+        .associate { it.quickGroupId to it.quantity }
 
     fun handleProductTap(product: Product) {
         val existing = cartByProductId[product.id]
@@ -237,6 +304,12 @@ fun POSScreen(
                         }
                         state.session?.let { sess ->
                             if (compact) {
+                                IconButton(onClick = {
+                                    viewModel.loadRecentCheckouts(companyId)
+                                    lastCheckoutOpen = true
+                                }) {
+                                    Icon(Icons.Default.History, "Último cobro")
+                                }
                                 Box {
                                     IconButton(onClick = { overflowOpen = true }) {
                                         Icon(Icons.Default.MoreVert, "Más opciones")
@@ -245,6 +318,31 @@ fun POSScreen(
                                         expanded = overflowOpen,
                                         onDismissRequest = { overflowOpen = false }
                                     ) {
+                                        DropdownMenuItem(
+                                            text = { Text("Anotar gasto") },
+                                            onClick = { overflowOpen = false; onNavigateToCashExpense(sess.id) },
+                                            leadingIcon = { Icon(Icons.Default.Receipt, null) }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Anotar ingreso") },
+                                            onClick = { overflowOpen = false; showIncome = true },
+                                            leadingIcon = { Icon(Icons.Default.Receipt, null) }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Movimientos de la caja") },
+                                            onClick = { overflowOpen = false; onNavigateToSessionDetail(sess.id) },
+                                            leadingIcon = { Icon(Icons.Default.Receipt, null) }
+                                        )
+                                        if (usesCredit && canCollectCredit) DropdownMenuItem(
+                                            text = { Text("Cobrar crédito") },
+                                            onClick = { overflowOpen = false; creditCollectOpen = true },
+                                            leadingIcon = { Icon(Icons.Default.People, null) }
+                                        )
+                                        if (usesCredit && canGiveAdvance) DropdownMenuItem(
+                                            text = { Text("Adelanto a colaborador") },
+                                            onClick = { overflowOpen = false; advanceOpen = true },
+                                            leadingIcon = { Icon(Icons.Default.People, null) }
+                                        )
                                         DropdownMenuItem(
                                             text = { Text("Transferir efectivo") },
                                             onClick = { overflowOpen = false; showTransfer = true },
@@ -257,6 +355,39 @@ fun POSScreen(
                                     }
                                 }
                             } else {
+                                IconButton(onClick = {
+                                    viewModel.loadRecentCheckouts(companyId)
+                                    lastCheckoutOpen = true
+                                }) {
+                                    Icon(Icons.Default.History, "Último cobro")
+                                }
+                                IconButton(onClick = { onNavigateToCashExpense(sess.id) }) {
+                                    Icon(Icons.Default.Receipt, "Anotar un gasto de esta caja")
+                                }
+                                TextButton(onClick = { showIncome = true }) {
+                                    Text("Ingreso", color = MaterialTheme.colorScheme.onPrimary)
+                                }
+                                TextButton(onClick = { onNavigateToSessionDetail(sess.id) }) {
+                                    Text("Movimientos", color = MaterialTheme.colorScheme.onPrimary)
+                                }
+                                if (usesCredit && (canCollectCredit || canGiveAdvance)) {
+                                    var creditMenu by remember { mutableStateOf(false) }
+                                    Box {
+                                        TextButton(onClick = { creditMenu = true }) {
+                                            Text("Créditos", color = MaterialTheme.colorScheme.onPrimary)
+                                        }
+                                        DropdownMenu(expanded = creditMenu, onDismissRequest = { creditMenu = false }) {
+                                            if (canCollectCredit) DropdownMenuItem(
+                                                text = { Text("Cobrar crédito") },
+                                                onClick = { creditMenu = false; creditCollectOpen = true }
+                                            )
+                                            if (canGiveAdvance) DropdownMenuItem(
+                                                text = { Text("Adelanto a colaborador") },
+                                                onClick = { creditMenu = false; advanceOpen = true }
+                                            )
+                                        }
+                                    }
+                                }
                                 IconButton(onClick = { showTransfer = true }) {
                                     Icon(Icons.Default.SwapHoriz, "Transferir efectivo a otra caja")
                                 }
@@ -291,15 +422,29 @@ fun POSScreen(
                             selectedFilter = selectedFilter,
                             onSelect = { selectedFilter = it }
                         )
-                        ProductGrid(
-                            products = productsToShow,
-                            cartByProductId = cartByProductId,
-                            categoriesEmpty = state.posCategories.isEmpty(),
-                            totalCategoriesCount = state.totalCategoriesCount,
-                            branchName = state.branch?.name.orEmpty(),
-                            onProductClick = ::handleProductTap,
-                            modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
+                        if (selectedGroup != null) {
+                            GroupSellPanel(
+                                group = selectedGroup,
+                                inCart = state.cart.firstOrNull { it.quickGroupId == selectedGroup.id }?.quantity ?: 0.0,
+                                onAdd = { qty -> viewModel.addGroupToCart(selectedGroup, qty) },
+                                onOtherQuantity = { groupQuantityFor = selectedGroup },
+                                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        } else {
+                            ProductGrid(
+                                products = productsToShow,
+                                cartByProductId = cartByProductId,
+                                categoriesEmpty = state.posCategories.isEmpty(),
+                                totalCategoriesCount = state.totalCategoriesCount,
+                                branchName = state.branch?.name.orEmpty(),
+                                onProductClick = ::handleProductTap,
+                                groups = groupTilesInAll,
+                                groupQtyInCart = groupQtyInCart,
+                                popularity = state.popularityByKey,
+                                onGroupClick = { groupQuantityFor = it },
+                                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
                     }
                     HorizontalDivider(modifier = Modifier.fillMaxHeight().width(1.dp))
                     CartPanel(
@@ -320,15 +465,29 @@ fun POSScreen(
                         selectedFilter = selectedFilter,
                         onSelect = { selectedFilter = it }
                     )
-                    ProductGrid(
-                        products = productsToShow,
-                        cartByProductId = cartByProductId,
-                        categoriesEmpty = state.posCategories.isEmpty(),
-                        totalCategoriesCount = state.totalCategoriesCount,
-                        branchName = state.branch?.name.orEmpty(),
-                        onProductClick = ::handleProductTap,
-                        modifier = Modifier.weight(1f).fillMaxWidth().padding(12.dp)
-                    )
+                    if (selectedGroup != null) {
+                        GroupSellPanel(
+                            group = selectedGroup,
+                            inCart = state.cart.firstOrNull { it.quickGroupId == selectedGroup.id }?.quantity ?: 0.0,
+                            onAdd = { qty -> viewModel.addGroupToCart(selectedGroup, qty) },
+                            onOtherQuantity = { groupQuantityFor = selectedGroup },
+                            modifier = Modifier.weight(1f).fillMaxWidth().padding(12.dp)
+                        )
+                    } else {
+                        ProductGrid(
+                            products = productsToShow,
+                            cartByProductId = cartByProductId,
+                            categoriesEmpty = state.posCategories.isEmpty(),
+                            totalCategoriesCount = state.totalCategoriesCount,
+                            branchName = state.branch?.name.orEmpty(),
+                            onProductClick = ::handleProductTap,
+                            groups = groupTilesInAll,
+                            groupQtyInCart = groupQtyInCart,
+                            popularity = state.popularityByKey,
+                            onGroupClick = { groupQuantityFor = it },
+                            modifier = Modifier.weight(1f).fillMaxWidth().padding(12.dp)
+                        )
+                    }
                     if (state.cart.isNotEmpty()) {
                         Surface(
                             color = MaterialTheme.colorScheme.primary,
@@ -401,14 +560,43 @@ fun POSScreen(
         )
     }
 
+    groupQuantityFor?.let { group ->
+        QuantityDialog(
+            title = group.groupDisplayName,
+            subtitle = "Q ${group.groupUnitPrice.fmtMoney(2)} c/u",
+            onDismiss = { groupQuantityFor = null },
+            onConfirm = { qty ->
+                viewModel.addGroupToCart(group, qty)
+                groupQuantityFor = null
+            }
+        )
+    }
+
     if (paymentOpen) {
         PaymentDialog(
+            onDismiss = { paymentOpen = false; paymentDiscountAccount = null },
             total = viewModel.cartTotal(),
-            onDismiss = { paymentOpen = false },
-            onConfirm = { method, tendered ->
+            onConfirm = { method, tendered, bills ->
                 paymentOpen = false
                 cartSheetOpen = false
-                user?.let { viewModel.confirmSale(companyId, it, method, tendered) }
+                val discount = paymentDiscountAccount
+                paymentDiscountAccount = null
+                user?.let { viewModel.confirmSale(companyId, it, method, tendered, bills, discountAccount = discount) }
+            },
+            discountAccounts = creditState?.accounts.orEmpty()
+                .filter { it.isEmployee && it.active && it.cashDiscountEligible },
+            employeeDiscount = viewModel.employeeDiscountAmount(),
+            onDiscountChange = { paymentDiscountAccount = it },
+            // Una cuenta del restaurante en el carrito ya es venta cobrada: no se fía.
+            creditAccounts = creditState?.accounts
+                ?.takeIf { canSellOnCredit && state.cart.none { l -> l.isRestaurant } },
+            onConfirmCredit = { charge ->
+                paymentDiscountAccount = null
+                paymentOpen = false
+                cartSheetOpen = false
+                user?.let {
+                    viewModel.confirmSale(companyId, it, SalePaymentMethod.CREDIT, 0.0, emptyMap(), charge)
+                }
             }
         )
     }
@@ -442,8 +630,10 @@ fun POSScreen(
         )
     }
 
-    // Loading overlay durante el cobro (no durante carga inicial)
-    if (state.isLoading && state.session != null) {
+    // Solo durante el cobro. `isLoading` sube también al recargar la pantalla —al volver de
+    // anotar un gasto, por ejemplo— y entonces este diálogo mentía diciendo que se estaba
+    // procesando una venta.
+    if (state.isCheckingOut) {
         Dialog(
             onDismissRequest = {},
             properties = DialogProperties(
@@ -508,8 +698,67 @@ fun POSScreen(
             onCollect = { sale ->
                 user?.let { viewModel.collectPendingSale(companyId, sale, it) }
             },
-            onDismiss = { pendingSheetOpen = false }
+            onDismiss = { pendingSheetOpen = false },
+            inCartIds = state.cart.filter { it.isRestaurant }.map { it.pendingSaleId }.toSet(),
+            onAddToCart = { sale ->
+                viewModel.addPendingToCart(sale)
+                pendingSheetOpen = false
+            }
         )
+    }
+
+    if (creditCollectOpen && creditViewModel != null && creditState != null) {
+        CreditCollectDialog(
+            accounts = creditState.accounts,
+            movementsFor = { acc ->
+                creditState.movements.takeIf { creditState.selected?.id == acc.id && !creditState.isDetailLoading }
+            },
+            onSelectAccount = { acc -> creditViewModel.loadAccount(companyId, acc.id) },
+            isBusy = state.isCreditBusy,
+            onDismiss = { creditCollectOpen = false },
+            onConfirm = { acc, amount, method, tendered, bills ->
+                user?.let { viewModel.collectCreditPayment(companyId, it, acc, amount, method, tendered, bills) }
+            }
+        )
+    }
+    if (advanceOpen && creditState != null) {
+        EmployeeAdvanceDialog(
+            accounts = creditState.accounts,
+            cashAvailable = state.session?.expectedCashNow ?: 0.0,
+            isBusy = state.isCreditBusy,
+            onDismiss = { advanceOpen = false },
+            onConfirm = { acc, amount, note ->
+                user?.let { viewModel.giveEmployeeAdvance(companyId, it, acc, amount, note) }
+            }
+        )
+    }
+
+    if (lastCheckoutOpen) {
+        LastCheckoutDialog(
+            checkouts = state.recentCheckouts,
+            isLoading = state.isLoadingCheckouts,
+            onDismiss = { lastCheckoutOpen = false }
+        )
+    }
+
+    if (showIncome) {
+        state.session?.let { sess ->
+            user?.let { u ->
+                CashIncomeDialog(
+                    companyId = companyId,
+                    session = sess,
+                    currentUser = u,
+                    onDismiss = { showIncome = false },
+                    onSaved = {
+                        showIncome = false
+                        // Se recarga el POS porque el efectivo esperado de la sesión cambió,
+                        // y de ese número cuelga el tope de lo que se puede pagar de la caja.
+                        viewModel.load(companyId, sessionId)
+                    },
+                    viewModel = cashSessionViewModel
+                )
+            }
+        }
     }
 
     if (showTransfer && user != null) {
@@ -587,6 +836,98 @@ private fun FilterChipColored(
     }
 }
 
+/** Cantidades de un toque para el grupo de precio: lo que más se pide en el mostrador. */
+private val GROUP_QUICK_QUANTITIES = listOf(1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25)
+
+/**
+ * Cobro de un grupo de precio ("Pan Q0.50"): la cajera toca cuántos panes y no cuáles. Cada
+ * toque SUMA a la línea del carrito, así "10 + 5" se arma con dos toques; el ajuste fino va
+ * con los botones +/- del carrito.
+ */
+@Composable
+private fun GroupSellPanel(
+    group: POSCategory,
+    inCart: Double,
+    onAdd: (Double) -> Unit,
+    onOtherQuantity: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val color = runCatching { Color(("FF" + group.color.removePrefix("#")).toLong(16)) }
+        .getOrDefault(MaterialTheme.colorScheme.primary)
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = color),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(group.groupDisplayName, color = Color.White, fontWeight = FontWeight.ExtraBold,
+                         style = MaterialTheme.typography.titleLarge)
+                    Text("Q ${group.groupUnitPrice.fmtMoney(2)} c/u · ${group.productIds.size} tipos de pan",
+                         color = Color.White, style = MaterialTheme.typography.bodySmall)
+                }
+                if (inCart > 0) {
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text("En el carrito", color = Color.White,
+                             style = MaterialTheme.typography.labelSmall)
+                        Text("${inCart.fmtMoney(0)} · Q ${(inCart * group.groupUnitPrice).fmtMoney(2)}",
+                             color = Color.White, fontWeight = FontWeight.Bold,
+                             style = MaterialTheme.typography.titleMedium)
+                    }
+                }
+            }
+        }
+        Text("¿Cuántos panes?", style = MaterialTheme.typography.titleSmall,
+             fontWeight = FontWeight.SemiBold)
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(minSize = 96.dp),
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(GROUP_QUICK_QUANTITIES, key = { it }) { qty ->
+                Surface(
+                    onClick = { onAdd(qty.toDouble()) },
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = androidx.compose.foundation.BorderStroke(2.dp, color),
+                    tonalElevation = 2.dp,
+                    modifier = Modifier.height(84.dp)
+                ) {
+                    Column(
+                        Modifier.fillMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text("$qty", fontWeight = FontWeight.ExtraBold,
+                             style = MaterialTheme.typography.headlineMedium, color = color)
+                        Text("Q ${(qty * group.groupUnitPrice).fmtMoney(2)}",
+                             style = MaterialTheme.typography.labelMedium,
+                             color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+            item(key = "other") {
+                Surface(
+                    onClick = onOtherQuantity,
+                    shape = RoundedCornerShape(12.dp),
+                    color = color,
+                    modifier = Modifier.height(84.dp)
+                ) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("Otra cantidad", color = Color.White, fontWeight = FontWeight.Bold,
+                             textAlign = TextAlign.Center, modifier = Modifier.padding(6.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun ProductGrid(
     products: List<Product>,
@@ -595,9 +936,13 @@ private fun ProductGrid(
     totalCategoriesCount: Int,
     branchName: String,
     onProductClick: (Product) -> Unit,
+    groups: List<POSCategory> = emptyList(),
+    groupQtyInCart: Map<String, Double> = emptyMap(),
+    popularity: Map<String, Double> = emptyMap(),
+    onGroupClick: (POSCategory) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    if (products.isEmpty()) {
+    if (products.isEmpty() && groups.isEmpty()) {
         Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -658,13 +1003,99 @@ private fun ProductGrid(
         verticalArrangement = Arrangement.spacedBy(8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        items(products, key = { it.id }) { p ->
-            val line = cartByProductId[p.id]
-            ProductTile(
-                product = p,
-                quantityInCart = line?.quantity ?: 0.0,
-                onClick = { onProductClick(p) }
-            )
+        // Cada grupo entra en el orden por lo que se vende: su ficha va delante del primer
+        // producto que vende menos que él. `products` ya viene ordenado.
+        val sortedGroups = groups.sortedByDescending { popularity[groupSaleKey(it.id)] ?: 0.0 }
+        val tiles = buildList<Any> {
+            var gi = 0
+            products.forEach { p ->
+                val pRank = popularity[p.id] ?: 0.0
+                while (gi < sortedGroups.size &&
+                    (popularity[groupSaleKey(sortedGroups[gi].id)] ?: 0.0) >= pRank) {
+                    add(sortedGroups[gi++])
+                }
+                add(p)
+            }
+            while (gi < sortedGroups.size) add(sortedGroups[gi++])
+        }
+        items(tiles, key = { t -> if (t is Product) t.id else "grp_" + (t as POSCategory).id }) { t ->
+            if (t is POSCategory) {
+                GroupTile(
+                    group = t,
+                    quantityInCart = groupQtyInCart[t.id] ?: 0.0,
+                    onClick = { onGroupClick(t) }
+                )
+            } else {
+                val p = t as Product
+                val line = cartByProductId[p.id]
+                ProductTile(
+                    product = p,
+                    quantityInCart = line?.quantity ?: 0.0,
+                    onClick = { onProductClick(p) }
+                )
+            }
+        }
+    }
+}
+
+/** Ficha de un grupo de precio en "Todos": mismo tamaño que un producto, en su color. */
+@Composable
+private fun GroupTile(
+    group: POSCategory,
+    quantityInCart: Double,
+    onClick: () -> Unit
+) {
+    val color = runCatching { Color(("FF" + group.color.removePrefix("#")).toLong(16)) }
+        .getOrDefault(MaterialTheme.colorScheme.primary)
+    val selected = quantityInCart > 0
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(148.dp)
+            .then(if (selected) Modifier.border(3.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(10.dp)) else Modifier)
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(10.dp),
+        colors = CardDefaults.cardColors(containerColor = color),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (selected) 6.dp else 2.dp)
+    ) {
+        Box(Modifier.fillMaxSize()) {
+            Column(
+                Modifier.fillMaxSize().padding(8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    "Q ${group.groupUnitPrice.fmtMoney(2)}",
+                    color = Color.White,
+                    fontWeight = FontWeight.ExtraBold,
+                    style = MaterialTheme.typography.headlineSmall
+                )
+                Text(
+                    group.groupDisplayName,
+                    color = Color.White,
+                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.labelMedium,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (selected) {
+                Surface(
+                    color = Color.White,
+                    shape = CircleShape,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(26.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            quantityInCart.fmtMoney(0),
+                            color = color,
+                            fontWeight = FontWeight.ExtraBold,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -755,7 +1186,8 @@ private fun CartPanel(
     onCheckout: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val oversoldCount = cart.count { it.quantity > stockOf(it.productId) }
+    // El grupo de precio no tiene producto contra el cual comparar stock.
+    val oversoldCount = cart.count { !it.isGroup && !it.isRestaurant && it.quantity > stockOf(it.productId) }
     Column(modifier) {
         Text("Carrito", fontWeight = FontWeight.SemiBold,
              style = MaterialTheme.typography.titleSmall)
@@ -774,7 +1206,7 @@ private fun CartPanel(
                 items(cart, key = { it.key }) { line ->
                     CartLineRow(
                         line = line,
-                        available = stockOf(line.productId),
+                        available = if (line.isGroup || line.isRestaurant) Double.MAX_VALUE else stockOf(line.productId),
                         onIncrement = { onIncrement(line) },
                         onDecrement = { onDecrement(line) },
                         onRemove = { onRemoveLine(line.key) }
@@ -978,8 +1410,9 @@ private fun CartLineRow(
                     Icon(Icons.Default.Close, "Quitar", tint = MaterialTheme.colorScheme.error)
                 }
             }
-            Spacer(Modifier.height(4.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // Una cuenta del restaurante se cobra entera: no tiene cantidad que subir o bajar.
+            if (!line.isRestaurant) Spacer(Modifier.height(4.dp))
+            if (!line.isRestaurant) Row(verticalAlignment = Alignment.CenterVertically) {
                 FilledIconButton(
                     onClick = onDecrement,
                     modifier = Modifier.size(36.dp)

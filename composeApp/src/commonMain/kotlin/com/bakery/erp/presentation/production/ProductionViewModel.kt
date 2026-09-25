@@ -40,6 +40,13 @@ import com.bakery.erp.model.Product
 import com.bakery.erp.model.ProductionLot
 import com.bakery.erp.model.ProductionLotDecoration
 import com.bakery.erp.model.ProductionLotLine
+import com.bakery.erp.model.ProductionExtraReason
+import com.bakery.erp.model.ProductionWasteReason
+import com.bakery.erp.model.effectiveProducedQuantity
+import com.bakery.erp.model.kneadedQuantity
+import com.bakery.erp.model.quantityToKnead
+import com.bakery.erp.model.plantIngestQuantity
+import com.bakery.erp.model.plantIngestReason
 import com.bakery.erp.model.SourceOrderAllocation
 import com.bakery.erp.model.ProductionLotStatus
 import com.bakery.erp.model.ProductionOrder
@@ -151,6 +158,13 @@ data class ProductionUiState(
      * orden alfabético quedaban desperdigados por toda la lista.
      */
     val recipeRefByProductId: Map<String, RecipeRef> = emptyMap(),
+    /**
+     * "Seguimiento" del pedido abierto en el detalle: qué le tocó en cada turno, qué se
+     * empacó y qué contó la sucursal. [orderSupplyForId] dice de qué pedido es, para no
+     * mostrar el de otro mientras carga el nuevo.
+     */
+    val orderSupply: com.bakery.erp.model.BranchSupplyReport? = null,
+    val orderSupplyForId: String = "",
     val draftOrderLines: List<ProductionOrderLine> = emptyList(),
     /** Turnos activos de la planta productora seleccionada en el form. */
     val shiftsForSelectedProducingBranch: List<ProductionShift> = emptyList(),
@@ -322,6 +336,8 @@ data class ProductionUiState(
     val lateOrdersForLot: List<ProductionOrder> = emptyList(),
     val lateOrderLinesMap: Map<String, List<ProductionOrderLine>> = emptyMap(),
     val isAddingLateOrder: Boolean = false,
+    /** Guardando un ajuste de producción (merma o tanda extra). */
+    val isSavingAdjustment: Boolean = false,
 
     // ── Vista consolidada (tab "Por fecha") ───────────────────────────────────
     val consolidatedOrders: List<ProductionOrder> = emptyList(),
@@ -706,6 +722,242 @@ class ProductionViewModel(
         }
     }
 
+    /**
+     * Registra lo que le pasó al lote a media producción: pan perdido, o pan que hay
+     * que hacer de más. Ver `model/ProductionAdjustment.kt` para el porqué de los dos
+     * campos.
+     *
+     * Las cantidades **se SUMAN a lo ya registrado**, no lo reemplazan: si a las 5am se
+     * quemó una bandeja y a las 7am otra, son dos declaraciones del mismo turno y la
+     * segunda no puede borrar la primera. Por eso el mismo método sirve para el primer
+     * ajuste y para los siguientes, y por eso la UI muestra lo acumulado al abrirla.
+     *
+     * [wasteByLine] y [extraByLine] van por `lineId` y solo traen las líneas que el
+     * panadero tocó — una línea ausente queda intacta.
+     */
+    fun registerProductionAdjustment(
+        companyId: String,
+        lotId: String,
+        wasteByLine: Map<String, Double> = emptyMap(),
+        wasteReason: String = "",
+        wasteNotes: String = "",
+        extraByLine: Map<String, Double> = emptyMap(),
+        extraReason: String = "",
+        extraNotes: String = ""
+    ) {
+        val touched = (wasteByLine.filterValues { it > 0.0 }.keys +
+            extraByLine.filterValues { it > 0.0 }.keys)
+        if (touched.isEmpty()) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSavingAdjustment = true, error = null) }
+            runCatching {
+                val updated = _uiState.value.editableLotLines.map { line ->
+                    if (line.id !in touched) return@map line
+                    val addedWaste = wasteByLine[line.id]?.takeIf { it > 0.0 } ?: 0.0
+                    val addedExtra = extraByLine[line.id]?.takeIf { it > 0.0 } ?: 0.0
+                    line.copy(
+                        wasteQuantity = line.wasteQuantity + addedWaste,
+                        // El motivo del ajuste nuevo pisa al anterior solo si este
+                        // ajuste de verdad trae merma: una declaración de "hacer más"
+                        // no puede borrar el motivo de lo que se quemó hace dos horas.
+                        wasteReason = if (addedWaste > 0.0 && wasteReason.isNotBlank()) wasteReason
+                                      else line.wasteReason,
+                        wasteNotes = if (addedWaste > 0.0) mergeNote(line.wasteNotes, wasteNotes)
+                                     else line.wasteNotes,
+                        extraQuantity = line.extraQuantity + addedExtra,
+                        extraReason = if (addedExtra > 0.0 && extraReason.isNotBlank()) extraReason
+                                      else line.extraReason,
+                        extraNotes = if (addedExtra > 0.0) mergeNote(line.extraNotes, extraNotes)
+                                     else line.extraNotes,
+                        // Lo que se hace de más cambia cuánto pan va a haber, así que el
+                        // conteo anterior dejó de valer y hay que volver a confirmarlo.
+                        // La merma no: lo bueno que se contó sigue siendo lo bueno.
+                        producedCountConfirmed =
+                            if (addedExtra > 0.0) false else line.producedCountConfirmed
+                    )
+                }
+                // Se persiste de inmediato, sin esperar a "Iniciar" ni a "Completar":
+                // el pan quemado es un hecho ya ocurrido, y si el panadero sale de la
+                // pantalla sin tocar esos botones el consumo quedaría sin registrar.
+                // Mismo criterio que `confirmSpongeForGroup`.
+                updated.filter { it.id in touched }.forEach { line ->
+                    productionRepository.saveLotLine(companyId, lotId, line)
+                }
+                _uiState.update { it.copy(editableLotLines = updated) }
+            }.onSuccess {
+                _uiState.update { it.copy(isSavingAdjustment = false) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(isSavingAdjustment = false, error = err.message) }
+            }
+        }
+    }
+
+    /** Concatena notas sin perder la anterior: dos tandas quemadas, dos explicaciones. */
+    private fun mergeNote(existing: String, added: String): String = when {
+        added.isBlank() -> existing
+        existing.isBlank() -> added.trim()
+        else -> "$existing · ${added.trim()}"
+    }
+
+    /**
+     * Receta escalada a las cantidades que se van a amasar AHORA — la respuesta a
+     * "¿cuánta harina para reponer 40 panes de capa?", que es justo lo que el panadero
+     * no podía calcular y lo que dejaba la reposición sin hacer.
+     *
+     * Construye líneas sintéticas con esas cantidades y reusa
+     * [buildScaledRecipeViewForGroup]: un segundo cálculo paralelo dejaría esta receta
+     * mintiendo apenas se corrija algo en la principal — mismo criterio que
+     * `buildProductionOrderPrintData`.
+     *
+     * **La esponja se pone en cero** en las líneas sintéticas: la que ya se declaró se
+     * consumió en la amasada anterior, y descontar su aporte de esta tanda daría una
+     * receta corta justo en los ingredientes que la esponja aporta.
+     */
+    fun buildScaledRecipeForQuantities(
+        groupLines: List<ProductionLotLine>,
+        quantityByLineId: Map<String, Double>
+    ): ScaledRecipeView? {
+        val synthetic = groupLines.mapNotNull { line ->
+            val qty = quantityByLineId[line.id] ?: 0.0
+            if (qty <= 0.0) null
+            else line.copy(
+                plannedQuantity = qty,
+                producedQuantity = qty,
+                wasteQuantity = 0.0,
+                extraQuantity = 0.0,
+                spongeBatchId = "",
+                spongeGramsUsed = 0.0,
+                spongeConsumed = false
+            )
+        }
+        if (synthetic.isEmpty()) return null
+        return buildScaledRecipeViewForGroup(
+            lines = synthetic,
+            fallbackRecipeId = groupLines.firstOrNull()?.recipeId ?: "",
+            fallbackRecipeName = groupLines.firstOrNull()?.recipeName ?: ""
+        )
+    }
+
+    /**
+     * Recetas de los RELLENOS de masa cruda que llevan esos productos, escaladas a las
+     * mismas cantidades (ver [DoughFilling]).
+     *
+     * El Pan de Capa es masa de Capa por fuera con una bolita de Suave adentro: son DOS
+     * masas. Si se queman 40, no alcanza con saber cuánta hojaldre reponer — también
+     * hace falta la Suave de las 40 bolitas, y ésa sale de otra receta que el panadero
+     * amasa aparte. Sin esta lista, la hoja daba media respuesta y la otra media masa
+     * se hacía a ojo.
+     *
+     * Devuelve una vista por receta de relleno, ya agregada: si dos productos del grupo
+     * llevan bolita de la misma masa, es una sola amasada.
+     */
+    fun buildFillingRecipesForQuantities(
+        groupLines: List<ProductionLotLine>,
+        quantityByLineId: Map<String, Double>
+    ): List<ScaledRecipeView> {
+        // recipeId → gramos de masa que hay que sacar de esa receta.
+        val gramsByRecipe = HashMap<String, Double>()
+        val nameByRecipe = HashMap<String, String>()
+        for (line in groupLines) {
+            val qty = quantityByLineId[line.id] ?: 0.0
+            if (qty <= 0.0) continue
+            for (filling in line.doughFillingsSnapshot) {
+                if (filling.recipeId.isEmpty() || filling.rawWeightGrams <= 0.0) continue
+                gramsByRecipe[filling.recipeId] =
+                    (gramsByRecipe[filling.recipeId] ?: 0.0) + qty * filling.rawWeightGrams
+                nameByRecipe[filling.recipeId] = filling.recipeName
+            }
+        }
+        return gramsByRecipe.mapNotNull { (recipeId, grams) ->
+            // Se pasa como `extraDoughGrams` sobre una lista vacía de líneas: es
+            // exactamente la forma en que la masa de relleno ya se calcula en la
+            // tarjeta de su propia masa (una masa que nadie pidió y que existe solo
+            // por el relleno de otro producto). Reusar ese camino evita una segunda
+            // fórmula que después diverja.
+            buildScaledRecipeViewForGroup(
+                lines = emptyList(),
+                extraDoughGrams = grams,
+                fallbackRecipeId = recipeId,
+                fallbackRecipeName = nameByRecipe[recipeId].orEmpty()
+            )
+        }
+    }
+
+    /**
+     * Unidades pendientes de amasar por producción extra en esta masa, contando también
+     * las que le exigen los RELLENOS de productos de otras masas (las bolitas de Suave
+     * que piden los Pan de Capa extra).
+     *
+     * Es lo que decide si el panel ofrece la receta de "solo lo extra": sin extra no hay
+     * segunda receta que mirar y el selector sería una opción que no hace nada.
+     */
+    fun extraUnitsInGroup(
+        groupLines: List<ProductionLotLine>,
+        allLines: List<ProductionLotLine>,
+        recipeId: String
+    ): Double {
+        val own = groupLines.sumOf { it.extraQuantity }
+        val fromFillings = allLines.sumOf { line ->
+            line.extraQuantity * line.doughFillingsSnapshot
+                .filter { it.recipeId == recipeId }
+                .sumOf { it.rawWeightGrams }
+        }
+        // El aporte por relleno viene en gramos; solo interesa saber si hay algo.
+        return if (own > 0.0) own else if (fromFillings > 0.0) 1.0 else 0.0
+    }
+
+    /**
+     * Receta escalada **solo a la producción extra** de esta masa.
+     *
+     * Es la respuesta a "ya amasamos lo que pedían y ahora hay que hacer 100 más": el
+     * panel normal muestra el total del día (300), que es correcto si todavía no se
+     * amasó nada pero le miente a quien ya amasó 200 — pesaría de más. Las dos vistas
+     * conviven con un selector en vez de que el sistema adivine en qué momento va,
+     * porque no tiene cómo saberlo: no existe un estado "ya amasé".
+     *
+     * La esponja va en cero: la declarada se consumió en la amasada anterior, y
+     * descontar su aporte dejaría esta tanda corta justo en lo que la esponja aporta.
+     */
+    fun buildExtraOnlyRecipeForGroup(
+        groupLines: List<ProductionLotLine>,
+        allLines: List<ProductionLotLine>,
+        fallbackRecipeId: String,
+        fallbackRecipeName: String
+    ): ScaledRecipeView? {
+        val synthetic = groupLines.mapNotNull { line ->
+            if (line.extraQuantity <= 0.0) null
+            else line.copy(
+                plannedQuantity = line.extraQuantity,
+                producedQuantity = line.extraQuantity,
+                extraQuantity = 0.0,
+                wasteQuantity = 0.0,
+                spongeBatchId = "",
+                spongeGramsUsed = 0.0,
+                spongeConsumed = false
+            )
+        }
+        // Masa que esta receta tiene que dar para los rellenos de los productos EXTRA de
+        // otras masas. Sin esto, pedir 100 Pan de Capa de más mostraría la hojaldre pero
+        // no las 100 bolitas de Suave que llevan adentro.
+        val fillingGrams = allLines.sumOf { line ->
+            line.extraQuantity * line.doughFillingsSnapshot
+                .filter { it.recipeId == fallbackRecipeId }
+                .sumOf { it.rawWeightGrams }
+        }
+        if (synthetic.isEmpty() && fillingGrams <= 0.0) return null
+        return buildScaledRecipeViewForGroup(
+            lines = synthetic,
+            extraDoughGrams = fillingGrams,
+            fallbackRecipeId = fallbackRecipeId,
+            fallbackRecipeName = fallbackRecipeName
+        )
+    }
+
+    /** true si alguna línea del grupo ya tiene esponja confirmada: una tanda extra
+     *  necesita su propia esponja y eso no se calcula solo. */
+    fun groupHasConfirmedSponge(groupLines: List<ProductionLotLine>): Boolean =
+        groupLines.any { it.spongeConsumed && it.spongeGramsUsed > 0.0 }
+
     // ── Filtros ───────────────────────────────────────────────────────────────
 
     fun setOrderSearchQuery(query: String) { _uiState.update { it.copy(orderSearchQuery = query) } }
@@ -713,6 +965,29 @@ class ProductionViewModel(
     fun setLotDateFilter(date: Long?) { _uiState.update { it.copy(lotDateFilter = date) } }
 
     // ── Detalle de pedido ─────────────────────────────────────────────────────
+
+    /**
+     * Carga el seguimiento de un pedido con la misma lectura del reporte
+     * "Pedido vs. recibido", para que las dos pantallas no digan cosas distintas.
+     * Aparte de [loadOrderDetail]: son varias consultas y el detalle no las espera.
+     */
+    fun loadOrderSupply(companyId: String, order: ProductionOrder) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(orderSupply = null, orderSupplyForId = order.id) }
+            val data = runCatching {
+                com.bakery.erp.presentation.reports.branchsupply.loadBranchSupplyData(
+                    companyId = companyId,
+                    orders = listOf(order),
+                    productionRepository = productionRepository,
+                    dispatchRepository = dispatchRepository,
+                    soldByProduct = null
+                )
+            }.getOrNull() ?: return@launch
+            _uiState.update {
+                if (it.orderSupplyForId != order.id) it else it.copy(orderSupply = data.plants.firstOrNull()?.report)
+            }
+        }
+    }
 
     fun loadOrderDetail(companyId: String, orderId: String) {
         viewModelScope.launch {
@@ -1869,8 +2144,15 @@ class ProductionViewModel(
      * Cantidad efectiva de una línea: lo realmente producido si ya se registró,
      * si no lo planeado.
      */
-    private fun effectiveQuantity(line: ProductionLotLine): Double =
-        if (line.producedQuantity > 0.0) line.producedQuantity else line.plannedQuantity
+    /**
+     * Unidades de las que cuelga la receta escalada, el mínimo de amasada y el total
+     * que ve el panadero: lo bueno (o lo planeado si todavía no contó) **más lo que
+     * hay que hacer de más**.
+     *
+     * La merma NO se suma acá a propósito: lo quemado ya se amasó una vez, y sumarlo
+     * mostraría una amasada que nunca se hace de un solo golpe. Ver [quantityToKnead].
+     */
+    private fun effectiveQuantity(line: ProductionLotLine): Double = line.quantityToKnead()
 
     /** Masa (en gramos) que aporta una línea. 0 si le falta el peso en crudo. */
     fun doughGramsOf(line: ProductionLotLine): Double {
@@ -4052,9 +4334,12 @@ class ProductionViewModel(
                 // tenga receta/peso crudo resueltos (un producto sin receta puede llevar
                 // igual un relleno comprado).
                 for (line in activeLines) {
+                    // Sobre lo AMASADO, no sobre lo bueno: el pan que se quemó ya se
+                    // había formado y rellenado, así que su relleno se consumió igual.
+                    val kneaded = line.kneadedQuantity(fallbackToPlanned = false)
                     for (deco in line.decorationsSnapshot) {
                         if (!deco.isIngredientSourced || deco.gramsPerUnit <= 0.0) continue
-                        val grams = deco.gramsPerUnit * line.producedQuantity
+                        val grams = deco.gramsPerUnit * kneaded
                         if (grams <= 0.0) continue
                         aggregatedGramsByIngredient[deco.ingredientId] =
                             (aggregatedGramsByIngredient[deco.ingredientId] ?: 0.0) + grams
@@ -4081,7 +4366,13 @@ class ProductionViewModel(
                         val components = fillingRecipe.allComponents
                         val sumPercentages = components.sumOf { it.percentage }
                         if (components.none { it.isBase } || sumPercentages <= 0.0) continue
-                        val totalRawGrams = line.producedQuantity * filling.rawWeightGrams
+                        // Igual que arriba: un Pan de Capa que se quemó ya llevaba su
+                        // bolita de Suave adentro. Contar solo lo bueno dejaba esa masa
+                        // sin descontar — el caso más fácil de pasar por alto, porque el
+                        // producto que se arruinó se hace de DOS masas y solo una estaba
+                        // saliendo bien de la cuenta.
+                        val totalRawGrams =
+                            line.kneadedQuantity(fallbackToPlanned = false) * filling.rawWeightGrams
                         val baseWeight = totalRawGrams * 100.0 / sumPercentages
                         for (component in components) {
                             val grams = (component.percentage / 100.0) * baseWeight
@@ -4158,7 +4449,8 @@ class ProductionViewModel(
                             // con la receta (aggregatedGramsByIngredient) — acá solo van
                             // los que preparamos nosotros, que sí viven en un batch.
                             if (deco.isIngredientSourced || deco.gramsPerUnit <= 0.0) continue
-                            val totalGrams = deco.gramsPerUnit * line.producedQuantity
+                            val totalGrams =
+                                deco.gramsPerUnit * line.kneadedQuantity(fallbackToPlanned = false)
                             if (totalGrams <= 0.0) continue
                             if (deco.batchId.isEmpty()) {
                                 // Antes esto fallaba en silencio: se producía el pan y el
@@ -4190,7 +4482,11 @@ class ProductionViewModel(
                 //     ninguna sucursal. No van en ninguna nota de despacho (esas
                 //     salen de los pedidos fuente), así que sin este paso el pan
                 //     desaparecería de los libros. Entra al terminado de la planta.
-                activeLines.filter { it.plantRetainedQuantity > 0.0 }.forEach { line ->
+                //     Lo mismo vale para la producción EXTRA (el encargo que llegó a
+                //     media mañana): es pan horneado que tampoco va en ninguna nota.
+                //     Las dos razones se suman en `plantIngestQuantity` para que haya
+                //     un solo lugar que ingresa a la planta y no dos que puedan divergir.
+                activeLines.filter { it.plantIngestQuantity() > 0.0 }.forEach { line ->
                     runCatching {
                         finishedStockRepository.applyMovement(
                             companyId,
@@ -4200,10 +4496,10 @@ class ProductionViewModel(
                                 branchId = lot.producingBranchId,
                                 branchName = lot.producingBranchName,
                                 type = FinishedMovementType.AJUSTE,
-                                quantity = line.plantRetainedQuantity,
+                                quantity = line.plantIngestQuantity(),
                                 referenceType = FinishedMovementReference.ADJUSTMENT,
                                 referenceId = lot.id,
-                                reason = "Excedente por mínimo de amasada (${line.recipeName})",
+                                reason = line.plantIngestReason(),
                                 createdByUserId = currentUser.id,
                                 createdByUserName = currentUser.displayName.ifEmpty { currentUser.email },
                                 createdAt = now
@@ -4211,8 +4507,8 @@ class ProductionViewModel(
                         )
                     }.onFailure {
                         warnings.add(
-                            "${line.productName}: no se pudo ingresar el excedente " +
-                                "retenido al stock de la planta — ${it.message}"
+                            "${line.productName}: no se pudo ingresar al stock de la " +
+                                "planta el pan horneado de más — ${it.message}"
                         )
                     }
                 }
@@ -4494,7 +4790,12 @@ class ProductionViewModel(
     ): Map<String, Double> {
         // Fallback al producto si la línea no tiene peso (lotes legacy con timing bug).
         val rawWeightGrams = effectiveRawWeightGrams(line) ?: return emptyMap()
-        if (line.producedQuantity <= 0.0 || rawWeightGrams <= 0.0) return emptyMap()
+        // Lo que se AMASÓ, no lo que salió bueno: el pan que se quemó gastó su harina
+        // igual, y el que se hizo de más por un encargo también. Sin esto el faltante
+        // aparecía después en el conteo físico sin nada que lo explicara.
+        // `fallbackToPlanned = false` porque acá ya hubo conteo obligatorio.
+        val kneaded = line.kneadedQuantity(fallbackToPlanned = false)
+        if (kneaded <= 0.0 || rawWeightGrams <= 0.0) return emptyMap()
 
         // Receta plana: usar allComponents (incluye fallback de stages legacy).
         val components = recipe.allComponents
@@ -4502,7 +4803,7 @@ class ProductionViewModel(
         val sumPercentages = components.sumOf { it.percentage }
         if (sumPercentages <= 0.0) return emptyMap()
 
-        val totalRawGrams = line.producedQuantity * rawWeightGrams
+        val totalRawGrams = kneaded * rawWeightGrams
         val baseWeight = totalRawGrams * 100.0 / sumPercentages
         val result = mutableMapOf<String, Double>()
         for (component in components) {

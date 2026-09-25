@@ -1,5 +1,11 @@
 ﻿package com.bakery.erp.presentation.employees
 
+import com.bakery.erp.util.fmtDate
+import com.bakery.erp.model.PayrollStatus
+import com.bakery.erp.model.payrollCreditMovementId
+import com.bakery.erp.model.employeeCreditAccountId
+import com.bakery.erp.model.CreditMovementType
+import com.bakery.erp.model.CreditMovement
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bakery.erp.domain.AttendanceRepository
@@ -26,6 +32,11 @@ import kotlinx.coroutines.launch
 import kotlin.time.Clock
 
 data class EmployeeUiState(
+    /**
+     * Lo que el colaborador debe hoy en su cuenta de crédito (compras fiadas + adelantos).
+     * La planilla nueva lo propone como descuento. `null` = todavía no se leyó.
+     */
+    val employeeCreditBalance: Double? = null,
     val employees: List<Employee> = emptyList(),
     val selectedEmployee: Employee? = null,
     val branches: List<Branch> = emptyList(),
@@ -76,7 +87,9 @@ class EmployeeViewModel(
     private val jobPositionRepository: JobPositionRepository,
     private val documentRepository: EmployeeDocumentRepository,
     private val authRepository: AuthRepository,
-    private val historyRepository: EmployeeHistoryRepository
+    private val historyRepository: EmployeeHistoryRepository,
+    /** El descuento de créditos y adelantos en la planilla se escribe en la cuenta del colaborador. */
+    private val creditRepository: com.bakery.erp.domain.CreditRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(EmployeeUiState())
@@ -313,18 +326,65 @@ class EmployeeViewModel(
         _uiState.update { it.copy(selectedPayroll = record) }
     }
 
+    fun loadEmployeeCreditBalance(companyId: String, employeeId: String) {
+        viewModelScope.launch {
+            val balance = runCatching {
+                creditRepository.getAccount(companyId, employeeCreditAccountId(employeeId))?.balance ?: 0.0
+            }.getOrNull()
+            _uiState.update { it.copy(employeeCreditBalance = balance) }
+        }
+    }
+
     fun savePayroll(companyId: String, employeeId: String, record: PayrollRecord) {
         viewModelScope.launch {
             _uiState.update { it.copy(isPayrollLoading = true, error = null) }
-            runCatching { payrollRepository.savePayroll(companyId, employeeId, record) }
+            runCatching {
+                val saved = payrollRepository.savePayroll(companyId, employeeId, record)
+                syncPayrollCreditDeduction(companyId, employeeId, saved)
+                saved
+            }
                 .onSuccess { _uiState.update { it.copy(isPayrollLoading = false, isPayrollSaved = true) } }
                 .onFailure { err -> _uiState.update { it.copy(isPayrollLoading = false, error = err.message) } }
         }
     }
 
+    /**
+     * El descuento de "Créditos y adelantos" de una planilla PAGADA baja la deuda de la cuenta.
+     * Se escribe con id fijo por planilla: corregir la planilla corrige el mismo renglón en vez
+     * de duplicarlo, y devolverla a borrador o borrarla lo quita. Mientras no esté pagada no
+     * se descuenta — el dinero todavía no se le retuvo.
+     */
+    private suspend fun syncPayrollCreditDeduction(companyId: String, employeeId: String, payroll: PayrollRecord) {
+        val accountId = employeeCreditAccountId(employeeId)
+        val movementId = payrollCreditMovementId(payroll.id)
+        if (payroll.status == PayrollStatus.PAID && payroll.advances > 0.0) {
+            val employee = _uiState.value.selectedEmployee?.takeIf { it.id == employeeId }
+                ?: employeeRepository.getEmployee(companyId, employeeId)
+                ?: return
+            val account = creditRepository.ensureEmployeeAccount(companyId, employee)
+            creditRepository.setMovement(companyId, CreditMovement(
+                id = movementId,
+                accountId = account.id,
+                accountName = account.name,
+                type = CreditMovementType.PAYROLL_DEDUCTION,
+                amount = -payroll.advances,
+                payrollId = payroll.id,
+                description = "Planilla ${payroll.periodStart.fmtDate()} – ${payroll.periodEnd.fmtDate()}",
+                createdAt = payroll.paymentDate.takeIf { it > 0 } ?: 0L
+            ))
+        } else {
+            creditRepository.deleteMovement(companyId, accountId, movementId)
+        }
+    }
+
     fun deletePayroll(companyId: String, employeeId: String, payrollId: String) {
         viewModelScope.launch {
-            runCatching { payrollRepository.deletePayroll(companyId, employeeId, payrollId) }
+            runCatching {
+                payrollRepository.deletePayroll(companyId, employeeId, payrollId)
+                // Sin planilla no hubo descuento: la deuda vuelve.
+                creditRepository.deleteMovement(companyId, employeeCreditAccountId(employeeId),
+                    payrollCreditMovementId(payrollId))
+            }
                 .onSuccess {
                     _uiState.update { state ->
                         state.copy(

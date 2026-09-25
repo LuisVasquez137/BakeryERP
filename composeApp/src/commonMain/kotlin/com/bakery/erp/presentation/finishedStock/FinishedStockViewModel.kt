@@ -4,6 +4,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bakery.erp.domain.BranchRepository
 import com.bakery.erp.domain.FinishedStockRepository
+import com.bakery.erp.domain.IngredientRepository
+import com.bakery.erp.domain.ProductRepository
+import com.bakery.erp.model.Product
+import com.bakery.erp.model.StoreInventoryRow
+import com.bakery.erp.model.buildStoreInventoryRows
+import com.bakery.erp.model.finishedStockDocId
+import com.bakery.erp.model.isIngredientBacked
 import com.bakery.erp.model.Branch
 import com.bakery.erp.model.BranchCapability
 import com.bakery.erp.model.FinishedMovementReference
@@ -23,7 +30,15 @@ import kotlinx.coroutines.launch
 data class FinishedStockUiState(
     val branches: List<Branch> = emptyList(),
     val selectedBranchId: String = "",
+    /**
+     * Documentos de stock de la sucursal MÁS un registro en 0 por cada producto de reventa que
+     * todavía no tuvo movimiento. Los ceros van acá y no solo en [rows] porque el formulario de
+     * ajuste elige producto de esta lista: sin ellos no habría forma de cargar el conteo inicial
+     * de las gaseosas que ya estaban en el estante antes de usar el sistema.
+     */
     val stocks: List<FinishedProductStock> = emptyList(),
+    /** Lo que muestra la lista. Ver `buildStoreInventoryRows`. */
+    val rows: List<StoreInventoryRow> = emptyList(),
     val movements: List<FinishedStockMovement> = emptyList(),
     val isLoading: Boolean = false,
     val isMovementsLoading: Boolean = false,
@@ -33,8 +48,15 @@ data class FinishedStockUiState(
 
 class FinishedStockViewModel(
     private val repository: FinishedStockRepository,
-    private val branchRepository: BranchRepository
+    private val branchRepository: BranchRepository,
+    // El catálogo de reventa decide qué se lista aunque no tenga stock, y el insumo vinculado
+    // (huevo por docena) da el número de los productos que no llevan inventario propio.
+    private val productRepository: ProductRepository,
+    private val ingredientRepository: IngredientRepository
 ) : ViewModel() {
+
+    private var products: List<Product> = emptyList()
+    private var productsCompanyId: String = ""
 
     private val _uiState = MutableStateFlow(FinishedStockUiState())
     val uiState: StateFlow<FinishedStockUiState> = _uiState.asStateFlow()
@@ -83,13 +105,39 @@ class FinishedStockViewModel(
         observeJob?.cancel()
         observeJob = viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
+            // Una lectura por apertura, no un listener: el catálogo y el stock de insumos
+            // cambian poco mientras se mira esta pantalla, y el número que sí se mueve en vivo
+            // —el terminado— sigue llegando por el snapshot de abajo. Se relee en cada
+            // apertura y no se cachea: el VM es singleton, y un producto de reventa dado de
+            // alta después no aparecería hasta reiniciar la app.
+            products = runCatching { productRepository.getProducts(companyId) }
+                .getOrElse { if (productsCompanyId == companyId) products else emptyList() }
+            productsCompanyId = companyId
+            val ingredientStock = if (products.any { !it.isInHouseProduced && it.isIngredientBacked }) {
+                runCatching { ingredientRepository.getBranchStocksForBranch(companyId, branchId) }
+                    .getOrElse { emptyMap() }
+            } else emptyMap()
+            val branchName = _uiState.value.branches.firstOrNull { it.id == branchId }?.name.orEmpty()
             repository.observeStocksForBranch(companyId, branchId)
                 .catch { e -> _uiState.update { it.copy(isLoading = false, error = e.message) } }
                 .collect { list ->
+                    val withDoc = list.mapTo(HashSet()) { it.productId }
+                    val zeros = products
+                        .filter { !it.isInHouseProduced && it.active && !it.isIngredientBacked && it.id !in withDoc }
+                        .map {
+                            FinishedProductStock(
+                                id = finishedStockDocId(branchId, it.id),
+                                branchId = branchId,
+                                branchName = branchName,
+                                productId = it.id,
+                                productName = it.name
+                            )
+                        }
                     _uiState.update {
                         it.copy(
                             isLoading = false,
-                            stocks = list.sortedBy { s -> s.productName }
+                            stocks = (list + zeros).sortedBy { s -> s.productName },
+                            rows = buildStoreInventoryRows(list, products, ingredientStock)
                         )
                     }
                 }

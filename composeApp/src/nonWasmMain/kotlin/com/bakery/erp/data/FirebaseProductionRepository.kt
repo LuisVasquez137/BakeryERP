@@ -16,6 +16,7 @@ import com.bakery.erp.model.withoutOrder
 import com.bakery.erp.model.ProductionLot
 import com.bakery.erp.model.ProductionLotDecoration
 import com.bakery.erp.model.ProductionLotLine
+import com.bakery.erp.model.summarizeProductionWaste
 import com.bakery.erp.model.ProductionLotStatus
 import com.bakery.erp.model.CustomerLineRef
 import com.bakery.erp.model.ProductionOrder
@@ -821,6 +822,10 @@ class FirebaseProductionRepository(
         val plannedTotal = linesByLot.values.flatten().sumOf { it.plannedQuantity }
         val producedTotal = linesByLot.values.flatten().sumOf { it.producedQuantity }
         val completedCount = lots.count { it.status == ProductionLotStatus.COMPLETED }
+        val allLines = linesByLot.values.flatten()
+        val wasteTotal = allLines.sumOf { it.wasteQuantity }
+        val extraTotal = allLines.sumOf { it.extraQuantity }
+        val wasteByProduct = summarizeProductionWaste(allLines)
 
         val byShift = lots.groupBy { it.shiftId to it.shiftName }
             .map { (key, ls) ->
@@ -883,6 +888,9 @@ class FirebaseProductionRepository(
             completedLotsCount = completedCount,
             plannedTotal = plannedTotal,
             producedTotal = producedTotal,
+            wasteTotal = wasteTotal,
+            extraTotal = extraTotal,
+            wasteByProduct = wasteByProduct,
             efficiencyPct = if (plannedTotal > 0) producedTotal / plannedTotal * 100.0 else 0.0,
             lateOrderCount = lateOrderCount,
             byShift = byShift,
@@ -1064,6 +1072,12 @@ class FirebaseProductionRepository(
         "plannedQuantity" to plannedQuantity,
         "producedQuantity" to producedQuantity,
         "producedCountConfirmed" to producedCountConfirmed,
+        "wasteQuantity" to wasteQuantity,
+        "wasteReason" to wasteReason,
+        "wasteNotes" to wasteNotes,
+        "extraQuantity" to extraQuantity,
+        "extraReason" to extraReason,
+        "extraNotes" to extraNotes,
         "recipeId" to recipeId,
         "recipeName" to recipeName,
         "plantRetainedQuantity" to plantRetainedQuantity,
@@ -1131,6 +1145,12 @@ class FirebaseProductionRepository(
         plannedQuantity = runCatching { get<Double?>("plannedQuantity") }.getOrNull() ?: 0.0,
         producedQuantity = runCatching { get<Double?>("producedQuantity") }.getOrNull() ?: 0.0,
         producedCountConfirmed = runCatching { get<Boolean?>("producedCountConfirmed") }.getOrNull() ?: false,
+        wasteQuantity = runCatching { get<Double?>("wasteQuantity") }.getOrNull() ?: 0.0,
+        wasteReason = get<String?>("wasteReason") ?: "",
+        wasteNotes = get<String?>("wasteNotes") ?: "",
+        extraQuantity = runCatching { get<Double?>("extraQuantity") }.getOrNull() ?: 0.0,
+        extraReason = get<String?>("extraReason") ?: "",
+        extraNotes = get<String?>("extraNotes") ?: "",
         recipeId = get<String?>("recipeId") ?: "",
         recipeName = get<String?>("recipeName") ?: "",
         plantRetainedQuantity = runCatching {

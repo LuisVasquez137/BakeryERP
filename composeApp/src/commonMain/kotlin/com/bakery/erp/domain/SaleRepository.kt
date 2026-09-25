@@ -1,6 +1,7 @@
 package com.bakery.erp.domain
 
 import com.bakery.erp.domain.report.SalesSummary
+import com.bakery.erp.model.CheckoutPayment
 import com.bakery.erp.model.Sale
 import com.bakery.erp.model.SaleLine
 import kotlinx.coroutines.flow.Flow
@@ -94,7 +95,13 @@ interface SaleRepository {
         registerId: String,
         registerName: String,
         cashierId: String,
-        cashierName: String
+        cashierName: String,
+        /**
+         * Presente cuando la cuenta se cobró desde el carrito junto con otras cosas: la
+         * venta queda con el método y los datos del pago de ESE cobro. Null = el mesero
+         * entregó el dinero y solo se registra que entró a esta gaveta.
+         */
+        checkout: CheckoutPayment? = null
     ): Sale
 
     /**

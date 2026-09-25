@@ -7,12 +7,17 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -20,14 +25,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.Branch
 import com.bakery.erp.model.POSCategory
 import com.bakery.erp.model.POS_CATEGORY_COLORS
 import com.bakery.erp.model.POS_CATEGORY_NAME_MAX_CHARS
 import com.bakery.erp.model.Product
+import com.bakery.erp.model.groupDisplayName
+import com.bakery.erp.model.matchesGroupPrice
+import com.bakery.erp.model.productCategoryConflicts
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.ui.AdaptiveContainer
+import com.bakery.erp.ui.theme.BrandColors
+import com.bakery.erp.util.fmt
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -48,6 +59,9 @@ fun POSCategoryFormScreen(
     LaunchedEffect(companyId, categoryId) {
         if (companyId.isNotEmpty() && user != null) {
             if (state.products.isEmpty() || state.branches.isEmpty()) viewModel.load(companyId, user)
+            // Las categorías hay que tenerlas al día: de ellas sale qué productos ya están
+            // usados y no se ofrecen acá.
+            else viewModel.refreshCategories(companyId)
             if (categoryId != null) viewModel.loadCategory(companyId, categoryId) else viewModel.clearSelected()
         }
     }
@@ -96,7 +110,9 @@ fun POSCategoryFormScreen(
                 existing = if (isEdit) state.selectedCategory else null,
                 products = state.products,
                 branches = state.branches,
-                onSave = { c -> viewModel.saveCategory(companyId, c) }
+                allCategories = state.categories,
+                isSaving = state.isLoading,
+                onSave = { c, moved -> viewModel.saveCategory(companyId, c, moved) }
             )
         }
     }
@@ -108,21 +124,55 @@ private fun POSCategoryFormContent(
     existing: POSCategory?,
     products: List<Product>,
     branches: List<Branch>,
-    onSave: (POSCategory) -> Unit
+    allCategories: List<POSCategory>,
+    isSaving: Boolean,
+    onSave: (POSCategory, Set<String>) -> Unit
 ) {
     var name by rememberSaveable { mutableStateOf(existing?.name.orEmpty()) }
     var color by rememberSaveable { mutableStateOf(existing?.color ?: POS_CATEGORY_COLORS.first()) }
     var sortOrderText by rememberSaveable { mutableStateOf(existing?.sortOrder?.toString() ?: "0") }
     var active by rememberSaveable { mutableStateOf(existing?.active ?: true) }
+    var sellAsGroup by rememberSaveable { mutableStateOf(existing?.sellAsGroup ?: false) }
+    var groupPriceText by rememberSaveable {
+        mutableStateOf(existing?.groupUnitPrice?.takeIf { it > 0 }?.fmt(2) ?: "")
+    }
+    var groupLabel by rememberSaveable { mutableStateOf(existing?.groupLabel.orEmpty()) }
+    var search by rememberSaveable { mutableStateOf("") }
+    var showOthers by rememberSaveable { mutableStateOf(false) }
     var selectedProducts by remember {
         mutableStateOf(existing?.productIds?.toSet() ?: emptySet())
     }
     var selectedBranches by remember {
         mutableStateOf(existing?.branchIds?.toSet() ?: emptySet())
     }
+    // Productos traídos a propósito desde otra categoría: al guardar se quitan de aquélla.
+    var movedProducts by remember { mutableStateOf(emptySet<String>()) }
 
     val nameTooLong = name.length > POS_CATEGORY_NAME_MAX_CHARS
     val nameEmpty = name.trim().isEmpty()
+    val groupPrice = groupPriceText.replace(',', '.').toDoubleOrNull() ?: 0.0
+
+    // Qué productos ya tiene OTRA categoría que se muestra en alguna sucursal en común.
+    val draftForConflicts = (existing ?: POSCategory()).copy(branchIds = selectedBranches.toList())
+    val conflicts = remember(allCategories, selectedBranches, existing?.id) {
+        productCategoryConflicts(draftForConflicts, allCategories)
+    }
+    val normalizedSearch = search.trim().lowercase()
+    fun matchesSearch(p: Product) = normalizedSearch.isEmpty() || p.name.lowercase().contains(normalizedSearch)
+
+    // Libres o ya de esta categoría (incluidos los que se trajeron de otra).
+    val available = products.filter { it.id !in conflicts || it.id in selectedProducts }
+        .filter(::matchesSearch)
+    val inOthers = products.filter { it.id in conflicts && it.id !in selectedProducts }
+        .filter(::matchesSearch)
+
+    fun priceMismatch(p: Product) = sellAsGroup && groupPrice > 0 && !matchesGroupPrice(p.salePrice, groupPrice)
+    val selectedMismatched = products.filter { it.id in selectedProducts && priceMismatch(it) }
+    val groupInvalid = sellAsGroup && (groupPrice <= 0.0 || selectedMismatched.isNotEmpty())
+
+    fun toggle(p: Product) {
+        selectedProducts = if (p.id in selectedProducts) selectedProducts - p.id else selectedProducts + p.id
+    }
 
     Column(
         modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -131,8 +181,8 @@ private fun POSCategoryFormContent(
         OutlinedTextField(
             value = name,
             onValueChange = { name = it },
-            label = { Text("Nombre corto (máx $POS_CATEGORY_NAME_MAX_CHARS letras)") },
-            placeholder = { Text("Ej. Peq., Esp., Bebi.") },
+            label = { Text("Nombre (máx $POS_CATEGORY_NAME_MAX_CHARS letras)") },
+            placeholder = { Text("Ej. Pan dulce, Bebidas, Q0.50") },
             singleLine = true,
             isError = nameTooLong,
             supportingText = {
@@ -166,39 +216,124 @@ private fun POSCategoryFormContent(
             }
         }
 
+        GroupSellSection(
+            sellAsGroup = sellAsGroup,
+            onSellAsGroupChange = {
+                sellAsGroup = it
+                // El caso de uso que lo motivó: la mayoría del pan cuesta Q0.50.
+                if (it && groupPriceText.isBlank()) groupPriceText = "0.50"
+            },
+            priceText = groupPriceText,
+            onPriceChange = { groupPriceText = it.filter { c -> c.isDigit() || c == '.' || c == ',' } },
+            label = groupLabel,
+            onLabelChange = { groupLabel = it },
+            previewName = POSCategory(groupUnitPrice = groupPrice, groupLabel = groupLabel).groupDisplayName,
+            mismatchedNames = selectedMismatched.map { it.name }
+        )
+
         Text(
             "Productos de la categoría (${selectedProducts.size})",
             style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold
         )
+        OutlinedTextField(
+            value = search,
+            onValueChange = { search = it },
+            placeholder = { Text("Buscar producto") },
+            leadingIcon = { Icon(Icons.Default.Search, null) },
+            trailingIcon = {
+                if (search.isNotEmpty()) IconButton(onClick = { search = "" }) {
+                    Icon(Icons.Default.Clear, "Limpiar")
+                }
+            },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
             Column(Modifier.padding(8.dp)) {
-                products.forEach { p ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth().clickable {
-                            selectedProducts = if (p.id in selectedProducts)
-                                selectedProducts - p.id else selectedProducts + p.id
-                        }.padding(vertical = 4.dp)
-                    ) {
-                        Checkbox(
-                            checked = p.id in selectedProducts,
-                            onCheckedChange = { checked ->
-                                selectedProducts = if (checked) selectedProducts + p.id
-                                                   else selectedProducts - p.id
+                // Los ya elegidos arriba: con una lista larga, lo que interesa ver primero es
+                // qué tiene la categoría.
+                available.sortedBy { if (it.id in selectedProducts) 0 else 1 }.forEach { p ->
+                    val mismatch = priceMismatch(p)
+                    val checked = p.id in selectedProducts
+                    // Un producto con otro precio no se puede agregar a un grupo, pero si ya
+                    // estaba se deja destildar para corregirlo.
+                    val enabled = !mismatch || checked
+                    ProductCheckRow(
+                        product = p,
+                        checked = checked,
+                        enabled = enabled,
+                        note = when {
+                            mismatch -> "Cuesta Q ${p.salePrice.fmt(2)} — no es del grupo"
+                            p.id in movedProducts -> "Se quitará de ${conflicts[p.id]?.name.orEmpty()}"
+                            else -> null
+                        },
+                        noteIsWarning = mismatch,
+                        onToggle = {
+                            toggle(p)
+                            if (checked && p.id in movedProducts) movedProducts = movedProducts - p.id
+                        }
+                    )
+                }
+                if (available.isEmpty()) {
+                    Text(
+                        if (normalizedSearch.isEmpty()) "Todos los productos ya están en otra categoría"
+                        else "Ningún producto libre coincide con \"$search\"",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(8.dp)
+                    )
+                }
+            }
+        }
+
+        if (inOthers.isNotEmpty()) {
+            Surface(
+                onClick = { showOthers = !showOthers },
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Info, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "${inOthers.size} producto(s) ya están en otras categorías",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Icon(if (showOthers) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null)
+                }
+            }
+            if (showOthers) {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                    Column(Modifier.padding(8.dp)) {
+                        inOthers.forEach { p ->
+                            val owner = conflicts[p.id]
+                            val mismatch = priceMismatch(p)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp, horizontal = 4.dp)
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(p.name, style = MaterialTheme.typography.bodyMedium)
+                                    Text(
+                                        if (mismatch) "En ${owner?.name.orEmpty()} · cuesta Q ${p.salePrice.fmt(2)}"
+                                        else "En ${owner?.name.orEmpty()}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.outline
+                                    )
+                                }
+                                TextButton(
+                                    onClick = {
+                                        selectedProducts = selectedProducts + p.id
+                                        movedProducts = movedProducts + p.id
+                                    },
+                                    enabled = !mismatch
+                                ) { Text("Mover aquí") }
                             }
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(p.name, style = MaterialTheme.typography.bodyMedium)
-                            Text(p.category, style = MaterialTheme.typography.labelSmall,
-                                 color = MaterialTheme.colorScheme.outline)
                         }
                     }
-                }
-                if (products.isEmpty()) {
-                    Text("Sin productos disponibles", style = MaterialTheme.typography.bodySmall,
-                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                         modifier = Modifier.padding(8.dp))
                 }
             }
         }
@@ -246,14 +381,119 @@ private fun POSCategoryFormContent(
                         branchIds = selectedBranches.toList(),
                         color = color,
                         sortOrder = order,
-                        active = active
-                    )
+                        active = active,
+                        sellAsGroup = sellAsGroup,
+                        groupUnitPrice = if (sellAsGroup) groupPrice else 0.0,
+                        groupLabel = if (sellAsGroup) groupLabel.trim() else ""
+                    ),
+                    movedProducts.intersect(selectedProducts)
                 )
             },
-            enabled = !nameEmpty && !nameTooLong && selectedProducts.isNotEmpty(),
+            enabled = !isSaving && !nameEmpty && !nameTooLong && selectedProducts.isNotEmpty() && !groupInvalid,
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("Guardar")
+        }
+    }
+}
+
+@Composable
+private fun ProductCheckRow(
+    product: Product,
+    checked: Boolean,
+    enabled: Boolean,
+    note: String?,
+    noteIsWarning: Boolean,
+    onToggle: () -> Unit
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onToggle)
+            .padding(vertical = 4.dp)
+    ) {
+        Checkbox(checked = checked, onCheckedChange = { onToggle() }, enabled = enabled)
+        Spacer(Modifier.width(6.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                product.name,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline
+            )
+            Text(
+                note ?: "${product.category} · Q ${product.salePrice.fmt(2)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (noteIsWarning) BrandColors.AccentDeep else MaterialTheme.colorScheme.outline
+            )
+        }
+    }
+}
+
+@Composable
+private fun GroupSellSection(
+    sellAsGroup: Boolean,
+    onSellAsGroupChange: (Boolean) -> Unit,
+    priceText: String,
+    onPriceChange: (String) -> Unit,
+    label: String,
+    onLabelChange: (String) -> Unit,
+    previewName: String,
+    mismatchedNames: List<String>
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = if (sellAsGroup) BrandColors.AccentSoft else MaterialTheme.colorScheme.surfaceVariant
+        ),
+        shape = RoundedCornerShape(10.dp)
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Cobrar como un solo botón", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "La cajera teclea cuántos panes, no cuáles. El conteo de cierre reparte " +
+                            "lo vendido entre estos panes según lo que falta de cada uno.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Switch(checked = sellAsGroup, onCheckedChange = onSellAsGroupChange)
+            }
+            if (sellAsGroup) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = priceText,
+                        onValueChange = onPriceChange,
+                        label = { Text("Precio c/u (Q)") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = label,
+                        onValueChange = onLabelChange,
+                        label = { Text("Nombre en el ticket") },
+                        placeholder = { Text(previewName) },
+                        singleLine = true,
+                        modifier = Modifier.weight(1.4f)
+                    )
+                }
+                Text(
+                    "Solo se pueden elegir productos que cuesten exactamente ese precio.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (mismatchedNames.isNotEmpty()) {
+                    Text(
+                        "Tienen otro precio y hay que quitarlos: ${mismatchedNames.take(4).joinToString()}" +
+                            if (mismatchedNames.size > 4) " y ${mismatchedNames.size - 4} más" else "",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
         }
     }
 }

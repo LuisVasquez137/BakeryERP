@@ -18,7 +18,16 @@ import dev.gitlive.firebase.firestore.FirebaseFirestore
 import dev.gitlive.firebase.firestore.Timestamp
 import dev.gitlive.firebase.firestore.toMilliseconds
 import dev.gitlive.firebase.firestore.where
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlin.time.Clock
+
+/**
+ * Cuántas subcolecciones de formatos se piden a la vez. Suficientemente alto para que el
+ * catálogo entero entre en dos o tres tandas, suficientemente bajo para no inundar la red.
+ */
+private const val FORMAT_FETCH_CHUNK = 25
 
 /**
  * Los formatos de compra se guardan en una subcollección separada para evitar
@@ -49,18 +58,35 @@ class FirebaseIngredientRepository(
 
     // ── Operaciones principales ──────────────────────────────────────────────
 
-    override suspend fun getIngredients(companyId: String): List<Ingredient> {
-        return col(companyId).get().documents.map { doc ->
-            // Fallback para formatos sin "unit": usar la primera unidad del ingrediente o baseUnit legacy
-            @Suppress("UNCHECKED_CAST")
-            val fallbackUnit = runCatching { doc.get<List<String>?>("allowedUnits") }.getOrNull()
-                ?.firstOrNull()
-                ?: doc.get<String?>("baseUnit") ?: ""
-            val formats = runCatching {
-                formatCol(companyId, doc.id).get().documents.map { it.toPurchaseFormat(fallbackUnit) }
-            }.getOrElse { emptyList() }
-            doc.toIngredient(formats)
-        }
+    /**
+     * Los formatos viven en una subcolección por insumo, así que esto es 1 + N consultas y no
+     * hay forma de bajarlo sin `collectionGroup` —que pediría un índice nuevo y un `companyId`
+     * en cada formato—. Lo que SÍ se puede es no hacerlas en fila: en un `map { }` dentro de una
+     * función suspend cada `get()` espera a que vuelva el anterior, y con 60 insumos eso son 60
+     * viajes de ida y vuelta encadenados. Lanzadas en paralelo el costo pasa a ser el del viaje
+     * más lento, no la suma de todos: es la diferencia entre varios segundos y medio.
+     *
+     * En tandas de [FORMAT_FETCH_CHUNK] y no todas de un golpe, para no abrir cien conexiones
+     * simultáneas contra Firestore en un catálogo grande.
+     */
+    override suspend fun getIngredients(companyId: String): List<Ingredient> = coroutineScope {
+        col(companyId).get().documents
+            .chunked(FORMAT_FETCH_CHUNK)
+            .flatMap { chunk ->
+                chunk.map { doc ->
+                    async {
+                        // Fallback para formatos sin "unit": usar la primera unidad del ingrediente
+                        // o baseUnit legacy
+                        val fallbackUnit = runCatching { doc.get<List<String>?>("allowedUnits") }.getOrNull()
+                            ?.firstOrNull()
+                            ?: doc.get<String?>("baseUnit") ?: ""
+                        val formats = runCatching {
+                            formatCol(companyId, doc.id).get().documents.map { it.toPurchaseFormat(fallbackUnit) }
+                        }.getOrElse { emptyList() }
+                        doc.toIngredient(formats)
+                    }
+                }.awaitAll()
+            }
     }
 
     override suspend fun addIngredient(companyId: String, ingredient: Ingredient) {
@@ -356,7 +382,10 @@ class FirebaseIngredientRepository(
             "supplierName" to (runCatching { snap.get<String?>("supplierName") }.getOrNull() ?: ""),
             "unitsPerPackage" to (runCatching { snap.get<Double?>("unitsPerPackage") }.getOrNull() ?: 1.0),
             "packageCost" to newPackageCost,
-            "isDefault" to (runCatching { snap.get<Boolean?>("isDefault") }.getOrNull() ?: false)
+            "isDefault" to (runCatching { snap.get<Boolean?>("isDefault") }.getOrNull() ?: false),
+            // Se arrastra: este `set()` reescribe el documento, y sin esto registrar un precio
+            // nuevo borraría el nombre de factura que alguien cargó.
+            "supplierItemName" to (runCatching { snap.get<String?>("supplierItemName") }.getOrNull() ?: "")
         ))
     }
 
@@ -372,6 +401,7 @@ class FirebaseIngredientRepository(
         "unitWeightGrams" to unitWeightGrams,
         "stockAlert" to stockAlert,
         "isPerishable" to isPerishable,
+        "tracksStock" to tracksStock,
         "notes" to notes,
         "active" to active,
         "createdAt" to if (createdAt == 0L) Clock.System.now().toEpochMilliseconds() else createdAt,
@@ -387,7 +417,8 @@ class FirebaseIngredientRepository(
         "supplierName" to supplierName,
         "unitsPerPackage" to unitsPerPackage,
         "packageCost" to packageCost,
-        "isDefault" to isDefault
+        "isDefault" to isDefault,
+        "supplierItemName" to supplierItemName
     )
 
     @Suppress("UNCHECKED_CAST")
@@ -406,6 +437,8 @@ class FirebaseIngredientRepository(
         purchaseFormats = formats,
         stockAlert = get<Double?>("stockAlert"),
         isPerishable = runCatching { get<Boolean?>("isPerishable") }.getOrNull() ?: false,
+        // Ausente en los insumos ya cargados: todos llevaban conteo.
+        tracksStock = runCatching { get<Boolean?>("tracksStock") }.getOrNull() ?: true,
         notes = get<String?>("notes"),
         active = get<Boolean?>("active") ?: true,
         createdAt = readTimestampAsMillis("createdAt"),
@@ -421,7 +454,8 @@ class FirebaseIngredientRepository(
         supplierName = get<String?>("supplierName") ?: "",
         unitsPerPackage = get<Double?>("unitsPerPackage") ?: 1.0,
         packageCost = get<Double?>("packageCost") ?: 0.0,
-        isDefault = get<Boolean?>("isDefault") ?: false
+        isDefault = get<Boolean?>("isDefault") ?: false,
+        supplierItemName = runCatching { get<String?>("supplierItemName") }.getOrNull() ?: ""
     )
 
     private fun DocumentSnapshot.readTimestampAsMillis(field: String): Long =

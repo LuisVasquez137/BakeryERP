@@ -1,5 +1,8 @@
 ﻿package com.bakery.erp.presentation.employees
 
+import com.bakery.erp.model.hasPermission
+import com.bakery.erp.model.Permission
+import androidx.compose.material3.ScrollableTabRow
 import com.bakery.erp.util.fmt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -123,13 +126,19 @@ fun EmployeeDetailScreen(
     onNavigateToForm: (String) -> Unit,
     onNavigateToPayrollForm: (String, String?) -> Unit = { _, _ -> },
     authViewModel: AuthViewModel,
-    viewModel: EmployeeViewModel
+    viewModel: EmployeeViewModel,
+    /** Pestaña "Créditos": lo que debe (compras fiadas + adelantos) y su estado de cuenta. */
+    creditViewModel: com.bakery.erp.presentation.credit.CreditViewModel? = null
 ) {
     val state by viewModel.uiState.collectAsState()
     val authState by authViewModel.uiState.collectAsState()
     val companyId = authState.user?.orgId ?: ""
     val snackbarHostState = remember { SnackbarHostState() }
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    val creditState = creditViewModel?.uiState?.collectAsState()?.value
+    LaunchedEffect(creditState?.message) {
+        creditState?.message?.let { snackbarHostState.showSnackbar(it); creditViewModel?.clearMessage() }
+    }
 
     LaunchedEffect(employeeId, companyId) {
         if (companyId.isNotEmpty()) viewModel.loadEmployeeDetail(companyId, employeeId)
@@ -148,11 +157,13 @@ fun EmployeeDetailScreen(
             2 -> viewModel.loadPayrollHistory(companyId, employeeId)
             3 -> viewModel.loadDocuments(companyId, employeeId)
             4 -> viewModel.loadHistory(companyId, employeeId)
+            5 -> creditViewModel?.loadEmployeeAccount(companyId, employeeId)
         }
     }
 
     val employee = state.selectedEmployee
-    val tabs = listOf("Perfil", "Asistencia", "Nómina", "Documentos", "Historial")
+    val tabs = listOfNotNull("Perfil", "Asistencia", "Nómina", "Documentos", "Historial",
+        "Créditos".takeIf { creditViewModel != null })
 
     Scaffold(
         topBar = {
@@ -200,7 +211,8 @@ fun EmployeeDetailScreen(
             ) { Text("No se encontró el colaborador", color = MaterialTheme.colorScheme.outline) }
 
             else -> Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-                TabRow(selectedTabIndex = selectedTab) {
+                // Deslizable: con seis pestañas repartidas a lo fijo los títulos no caben en teléfono.
+                ScrollableTabRow(selectedTabIndex = selectedTab, edgePadding = 8.dp) {
                     tabs.forEachIndexed { index, title ->
                         Tab(
                             selected = selectedTab == index,
@@ -237,6 +249,26 @@ fun EmployeeDetailScreen(
                         state = state,
                         viewModel = viewModel
                     )
+                    5 -> if (creditViewModel != null && creditState != null) {
+                        val account = creditState.selected?.takeIf { it.employeeId == employee.id }
+                        if (account == null) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                        } else {
+                            val u = authState.user
+                            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+                                com.bakery.erp.presentation.credit.CreditAccountPanel(
+                                    account = account,
+                                    movements = creditState.movements,
+                                    canManage = u?.hasPermission(Permission.MANAGE_CREDIT_ACCOUNTS) == true ||
+                                        u?.hasPermission(Permission.MANAGE_EMPLOYEES) == true,
+                                    isSaving = creditState.isSaving,
+                                    companyId = companyId,
+                                    user = u,
+                                    viewModel = creditViewModel
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1313,7 +1345,9 @@ private fun AddHistoryEntryDialog(
                         modifier = Modifier.menuAnchor().fillMaxWidth()
                     )
                     ExposedDropdownMenu(expanded = typeExpanded, onDismissRequest = { typeExpanded = false }) {
-                        HistoryEventType.entries.forEach { type ->
+                        // Los adelantos ya no se anotan acá: van en la pestaña Créditos, que lleva
+                        // el saldo y se descuenta sola en la planilla. Los viejos se siguen viendo.
+                        HistoryEventType.entries.filter { it != HistoryEventType.ADVANCE }.forEach { type ->
                             DropdownMenuItem(
                                 text = { Text(historyEventLabels[type] ?: type.name) },
                                 onClick = { selectedType = type; typeExpanded = false }

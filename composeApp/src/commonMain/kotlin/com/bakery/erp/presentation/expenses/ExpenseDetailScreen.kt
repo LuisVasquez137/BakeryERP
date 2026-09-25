@@ -46,6 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.isFromPurchase
 import com.bakery.erp.model.Expense
+import com.bakery.erp.model.ExpensePaidFrom
 import com.bakery.erp.model.formatPeriodLabel
 import com.bakery.erp.presentation.auth.AuthViewModel
 
@@ -167,8 +168,12 @@ private fun ExpenseDetailContent(expense: Expense) {
                 )
             ) {
                 Text(
-                    text = "Este gasto viene de una factura de compra. Se corrige editando " +
-                        "esa compra — desde acá volvería a aparecer con el valor de la factura.",
+                    // Ya no son solo las facturas: desde que anotar un gasto y registrar una
+                    // compra rápida son la misma captura, casi todo gasto nuevo nace de un
+                    // `Purchase`. Decir "factura" mandaba a buscar en la pestaña equivocada.
+                    text = "Este gasto viene de una compra registrada. Se corrige desde esa " +
+                        "compra —en el módulo de Compras, pestaña \"Facturas\" o \"Compras " +
+                        "rápidas\"—; desde acá volvería a aparecer con el valor de la compra.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(12.dp)
@@ -183,6 +188,15 @@ private fun ExpenseDetailContent(expense: Expense) {
         DetailRow("Período", formatPeriodLabel(expense.period))
         DetailRow("Categoría", expense.category.label)
         DetailRow("Monto", "Q ${expense.amount.fmt(2)}")
+        // De qué bolsa salió. Es la primera pregunta cuando una caja no cuadra, y estaba
+        // guardada desde el principio sin que ninguna pantalla la mostrara.
+        if (expense.paidFrom.isNotEmpty()) {
+            DetailRow(
+                "Salió de",
+                if (expense.cashRegisterName.isNotEmpty()) expense.cashRegisterName
+                else ExpensePaidFrom.label(expense.paidFrom)
+            )
+        }
 
         if (!expense.notes.isNullOrEmpty()) {
             Spacer(Modifier.height(4.dp))

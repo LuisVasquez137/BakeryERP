@@ -13,11 +13,13 @@ import com.bakery.erp.data.FirebaseEmployeeRepository
 import com.bakery.erp.data.FirebaseExpenseRepository
 import com.bakery.erp.data.FirebaseFixedBudgetRepository
 import com.bakery.erp.data.FirebaseIngredientRepository
+import com.bakery.erp.data.FirebasePlantIssueRepository
 import com.bakery.erp.data.FirebaseJobPositionRepository
 import com.bakery.erp.data.FirebasePayrollRepository
 import com.bakery.erp.data.FirebasePreparationBatchRepository
 import com.bakery.erp.data.FirebasePreparationRepository
 import com.bakery.erp.data.FirebaseProductionRepository
+import com.bakery.erp.data.FirebasePurchaseConceptRepository
 import com.bakery.erp.data.FirebasePurchaseRepository
 import com.bakery.erp.data.FirebaseRecipeRepository
 import com.bakery.erp.data.FirebaseSupplierRepository
@@ -58,6 +60,7 @@ import com.bakery.erp.presentation.employees.JobPositionViewModel
 import com.bakery.erp.presentation.expenses.ExpenseViewModel
 import com.bakery.erp.presentation.expenses.FixedBudgetViewModel
 import com.bakery.erp.presentation.ingredients.IngredientViewModel
+import com.bakery.erp.presentation.plantissues.PlantIssueViewModel
 import com.bakery.erp.presentation.preparationbatches.PreparationBatchViewModel
 import com.bakery.erp.presentation.delivery.DeliveryViewModel
 import com.bakery.erp.presentation.dispatch.DispatchViewModel
@@ -69,6 +72,7 @@ import com.bakery.erp.presentation.pos.CashSessionViewModel
 import com.bakery.erp.presentation.reports.financial.FinancialReportViewModel
 import com.bakery.erp.presentation.reports.production.ProductionReportViewModel
 import com.bakery.erp.presentation.reports.sales.SalesReportViewModel
+import com.bakery.erp.presentation.reports.branchsupply.BranchSupplyReportViewModel
 import com.bakery.erp.presentation.pos.DailyCashCloseViewModel
 import com.bakery.erp.presentation.pos.POSViewModel
 import com.bakery.erp.presentation.pos.SaleHistoryViewModel
@@ -99,8 +103,10 @@ actual fun createAppViewModels(): AppViewModels {
     val recipeRepo = FirebaseRecipeRepository(firestore)
     val branchRepo = FirebaseBranchRepository(firestore)
     val purchaseRepo = FirebasePurchaseRepository(firestore)
+    val purchaseConceptRepo = FirebasePurchaseConceptRepository(firestore)
     val productionRepo = FirebaseProductionRepository(firestore)
     val employeeRepo = FirebaseEmployeeRepository(firestore)
+    val creditRepo = com.bakery.erp.data.FirebaseCreditRepository(firestore)
     val attendanceRepo = FirebaseAttendanceRepository(firestore)
     val payrollRepo = FirebasePayrollRepository(firestore)
     val jobPositionRepo = FirebaseJobPositionRepository(firestore)
@@ -121,18 +127,19 @@ actual fun createAppViewModels(): AppViewModels {
     val cashSessionRepo = FirebaseCashSessionRepository(firestore)
     val productRepoJs = FirebaseProductRepositoryJs(firestore, storage)
     val saleRepo = FirebaseSaleRepository(firestore, finishedStockRepo, cashSessionRepo, ingredientRepo)
-    val breadCountRepo = FirebaseBreadCountRepository(firestore, finishedStockRepo)
+    val breadCountRepo = FirebaseBreadCountRepository(firestore, finishedStockRepo, saleRepo, posCategoryRepo)
     val dailyCloseRepo = FirebaseDailyCashCloseRepository(firestore, cashSessionRepo)
     val spotCheckRepo = FirebaseSpotCashCheckRepository(firestore)
     val externalCustomerRepo = FirebaseExternalCustomerRepository(firestore)
     val customerOrderRepo = FirebaseCustomerOrderRepository(firestore)
     val weatherRepo = OpenMeteoWeatherRepository()
+    val plantIssueRepo = FirebasePlantIssueRepository(firestore)
 
     return AppViewModels(
         auth = AuthViewModel(authRepo, GoogleAuthHandlerJs()),
         product = ProductViewModel(productRepoJs, priceListRepo),
         ingredient = IngredientViewModel(ingredientRepo, recipeRepo, branchRepo),
-        supplier = SupplierViewModel(supplierRepo),
+        supplier = SupplierViewModel(supplierRepo, purchaseRepo),
         recipe = RecipeViewModel(recipeRepo, JsRecipeImageUploader(storage)),
         branch = BranchViewModel(branchRepo),
         expense = ExpenseViewModel(expenseRepo),
@@ -141,7 +148,8 @@ actual fun createAppViewModels(): AppViewModels {
         purchase = PurchaseViewModel(
             purchaseRepo, ingredientRepo, supplierRepo, branchRepo, finishedStockRepo,
             productRepoJs, JsPurchaseInvoiceImageUploader(storage),
-            expenseRepo, fixedAssetRepo, assetHistoryRepo, authRepo
+            expenseRepo, fixedAssetRepo, assetHistoryRepo, authRepo, cashSessionRepo,
+            purchaseConceptRepo, priceListRepo
         ),
         production = ProductionViewModel(
             productionRepo, ingredientRepo, recipeRepo, branchRepo,
@@ -149,9 +157,11 @@ actual fun createAppViewModels(): AppViewModels {
             finishedStockRepo, notificationRepo, weatherRepo,
             JsSpecialOrderImageUploader(storage)
         ),
+        plantIssue = PlantIssueViewModel(plantIssueRepo, ingredientRepo, branchRepo),
         employee = EmployeeViewModel(
             employeeRepo, branchRepo, attendanceRepo, payrollRepo,
-            jobPositionRepo, FirebaseEmployeeDocumentRepositoryJs(firestore, storage), authRepo, historyRepo
+            jobPositionRepo, FirebaseEmployeeDocumentRepositoryJs(firestore, storage), authRepo, historyRepo,
+            creditRepo
         ),
         jobPosition = JobPositionViewModel(jobPositionRepo),
         preparation = PreparationViewModel(preparationRepo),
@@ -162,28 +172,31 @@ actual fun createAppViewModels(): AppViewModels {
         priceList = PriceListViewModel(priceListRepo),
         dispatch = DispatchViewModel(dispatchRepo, deliveryRepo, branchRepo, productionRepo, notificationRepo, finishedStockRepo),
         delivery = DeliveryViewModel(deliveryRepo, dispatchRepo, authRepo, fixedAssetRepo, branchRepo, productionRepo),
-        finishedStock = FinishedStockViewModel(finishedStockRepo, branchRepo),
+        finishedStock = FinishedStockViewModel(finishedStockRepo, branchRepo, productRepoJs, ingredientRepo),
         pos = POSViewModel(
             saleRepo, posCategoryRepo, cashSessionRepo, productRepoJs,
             finishedStockRepo, ingredientRepo, priceListRepo, branchRepo,
-            JsReceiptPrinter(), authRepo
+            JsReceiptPrinter(), authRepo, creditRepo
         ),
-        cashSession = CashSessionViewModel(cashSessionRepo, cashRegisterRepo, branchRepo, dailyCloseRepo),
+        cashSession = CashSessionViewModel(cashSessionRepo, cashRegisterRepo, branchRepo, dailyCloseRepo, purchaseRepo),
         saleHistory = SaleHistoryViewModel(saleRepo, cashSessionRepo, branchRepo),
         cashRegisterAdmin = CashRegisterAdminViewModel(cashRegisterRepo, branchRepo, cashSessionRepo),
         posCategoryAdmin = POSCategoryAdminViewModel(posCategoryRepo, productRepoJs, branchRepo),
+        credit = com.bakery.erp.presentation.credit.CreditViewModel(creditRepo, employeeRepo),
         breadCount = BreadCountViewModel(breadCountRepo, branchRepo),
         dailyCashClose = DailyCashCloseViewModel(dailyCloseRepo, branchRepo, breadCountRepo, spotCheckRepo),
         spotCashCheck = SpotCashCheckViewModel(spotCheckRepo, cashSessionRepo, branchRepo),
         home = HomeViewModel(
             authRepo, saleRepo, productionRepo, branchRepo,
-            ingredientRepo, fixedAssetRepo, dispatchRepo, cashSessionRepo, purchaseRepo
+            ingredientRepo, fixedAssetRepo, dispatchRepo, cashSessionRepo, purchaseRepo, creditRepo
         ),
         salesReport = SalesReportViewModel(saleRepo, branchRepo),
-        productionReport = ProductionReportViewModel(productionRepo, dispatchRepo, branchRepo),
+        productionReport = ProductionReportViewModel(productionRepo, dispatchRepo, branchRepo, plantIssueRepo),
         financialReport = FinancialReportViewModel(
-            saleRepo, expenseRepo, payrollRepo, finishedStockRepo, breadCountRepo, branchRepo
+            saleRepo, expenseRepo, payrollRepo, purchaseRepo,
+            finishedStockRepo, breadCountRepo, branchRepo
         ),
+        branchSupplyReport = BranchSupplyReportViewModel(productionRepo, dispatchRepo, saleRepo, branchRepo),
         customerOrder = CustomerOrderViewModel(
             customerOrderRepo, externalCustomerRepo, productionRepo,
             productRepoJs, branchRepo, priceListRepo

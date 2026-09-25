@@ -116,6 +116,7 @@ fun salesSummaryFromDaily(dailies: List<SalesDaily>): SalesSummary {
         byCashier = byCashier,
         byBranch = byBranch,
         topProducts = topProducts,
+        unitsByProduct = productQty.toMap(),
         hourHistogram = hourHistogram,
         byDay = byDay
     )

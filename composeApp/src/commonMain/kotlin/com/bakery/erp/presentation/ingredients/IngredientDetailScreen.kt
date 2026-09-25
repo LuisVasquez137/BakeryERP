@@ -79,6 +79,7 @@ import com.bakery.erp.model.Ingredient
 import com.bakery.erp.model.Permission
 import com.bakery.erp.model.PurchaseFormat
 import com.bakery.erp.model.StockMovement
+import com.bakery.erp.presentation.plantissues.stockMovementTypeLabel
 import com.bakery.erp.model.User
 import com.bakery.erp.model.convertUnits
 import com.bakery.erp.model.formatStockDisplay
@@ -399,7 +400,9 @@ private fun InventarioTab(
         verticalAlignment = Alignment.CenterVertically
     ) {
         TabSectionTitle("Stock por sucursal")
-        if (canAdjustStock) {
+        // Sin conteo no hay nada que ajustar: un ajuste creación stock a un ítem que por
+        // definición no lo lleva, y el número quedaría congelado ahí para siempre.
+        if (canAdjustStock && ingredient.tracksStock) {
             TextButton(onClick = { showAdjustDialog = true }, enabled = state.accessibleBranches.isNotEmpty()) {
                 Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(4.dp))
@@ -426,6 +429,14 @@ private fun InventarioTab(
     }
 
     when {
+        // La bolsa y la bandeja: se compran, se gastan y nadie las cuenta. Se dice en vez de
+        // mostrar un "sin stock" que se lee como un dato que falta.
+        !ingredient.tracksStock -> PlaceholderSection(
+            icon = Icons.Default.EventNote,
+            title = "No se lleva conteo",
+            subtitle = "Sus compras se registran como gasto del mes, sin existencias. " +
+                "Se cambia en el formulario del insumo."
+        )
         state.selectedIngredientStocks == null ->
             Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
@@ -812,7 +823,15 @@ private fun KardexRow(mov: StockMovement, ingredient: Ingredient) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(formatPurchaseDate(mov.date), style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1.2f), maxLines = 1)
             Text(mov.branchName, style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1.2f), maxLines = 1)
-            Text(mov.type, style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(0.8f), maxLines = 1)
+            // El tipo crudo ("CONSUMO") no dice nada a quien lee el Kardex; la etiqueta sí
+            // separa "se fue en la mesa" de "el saldo estaba mal", que es la distinción
+            // por la que el consumo de planta tiene tipo propio.
+            Text(
+                stockMovementTypeLabel(mov.type),
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.weight(0.9f),
+                maxLines = 2
+            )
             Text(
                 text = "${if (mov.quantity > 0) "+" else ""}${mov.quantity.fmt(1)} ${ingredient.effectiveBaseUnit}",
                 style = MaterialTheme.typography.labelSmall,
@@ -884,6 +903,7 @@ private fun PurchaseFormatCard(format: PurchaseFormat) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+
                 }
             }
 

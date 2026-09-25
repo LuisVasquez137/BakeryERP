@@ -3,9 +3,10 @@ package com.bakery.erp.model
 /**
  * Línea de venta. Subcolección de [Sale].
  *
- * En ventas nuevas siempre hay [productId] (siempre se vende un producto concreto). Los campos
- * [quickGroupId]/[quickGroupName] y [priceSource] = QUICK_GROUP se conservan únicamente para
- * leer ventas históricas anteriores al rediseño de [POSCategory].
+ * Una línea vende un producto concreto ([productId]) o un grupo de precio ([quickGroupId],
+ * ej. "Pan Q0.50", ver [POSCategory.sellAsGroup]). La de grupo no trae producto y no
+ * descuenta inventario al cobrarse: el conteo de cierre reparte esas unidades entre los panes
+ * del grupo según lo que de verdad falta (`allocateGroupSales`).
  *
  * [costAtSale] es el snapshot del `avgUnitCost` de [FinishedProductStock] al momento de la venta,
  * para que reportes históricos de margen no se vean afectados por compras posteriores.
@@ -56,6 +57,9 @@ object SaleLinePriceSource {
     const val LIST_FACTOR        = "LIST_FACTOR"
     /** Usó `Product.salePrice` directamente (sin override ni factor). */
     const val PRODUCT_SALE_PRICE = "PRODUCT_SALE_PRICE"
-    /** Override por pertenecer a un `SaleQuickGroup` — el precio del grupo manda. */
+    /** Línea de grupo de precio ([POSCategory.sellAsGroup]) — cobra `groupUnitPrice`. */
     const val QUICK_GROUP        = "QUICK_GROUP"
 }
+
+/** Clave con la que una línea de grupo entra al desglose por producto de los reportes. */
+fun groupSaleKey(groupId: String): String = "grp_$groupId"

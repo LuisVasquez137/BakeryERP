@@ -14,6 +14,7 @@ import com.bakery.erp.domain.report.salesSummaryFromDaily
 import com.bakery.erp.model.FinishedMovementReference
 import com.bakery.erp.model.FinishedMovementType
 import com.bakery.erp.model.FinishedStockMovement
+import com.bakery.erp.model.CheckoutPayment
 import com.bakery.erp.model.Sale
 import com.bakery.erp.model.SaleContribution
 import com.bakery.erp.model.SaleLine
@@ -26,6 +27,7 @@ import com.bakery.erp.model.SaleStatus
 import com.bakery.erp.model.SalesDaily
 import com.bakery.erp.model.plus
 import com.bakery.erp.model.salesDailyId
+import com.bakery.erp.model.groupSaleKey
 import com.bakery.erp.model.StockMovement
 import com.bakery.erp.model.ingredientUnitsConsumed
 import com.bakery.erp.model.isIngredientBacked
@@ -284,7 +286,8 @@ class FirebaseSaleRepository(
         registerId: String,
         registerName: String,
         cashierId: String,
-        cashierName: String
+        cashierName: String,
+        checkout: CheckoutPayment?
     ): Sale {
         val ref = salesCol(companyId).document(saleId)
         val collected = firestore.runTransaction {
@@ -299,7 +302,7 @@ class FirebaseSaleRepository(
                     else "Esta cuenta ya fue recibida."
                 )
             }
-            val updated = sale.copy(
+            val received = sale.copy(
                 status = SaleStatus.COMPLETED,
                 sessionId = sessionId,
                 registerId = registerId,
@@ -307,6 +310,20 @@ class FirebaseSaleRepository(
                 cashierId = cashierId,
                 cashierName = cashierName,
                 collectedAt = Clock.System.now().toEpochMilliseconds()
+            )
+            // Cobrada desde el carrito: el cliente pagó en ESTA caja, así que el método real
+            // es el del cobro y no el que traía ComandaYa. Sin esto, una cuenta pagada con
+            // tarjeta en el mostrador sumaría como efectivo y el cuadre pediría billetes que
+            // no están en la gaveta.
+            val updated = if (checkout == null) received else received.copy(
+                paymentMethod = checkout.method,
+                paymentBreakdown = emptyMap(),
+                checkoutId = checkout.checkoutId,
+                checkoutTotal = checkout.checkoutTotal,
+                tenderedAmount = checkout.tenderedAmount,
+                changeAmount = checkout.changeAmount,
+                billValues = checkout.billValues,
+                billCounts = checkout.billCounts
             )
             set(ref, updated.toMap())
             updated
@@ -384,8 +401,17 @@ class FirebaseSaleRepository(
         val tz = TimeZone.currentSystemDefault()
         val ldt = Instant.fromEpochMilliseconds(sale.createdAt).toLocalDateTime(tz)
         // Las líneas express no tienen producto: suman a las unidades y al total, pero no
-        // pueden entrar al desglose por producto.
-        val withProduct = lines.filter { !it.productId.isNullOrEmpty() }
+        // pueden entrar al desglose por producto. Las de grupo de precio ("Pan Q0.50") sí
+        // entran, con clave `grp_<id>`: son la mayor parte del pan vendido y sin esto el
+        // reporte las perdería de vista.
+        val withProduct = lines.mapNotNull { line ->
+            when {
+                !line.productId.isNullOrEmpty() -> line
+                !line.quickGroupId.isNullOrEmpty() ->
+                    line.copy(productId = groupSaleKey(line.quickGroupId))
+                else -> null
+            }
+        }
         return SaleContribution(
             branchId = sale.branchId,
             branchName = sale.branchName,
@@ -459,6 +485,17 @@ class FirebaseSaleRepository(
         "externalOrderAt" to externalOrderAt,
         "paymentBreakdown" to paymentBreakdown,
         "collectedAt" to collectedAt,
+        "groupIds" to groupIds,
+        "groupUnits" to groupUnits,
+        "checkoutId" to checkoutId,
+        "checkoutTotal" to checkoutTotal,
+        "billValues" to billValues,
+        "billCounts" to billCounts,
+        "creditAccountId" to creditAccountId,
+        "creditAccountName" to creditAccountName,
+        "creditPersonName" to creditPersonName,
+        "discountAccountId" to discountAccountId,
+        "discountLabel" to discountLabel,
         "createdAt" to createdAt
     )
 
@@ -491,6 +528,17 @@ class FirebaseSaleRepository(
         externalOrderAt = readMillis("externalOrderAt"),
         paymentBreakdown = get<Map<String, Double>?>("paymentBreakdown") ?: emptyMap(),
         collectedAt = readMillis("collectedAt"),
+        groupIds = runCatching { get<List<String>?>("groupIds") }.getOrNull() ?: emptyList(),
+        groupUnits = runCatching { get<List<Double>?>("groupUnits") }.getOrNull() ?: emptyList(),
+        checkoutId = get<String?>("checkoutId") ?: "",
+        checkoutTotal = get<Double?>("checkoutTotal") ?: 0.0,
+        billValues = runCatching { get<List<Double>?>("billValues") }.getOrNull() ?: emptyList(),
+        billCounts = runCatching { get<List<Double>?>("billCounts") }.getOrNull() ?: emptyList(),
+        creditAccountId = get<String?>("creditAccountId") ?: "",
+        creditAccountName = get<String?>("creditAccountName") ?: "",
+        creditPersonName = get<String?>("creditPersonName") ?: "",
+        discountAccountId = get<String?>("discountAccountId") ?: "",
+        discountLabel = get<String?>("discountLabel") ?: "",
         createdAt = readMillis("createdAt")
     )
 

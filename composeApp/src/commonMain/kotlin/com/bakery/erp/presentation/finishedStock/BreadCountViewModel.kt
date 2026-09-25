@@ -8,6 +8,7 @@ import com.bakery.erp.model.Branch
 import com.bakery.erp.model.BranchCapability
 import com.bakery.erp.model.BreadCount
 import com.bakery.erp.model.BreadCountLine
+import com.bakery.erp.model.GroupSalesWindow
 import com.bakery.erp.model.User
 import com.bakery.erp.model.canAccessBranch
 import kotlin.time.Clock
@@ -28,6 +29,12 @@ data class BreadCountUiState(
     val monthlyCounts: List<BreadCount> = emptyList(),
     val currentCount: BreadCount? = null,
     val currentLines: List<BreadCountLine> = emptyList(),
+    /**
+     * Ventas por grupo de precio ("Pan de Q0.50") que le tocan al conteo abierto. La pantalla
+     * las reparte en vivo para mostrar cuánto del faltante es venta y cuánto merma.
+     */
+    val groupWindow: GroupSalesWindow? = null,
+    val isGroupWindowLoading: Boolean = false,
     val yearMonth: String = "",
     val isLoading: Boolean = false,
     val error: String? = null,
@@ -122,6 +129,8 @@ class BreadCountViewModel(
     fun observeCount(companyId: String, countId: String) {
         headerJob?.cancel()
         linesJob?.cancel()
+        _uiState.update { it.copy(groupWindow = null) }
+        refreshGroupSales(companyId, countId)
         headerJob = viewModelScope.launch {
             repo.observeCount(companyId, countId)
                 .catch { e -> _uiState.update { it.copy(error = e.message) } }
@@ -131,6 +140,19 @@ class BreadCountViewModel(
             repo.observeLines(companyId, countId)
                 .catch { e -> _uiState.update { it.copy(error = e.message) } }
                 .collect { lines -> _uiState.update { it.copy(currentLines = lines) } }
+        }
+    }
+
+    /**
+     * Relee las ventas de grupo. Se ofrece a mano porque mientras se cuenta la caja sigue
+     * vendiendo; el cierre las vuelve a leer de todas formas, así que esto es solo la vista.
+     */
+    fun refreshGroupSales(companyId: String, countId: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isGroupWindowLoading = true) }
+            runCatching { repo.groupSalesWindow(companyId, countId) }
+                .onSuccess { w -> _uiState.update { it.copy(groupWindow = w, isGroupWindowLoading = false) } }
+                .onFailure { err -> _uiState.update { it.copy(isGroupWindowLoading = false, error = err.message) } }
         }
     }
 

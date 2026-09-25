@@ -22,8 +22,10 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.ReportProblem
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.SwapVert
@@ -57,6 +59,8 @@ import com.bakery.erp.model.ProductionOrderPrintData
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.model.toBaseUnit
 import com.bakery.erp.presentation.auth.AuthViewModel
+import com.bakery.erp.presentation.plantissues.PlantIssueDialog
+import com.bakery.erp.presentation.plantissues.PlantIssueViewModel
 import com.bakery.erp.presentation.products.ProductViewModel
 import com.bakery.erp.ui.ProductImage
 import com.bakery.erp.util.formatBakerWeight
@@ -118,7 +122,13 @@ fun ProductionLotDetailScreen(
     viewModel: ProductionViewModel,
     productViewModel: ProductViewModel,
     documentPrinter: DocumentPrinter,
-    bluetoothPrinterManager: BluetoothPrinterManager
+    bluetoothPrinterManager: BluetoothPrinterManager,
+    /**
+     * Vales de salida de material. Llega como parámetro —igual que `productViewModel`—
+     * porque el panadero saca la harina de la mesa desde acá y no desde Insumos: es
+     * la pantalla que ya tiene abierta con las manos en la masa.
+     */
+    plantIssueViewModel: PlantIssueViewModel
 ) {
     val state by viewModel.uiState.collectAsState()
     val productState by productViewModel.uiState.collectAsState()
@@ -126,7 +136,39 @@ fun ProductionLotDetailScreen(
     val user = authState.user
     val companyId = user?.orgId ?: ""
     val canManage = user?.hasPermission(Permission.MANAGE_PRODUCTION_LOTS) == true
+    val canIssueMaterial = user?.hasPermission(Permission.ISSUE_PLANT_MATERIAL) == true
+    var showPlantIssueDialog by remember { mutableStateOf(false) }
+    val plantIssueState by plantIssueViewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // El vale se confirma con un snackbar y no con un diálogo: el panadero ya cerró
+    // el suyo y volver a interrumpirlo para decirle que sí pasó lo que acaba de hacer
+    // le cuesta un toque más en cada saco.
+    LaunchedEffect(plantIssueState.message) {
+        plantIssueState.message?.let {
+            snackbarHostState.showSnackbar(it)
+            plantIssueViewModel.consumeMessage()
+        }
+    }
+    LaunchedEffect(plantIssueState.error) {
+        plantIssueState.error?.let {
+            snackbarHostState.showSnackbar(it)
+            plantIssueViewModel.clearError()
+        }
+    }
+
+    if (showPlantIssueDialog && user != null) {
+        PlantIssueDialog(
+            companyId = companyId,
+            user = user,
+            viewModel = plantIssueViewModel,
+            onDismiss = { showPlantIssueDialog = false },
+            presetBranchId = state.selectedLot?.producingBranchId ?: "",
+            lotId = lotId,
+            shiftId = state.selectedLot?.shiftId ?: "",
+            shiftName = state.selectedLot?.shiftName ?: ""
+        )
+    }
 
     // Mantener pantalla encendida mientras los panaderos tengan la lista abierta.
     KeepScreenOn()
@@ -250,13 +292,31 @@ fun ProductionLotDetailScreen(
     // Masas "ya preparé" — al abrir la receta la marcamos para que el panadero
     // recuerde qué amasadas ya hizo. Solo en sesión.
     var visitedGroupKeys by remember { mutableStateOf(emptySet<String>()) }
+    // Con producción extra declarada hay DOS recetas válidas y el sistema no puede
+    // elegir por su cuenta cuál mostrar: la del total sirve si todavía no se amasó
+    // nada, y la del incremento sirve si ya se amasó lo que pedían. No existe un
+    // estado "ya amasé" que lo resuelva, así que lo decide el panadero con un toque.
+    var showOnlyExtra by remember(selectedGroupKey) { mutableStateOf(false) }
+    val extraUnits = selectedGroup?.let {
+        viewModel.extraUnitsInGroup(it.items, lines, it.key)
+    } ?: 0.0
+    val hasExtraToMake = extraUnits > 0.0
     val scaledView = selectedGroup?.let {
-        viewModel.buildScaledRecipeViewForGroup(
-            it.items,
-            extraDoughGrams = viewModel.extraDoughGramsForRecipe(lines, it.key),
-            fallbackRecipeId = it.key,
-            fallbackRecipeName = it.title
-        )
+        if (showOnlyExtra && hasExtraToMake) {
+            viewModel.buildExtraOnlyRecipeForGroup(
+                groupLines = it.items,
+                allLines = lines,
+                fallbackRecipeId = it.key,
+                fallbackRecipeName = it.title
+            )
+        } else {
+            viewModel.buildScaledRecipeViewForGroup(
+                it.items,
+                extraDoughGrams = viewModel.extraDoughGramsForRecipe(lines, it.key),
+                fallbackRecipeId = it.key,
+                fallbackRecipeName = it.title
+            )
+        }
     }
     val scaledIssue = selectedGroup?.let {
         viewModel.diagnoseScaledRecipeForGroup(
@@ -268,6 +328,9 @@ fun ProductionLotDetailScreen(
     }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val registerSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val adjustSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // Masa sobre la que se abrió "¿qué pasó?" (se quemó / hay que hacer más).
+    var adjustSheetTarget by remember { mutableStateOf<String?>(null) }
     val canEditSponge = lot?.status == ProductionLotStatus.OPEN ||
         lot?.status == ProductionLotStatus.IN_PROGRESS
 
@@ -378,6 +441,27 @@ fun ProductionLotDetailScreen(
                     }
                 },
                 actions = {
+                    // Anotar el material que se usó fuera de la receta: la harina de
+                    // la mesa, la manteca de las bandejas. Vive acá y no en Insumos
+                    // porque es el panadero quien lo usa y ésta es la pantalla que ya
+                    // tiene abierta — mandarlo a otro módulo significa que no lo anota.
+                    // El verbo es "anotar" y no "sacar" a propósito: lo que se nombra
+                    // es el registro, no la extracción, para que quien deja constancia
+                    // no quede como sujeto de sospecha.
+                    if (canIssueMaterial) {
+                        TextButton(
+                            onClick = { showPlantIssueDialog = true },
+                            colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
+                        ) {
+                            Icon(Icons.Default.Inventory2, contentDescription = null)
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                "Anotar material",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.bodyLarge
+                            )
+                        }
+                    }
                     // Imprimir la orden: el panadero trabaja con las manos en la
                     // masa y la tablet lejos, así que el papel sigue siendo el
                     // formato de consulta. Ver ProductionOrderPrintButton.
@@ -515,6 +599,17 @@ fun ProductionLotDetailScreen(
                             ) {
                                 { registerSheetTarget = group.key }
                             } else null,
+                            // Se ofrece desde que el lote está ABIERTO, no solo en
+                            // producción: el encargo puede llegar antes de que el
+                            // panadero toque "Iniciar", y ahí sumarlo a la amasada es
+                            // justo lo más barato. Con el lote ya cerrado no — ese
+                            // consumo ya se descontó.
+                            onAdjustProduction = if (canManage && group.items.isNotEmpty() &&
+                                (lot.status == ProductionLotStatus.OPEN ||
+                                    lot.status == ProductionLotStatus.IN_PROGRESS)
+                            ) {
+                                { adjustSheetTarget = group.key }
+                            } else null,
                             onStartKneadingTimer = { seconds ->
                                 kneadingTimers = kneadingTimers + (group.key to KneadingTimerState(
                                     recipeId = group.key,
@@ -622,6 +717,12 @@ fun ProductionLotDetailScreen(
                                 modifier = Modifier.fillMaxSize(),
                                 onClose = { selectedGroupKey = null },
                                 headerExtra = {
+                                    if (hasExtraToMake) {
+                                        RecipeScopeSelector(
+                                            showOnlyExtra = showOnlyExtra,
+                                            onChange = { showOnlyExtra = it }
+                                        )
+                                    }
                                     if (canEditSponge && selectedGroup != null) {
                                         SpongeControlsForMasa(
                                             lines = selectedGroup.items,
@@ -663,6 +764,12 @@ fun ProductionLotDetailScreen(
                                 view = scaledView,
                                 onClose = { selectedGroupKey = null },
                                 headerExtra = {
+                                    if (hasExtraToMake) {
+                                        RecipeScopeSelector(
+                                            showOnlyExtra = showOnlyExtra,
+                                            onChange = { showOnlyExtra = it }
+                                        )
+                                    }
                                     if (canEditSponge && selectedGroup != null) {
                                         SpongeControlsForMasa(
                                             lines = selectedGroup.items,
@@ -714,6 +821,48 @@ fun ProductionLotDetailScreen(
                         val confirmedIds = targetGroups.flatMap { it.items }.map { it.id }.toSet()
                         viewModel.saveProducedQuantities(companyId, lot.id, quantities, confirmedIds)
                         registerSheetTarget = null
+                    }
+                )
+            }
+        }
+
+        // "¿Qué pasó?": se quemó una tanda, o llegó un encargo a media mañana.
+        // Vive por masa y no por lote porque lo que se quema es una masa concreta,
+        // y porque la receta que hay que mostrar es la de esa receta.
+        adjustSheetTarget?.let { target ->
+            val targetGroup = masaGroups.firstOrNull { it.key == target && it.items.isNotEmpty() }
+            if (targetGroup != null) {
+                ProductionAdjustmentSheet(
+                    masaTitle = targetGroup.title,
+                    lines = targetGroup.items,
+                    sheetState = adjustSheetState,
+                    scaledRecipeFor = { quantities ->
+                        viewModel.buildScaledRecipeForQuantities(targetGroup.items, quantities)
+                    },
+                    fillingRecipesFor = { quantities ->
+                        viewModel.buildFillingRecipesForQuantities(targetGroup.items, quantities)
+                    },
+                    hasConfirmedSponge = viewModel.groupHasConfirmedSponge(targetGroup.items),
+                    isSaving = state.isSavingAdjustment,
+                    onDismiss = { adjustSheetTarget = null },
+                    onConfirm = { adjustment ->
+                        when (adjustment.kind) {
+                            AdjustmentKind.WASTE -> viewModel.registerProductionAdjustment(
+                                companyId = companyId,
+                                lotId = lot.id,
+                                wasteByLine = adjustment.quantityByLineId,
+                                wasteReason = adjustment.reason,
+                                wasteNotes = adjustment.notes
+                            )
+                            AdjustmentKind.EXTRA -> viewModel.registerProductionAdjustment(
+                                companyId = companyId,
+                                lotId = lot.id,
+                                extraByLine = adjustment.quantityByLineId,
+                                extraReason = adjustment.reason,
+                                extraNotes = adjustment.notes
+                            )
+                        }
+                        adjustSheetTarget = null
                     }
                 )
             }
@@ -1475,6 +1624,51 @@ private fun ElapsedTimeBanner(startedAtMillis: Long) {
 }
 
 /**
+ * "Todo" / "Solo lo que falta": cuál de las dos recetas de esta masa se muestra.
+ *
+ * Aparece solo cuando hay producción extra declarada. Las etiquetas dicen QUÉ cubre
+ * cada una y no "total"/"parcial", porque lo que el panadero necesita decidir es si ya
+ * amasó o no — y leer "parcial" no contesta esa pregunta.
+ */
+@Composable
+private fun RecipeScopeSelector(showOnlyExtra: Boolean, onChange: (Boolean) -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = !showOnlyExtra,
+                onClick = { onChange(false) },
+                label = { Text("Todo el día") },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = BrandColors.PrimaryContainer,
+                    selectedLabelColor = BrandColors.Primary
+                )
+            )
+            FilterChip(
+                selected = showOnlyExtra,
+                onClick = { onChange(true) },
+                label = { Text("Solo lo extra") },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = BrandColors.PrimaryContainer,
+                    selectedLabelColor = BrandColors.Primary
+                )
+            )
+        }
+        Text(
+            if (showOnlyExtra)
+                "Receta solo del pan que se agregó después. Usala si ya amasaste lo que pedían."
+            else
+                "Receta de todo lo del día, incluido lo que se agregó después. " +
+                    "Usala si todavía no has amasado esta masa.",
+            style = MaterialTheme.typography.labelSmall,
+            color = BrandColors.MutedSlate
+        )
+    }
+}
+
+/**
  * Una masa de la orden de producción.
  *
  * Encabeza el nombre de la RECETA (no el del producto) porque la amasada es una
@@ -1508,13 +1702,25 @@ private fun MasaProductionCard(
     /** null = oculta el ícono. Abre el registro de conteo real filtrado a
      *  SOLO esta masa (mismo sheet que "Registrar conteo" del TopAppBar). */
     onRegisterCount: (() -> Unit)? = null,
+    /** null = oculta el ícono. Abre la hoja de "¿qué pasó?" — pan perdido o pan
+     *  que hay que hacer de más — para SOLO esta masa. Va en la tarjeta y no en
+     *  el TopAppBar porque lo que se quema es una masa concreta, no el lote. */
+    onAdjustProduction: (() -> Unit)? = null,
     onStartKneadingTimer: (seconds: Int) -> Unit,
     onStopKneadingTimer: () -> Unit,
     onClick: () -> Unit
 ) {
     val totalUnits = group.items.sumOf {
-        if (showProduced && it.producedQuantity > 0.0) it.producedQuantity else it.plannedQuantity
+        // El pan que hay que hacer de más SÍ entra en el total: todavía no se amasó,
+        // así que el panadero tiene que verlo en la lista. Lo perdido no — ya se amasó
+        // una vez, y sumarlo mostraría una amasada que nunca se hace de un solo golpe.
+        val good = if (showProduced && it.producedQuantity > 0.0) it.producedQuantity
+                   else it.plannedQuantity
+        good + it.extraQuantity
     }
+    val wasteUnits = group.items.sumOf { it.wasteQuantity }
+    val extraUnits = group.items.sumOf { it.extraQuantity }
+    val hasAdjustments = wasteUnits > 0.0 || extraUnits > 0.0
     val totalDough = group.items.sumOf(doughGramsOf) + extraDoughGrams
     val isRinging = kneadingTimer?.isRinging == true
 
@@ -1606,6 +1812,36 @@ private fun MasaProductionCard(
                                 color = if (isSelected) Color.White else BrandColors.AccentDeep
                             )
                         }
+                        // Lo declarado en esta masa se dice en la tarjeta y no solo dentro
+                        // de la hoja: es lo que explica por qué el total subió, o por qué
+                        // al cerrar el lote se va a descontar más masa de la que salió.
+                        if (hasAdjustments) {
+                            Text(
+                                buildString {
+                                    if (extraUnits > 0.0) append("+${extraUnits.toInt()} de más")
+                                    if (wasteUnits > 0.0) {
+                                        if (isNotEmpty()) append("  ·  ")
+                                        append("${wasteUnits.toInt()} perdidas")
+                                    }
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isSelected) Color.White else BrandColors.AccentDeep
+                            )
+                        }
+                    }
+                }
+                if (onAdjustProduction != null) {
+                    IconButton(onClick = onAdjustProduction, modifier = Modifier.size(32.dp)) {
+                        Icon(
+                            Icons.Default.ReportProblem,
+                            contentDescription = "Se perdió pan o hay que hacer más de ${group.title}",
+                            // Naranja = "esto necesita tus ojos": hay merma o producción
+                            // extra anotada en esta masa. Sin nada anotado va en el color
+                            // del encabezado, como un botón más.
+                            tint = if (hasAdjustments) BrandColors.Accent else headerFg,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
                 }
                 if (onRegisterCount != null) {

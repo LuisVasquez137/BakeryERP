@@ -5,6 +5,8 @@ import com.bakery.erp.util.fmtMoney
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -87,9 +89,20 @@ import com.bakery.erp.model.DEFAULT_TAX_RATE_PERCENT
 import com.bakery.erp.model.TaxBreakdown
 import com.bakery.erp.model.Ingredient
 import com.bakery.erp.model.Product
+import com.bakery.erp.model.itemName
+import com.bakery.erp.model.PurchaseFormat
+import com.bakery.erp.model.formatsForSupplier
+import com.bakery.erp.model.ingredientPurchaseLineKind
+import com.bakery.erp.model.isRedirectedToIngredient
+import com.bakery.erp.model.resalePurchaseLine
+import com.bakery.erp.model.matchesPurchaseSearch
+import com.bakery.erp.model.supplierItemNamesFor
+import androidx.compose.ui.text.font.FontStyle
+import com.bakery.erp.model.lineTotal
 import com.bakery.erp.model.PurchaseLine
 import com.bakery.erp.model.PurchaseLineKind
 import com.bakery.erp.model.PurchaseStatus
+import com.bakery.erp.model.expectedCashNow
 import com.bakery.erp.model.Supplier
 import com.bakery.erp.model.convertUnits
 import com.bakery.erp.model.largestUnit
@@ -101,6 +114,10 @@ import com.bakery.erp.ui.ImagePickerButton
 import com.bakery.erp.ui.LoadingOverlay
 import com.bakery.erp.ui.theme.BrandColors
 import kotlin.time.Clock
+import com.bakery.erp.ui.ProductImage
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.clickable
+import com.bakery.erp.ui.ZoomableImageDialog
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -110,7 +127,18 @@ fun PurchaseFormScreen(
     authViewModel: AuthViewModel,
     viewModel: PurchaseViewModel,
     /** null = alta. Con id, la pantalla edita esa compra. */
-    purchaseId: String? = null
+    purchaseId: String? = null,
+    /**
+     * Caja de la que sale el efectivo, cuando la compra se paga en el momento desde una
+     * gaveta abierta — el proveedor de gaseosas que llega a la puerta.
+     *
+     * Es el MISMO formulario y no una copia liviana a propósito: la factura que trae el
+     * repartidor tiene proveedor, catálogo, presentaciones e IVA igual que cualquier otra, y
+     * una segunda pantalla para lo mismo se queda atrás en cuanto ésta cambie. Lo único
+     * distinto es de qué bolsa salió el dinero, y eso es este parámetro: con caja, la compra
+     * nace saldada, no ofrece crédito, y su efectivo se descuenta al cuadrar.
+     */
+    sessionId: String? = null
 ) {
     val state by viewModel.uiState.collectAsState()
     val authState by authViewModel.uiState.collectAsState()
@@ -135,8 +163,27 @@ fun PurchaseFormScreen(
     var declaredTotalStr by rememberSaveable { mutableStateOf("") }
     var showOnlySelected by rememberSaveable { mutableStateOf(false) }
     var showAddIngredient by rememberSaveable { mutableStateOf(false) }
+    var showAddResale by rememberSaveable { mutableStateOf(false) }
+    var showAddLooseResale by rememberSaveable { mutableStateOf(false) }
+    // Producto al que se le define la presentación desde su fila; vacío = elegir del catálogo.
+    var addResaleFor by rememberSaveable { mutableStateOf("") }
     // ByteArray no es Parcelable: `remember`, no `rememberSaveable` (regla del proyecto).
     var invoicePhotoBytes by remember { mutableStateOf<ByteArray?>(null) }
+
+    LaunchedEffect(companyId, sessionId) { viewModel.loadPinnedSession(companyId, sessionId) }
+    val cashSession = state.pinnedSession?.takeIf { it.id == sessionId }
+    // Pagada de la gaveta: el dinero ya salió. No hay estado que elegir ni crédito que
+    // calcular, y ofrecerlos sería ofrecer dejar a deber algo que se acaba de pagar.
+    LaunchedEffect(cashSession?.id) {
+        if (cashSession != null) { purchaseStatus = PurchaseStatus.PAID; creditDaysStr = "0"; creditTouched = true }
+    }
+    // La sucursal es la de la caja, no se elige. Si se pudiera cambiar, el efectivo saldría de
+    // una gaveta y la mercadería entraría al inventario de otra sucursal — y las dos quedarían
+    // mal sin que nada lo señale.
+    LaunchedEffect(cashSession?.id, state.accessibleBranches) {
+        val s = cashSession ?: return@LaunchedEffect
+        state.accessibleBranches.firstOrNull { it.id == s.branchId }?.let { viewModel.selectBranch(it) }
+    }
 
     // Los días de crédito los propone el proveedor y el usuario puede pisarlos para esta
     // factura; `creditTouched` evita que cambiar de proveedor borre lo que ya escribió.
@@ -151,14 +198,28 @@ fun PurchaseFormScreen(
     val breakdown = taxBreakdownFromGross(grandTotal, taxRate)
     val declaredTotal = declaredTotalStr.replace(",", ".").toDoubleOrNull() ?: 0.0
 
-    // Insumos perecederos ya capturados: son los únicos a los que se les pide vencimiento.
-    val perishableLines = remember(state.draftLines, state.supplierIngredients) {
-        val perishableIds = state.supplierIngredients.filter { it.isPerishable }.mapTo(HashSet()) { it.id }
-        state.draftLines.filter { it.ingredientId in perishableIds && it.quantityReceived > 0 }
-            .sortedBy { it.ingredientName.lowercase() }
+    // Lo perecedero ya capturado —insumos Y productos de reventa marcados "Caduca"—: son los
+    // únicos a los que se les pide lote y vencimiento. Se miran también los catálogos completos:
+    // la línea suelta del proveedor ocasional no está en el catálogo del proveedor.
+    val perishableLines = remember(
+        state.draftLines, state.supplierIngredients, state.supplierSupplies, state.allIngredients,
+        state.supplierResaleProducts, state.allResaleProducts
+    ) {
+        val ingredientIds = (state.supplierIngredients + state.supplierSupplies + state.allIngredients)
+            .filter { it.isPerishable }.mapTo(HashSet()) { it.id }
+        val productIds = (state.supplierResaleProducts + state.allResaleProducts)
+            .filter { it.isPerishable }.mapTo(HashSet()) { it.id }
+        state.draftLines
+            .filter { it.quantityReceived > 0 }
+            .filter {
+                if (it.lineKind == PurchaseLineKind.RESALE_PRODUCT) it.productId in productIds
+                else it.ingredientId in ingredientIds
+            }
+            .sortedBy { it.itemName.lowercase() }
     }
 
     val isEditing = purchaseId != null
+    val hasSupplier = state.selectedSupplier != null || state.occasionalSupplierName.isNotBlank()
     // Vacío en alta (estable), y pasa a ser el id de la compra en cuanto la edición termina
     // de cargar — ese cambio es el que hace que las filas se re-inicialicen con sus valores.
     val formKey = state.editingPurchase?.id.orEmpty()
@@ -183,9 +244,20 @@ fun PurchaseFormScreen(
         applyTax = editing.taxRatePercent > 0.0
         declaredTotalStr = if (editing.declaredTotal > 0.0) editing.declaredTotal.fmt(2) else ""
     }
-    LaunchedEffect(state.isSaved) {
-        if (state.isSaved) { viewModel.cancelEdit(); viewModel.resetForm(); onNavigateBack() }
+    // La factura ya está guardada, pero si subió algún costo hay una decisión de precio que
+    // tomar y esta pantalla es la que la tiene enfrente. Se espera a resolverla antes de
+    // volver: navegar primero destruiría el diálogo con la sugerencia adentro.
+    LaunchedEffect(state.isSaved, state.repriceSuggestions.isEmpty()) {
+        if (state.isSaved && state.repriceSuggestions.isEmpty()) {
+            viewModel.cancelEdit(); viewModel.resetForm(); onNavigateBack()
+        }
     }
+    RepricingDialog(
+        suggestions = state.repriceSuggestions,
+        isSaving = state.isProcessing,
+        onDismiss = { viewModel.dismissRepricing() },
+        onApply = { viewModel.applyRepricing(companyId, it) }
+    )
     LaunchedEffect(state.error) {
         state.error?.let { snackbarHostState.showSnackbar(it); viewModel.clearError() }
     }
@@ -203,8 +275,9 @@ fun PurchaseFormScreen(
                 showOnlySelected = false
             }
             is BarcodeMatch.OfProduct -> {
-                ingredientSearch = ""
-                scanMessage = "${match.product.name} está en la sección de reventa, más abajo."
+                // La búsqueda ya filtra también la reventa: el producto queda solo en pantalla.
+                ingredientSearch = match.product.name
+                showOnlySelected = false
             }
             null -> scanMessage = "Ningún insumo ni producto tiene el código $code."
         }
@@ -213,14 +286,37 @@ fun PurchaseFormScreen(
         scanMessage?.let { snackbarHostState.showSnackbar(it); scanMessage = null }
     }
 
+    // Una sola búsqueda para las tres secciones, por el nombre del catálogo O por cómo lo
+    // escribe este proveedor en su factura (`PurchaseFormat.supplierItemName`): quien captura
+    // lee el papel, y el papel dice "Azúcar blanca Don Justo cabal", no "Azúcar".
+    val searchSupplierId = state.selectedSupplier?.id.orEmpty()
     val filteredIngredients = remember(
-        state.supplierIngredients, ingredientSearch, showOnlySelected, state.draftLines
+        state.supplierIngredients, ingredientSearch, showOnlySelected, state.draftLines, searchSupplierId
     ) {
         val chosen = state.draftLines.mapTo(HashSet()) { it.ingredientId }
         state.supplierIngredients
-            .filter { ingredientSearch.isBlank() || it.name.contains(ingredientSearch.trim(), ignoreCase = true) }
+            .filter { matchesPurchaseSearch(it.name, it.purchaseFormats, searchSupplierId, ingredientSearch) }
             .filter { !showOnlySelected || it.id in chosen }
     }
+    val filteredSupplies = remember(
+        state.supplierSupplies, ingredientSearch, showOnlySelected, state.draftLines, searchSupplierId
+    ) {
+        val chosen = state.draftLines.mapTo(HashSet()) { it.ingredientId }
+        state.supplierSupplies
+            .filter { matchesPurchaseSearch(it.name, it.purchaseFormats, searchSupplierId, ingredientSearch) }
+            .filter { !showOnlySelected || it.id in chosen }
+    }
+    val filteredResale = remember(
+        state.supplierResaleProducts, ingredientSearch, showOnlySelected, state.draftLines, searchSupplierId
+    ) {
+        val chosen = state.draftLines.mapTo(HashSet()) { it.productId }
+        state.supplierResaleProducts
+            .filter { matchesPurchaseSearch(it.name, it.purchaseFormats, searchSupplierId, ingredientSearch) }
+            .filter { !showOnlySelected || it.id in chosen }
+    }
+    val catalogSize = state.supplierIngredients.size + state.supplierSupplies.size + state.supplierResaleProducts.size
+    val noSearchResults = ingredientSearch.isNotBlank() &&
+        filteredIngredients.isEmpty() && filteredSupplies.isEmpty() && filteredResale.isEmpty()
 
     fun doSave() {
         if (currentUser == null) return
@@ -252,7 +348,8 @@ fun PurchaseFormScreen(
                 dueDateOverride = dueDate,
                 taxRatePercent = taxRate,
                 declaredTotal = declaredTotal,
-                invoicePhotoBytes = invoicePhotoBytes
+                invoicePhotoBytes = invoicePhotoBytes,
+                session = cashSession
             )
         }
     }
@@ -289,10 +386,10 @@ fun PurchaseFormScreen(
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                 val isWide = maxWidth >= 600.dp
 
-                if (showReview && state.selectedBranch != null && state.selectedSupplier != null) {
+                if (showReview && state.selectedBranch != null && hasSupplier) {
                     PurchaseReviewContent(
                         branch = state.selectedBranch!!,
-                        supplier = state.selectedSupplier!!,
+                        supplierName = state.selectedSupplier?.company ?: state.occasionalSupplierName,
                         invoiceNumber = invoiceNumber,
                         notes = notes,
                         purchaseStatus = purchaseStatus,
@@ -315,7 +412,9 @@ fun PurchaseFormScreen(
                         // Con una sola sucursal accesible el ViewModel ya la eligió: mostrarla
                         // como "paso" gastaba el espacio más caro de la pantalla en algo que
                         // nadie puede cambiar.
-                        val singleBranch = state.accessibleBranches.size == 1 && state.selectedBranch != null
+                        val singleBranch =
+                            (state.accessibleBranches.size == 1 || cashSession != null) &&
+                                state.selectedBranch != null
                         if (!singleBranch) {
                             StepHeader("1. Sucursal destino")
                         }
@@ -401,7 +500,8 @@ fun PurchaseFormScreen(
                                         creditDaysStr = creditDaysStr,
                                         onCreditDaysChange = { creditTouched = true; creditDaysStr = it },
                                         dueDate = dueDate,
-                                        supplierDefaultDays = state.selectedSupplier?.paymentTermsDays ?: 0
+                                        supplierDefaultDays = state.selectedSupplier?.paymentTermsDays ?: 0,
+                                        showCredit = cashSession == null
                                     )
 
                                     // ── PASO 3: Insumos ───────────────────────────────
@@ -426,6 +526,9 @@ fun PurchaseFormScreen(
                                         // Un proveedor ocasional tampoco tiene catálogo, y ahí
                                         // el camino es la línea suelta, no un aviso.
                                         !state.usesServices &&
+                                        // Con reventa encendida tampoco: la sección de reventa
+                                        // es la que ofrece darle un producto a este proveedor.
+                                        !state.usesResale &&
                                         state.selectedSupplier != null &&
                                         state.supplierIngredients.isEmpty() &&
                                         state.supplierSupplies.isEmpty() &&
@@ -441,8 +544,12 @@ fun PurchaseFormScreen(
                                           // Proveedor ocasional: no hay catálogo que recorrer,
                                           // se agregan líneas sueltas una por una.
                                           Text(
-                                              "Compra sin proveedor registrado: agregá cada insumo " +
-                                                  "con su cantidad y lo que costó.",
+                                              if (state.usesResale)
+                                                  "Compra sin proveedor registrado: agregá cada insumo o " +
+                                                      "producto de reventa con su cantidad y lo que costó."
+                                              else
+                                                  "Compra sin proveedor registrado: agregá cada insumo " +
+                                                      "con su cantidad y lo que costó.",
                                               style = MaterialTheme.typography.bodySmall,
                                               color = MaterialTheme.colorScheme.onSurfaceVariant
                                           )
@@ -453,12 +560,48 @@ fun PurchaseFormScreen(
                                               onAddIngredient = { showAddIngredient = true },
                                               onScanBarcode = if (isBarcodeScanSupported()) scanBarcode else null
                                           )
+                                          if (state.usesResale) {
+                                              OutlinedButton(
+                                                  onClick = { showAddLooseResale = true },
+                                                  modifier = Modifier.fillMaxWidth()
+                                              ) {
+                                                  Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                                                  Spacer(Modifier.width(6.dp))
+                                                  Text("Agregar producto de reventa")
+                                              }
+                                          }
                                           LooseLinesList(
                                               lines = state.draftLines.filter {
                                                   it.lineKind != PurchaseLineKind.SERVICE
                                               },
                                               onRemove = { viewModel.removeDraftLine(it) }
                                           )
+                                      }
+
+                                      // Búsqueda arriba de las tres secciones: un proveedor que
+                                      // solo vende reventa también necesita buscar.
+                                      if (state.selectedSupplier != null && catalogSize > 4) {
+                                          OutlinedTextField(
+                                              value = ingredientSearch,
+                                              onValueChange = { ingredientSearch = it },
+                                              label = { Text("Buscar por nombre o como dice la factura") },
+                                              leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                                              trailingIcon = if (ingredientSearch.isNotEmpty()) ({
+                                                  IconButton(onClick = { ingredientSearch = "" }) {
+                                                      Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                  }
+                                              }) else null,
+                                              modifier = Modifier.fillMaxWidth(),
+                                              singleLine = true
+                                          )
+                                          if (noSearchResults) {
+                                              Text(
+                                                  "Sin resultados para \"$ingredientSearch\". Si en la factura viene con otro " +
+                                                      "nombre, agregáselo a su presentación para encontrarlo la próxima vez.",
+                                                  style = MaterialTheme.typography.bodySmall,
+                                                  color = MaterialTheme.colorScheme.outline
+                                              )
+                                          }
                                       }
 
                                       if (state.supplierIngredients.isNotEmpty()) {
@@ -482,28 +625,9 @@ fun PurchaseFormScreen(
                                             onAddIngredient = { showAddIngredient = true },
                                             onScanBarcode = if (isBarcodeScanSupported()) scanBarcode else null
                                         )
-                                        if (state.supplierIngredients.size > 4) {
-                                            OutlinedTextField(
-                                                value = ingredientSearch,
-                                                onValueChange = { ingredientSearch = it },
-                                                label = { Text("Buscar insumo") },
-                                                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                                                trailingIcon = if (ingredientSearch.isNotEmpty()) ({
-                                                    IconButton(onClick = { ingredientSearch = "" }) {
-                                                        Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
-                                                    }
-                                                }) else null,
-                                                modifier = Modifier.fillMaxWidth(),
-                                                singleLine = true
-                                            )
-                                        }
-
                                         if (filteredIngredients.isEmpty()) {
-                                            Text(
-                                                "Sin resultados para \"$ingredientSearch\"",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.outline
-                                            )
+                                            // Nada que dibujar: el aviso de "sin resultados" vive
+                                            // junto a la búsqueda, para las tres secciones a la vez.
                                         } else if (isWide) {
                                             IngredientTable(
                                                 ingredients = filteredIngredients,
@@ -533,17 +657,17 @@ fun PurchaseFormScreen(
                                       // suministro se compra por presentación, se guarda en
                                       // la sucursal y lleva Kardex igual. Lo único distinto
                                       // —que además se gasta— pasa al guardar, no acá.
-                                      if (state.usesSupplies && state.supplierSupplies.isNotEmpty()) {
+                                      if (state.usesSupplies && filteredSupplies.isNotEmpty()) {
                                           Spacer(Modifier.height(8.dp))
                                           StepHeader("Suministros de operación")
                                           Text(
-                                              "Entran al inventario de la sucursal y se registran " +
-                                                  "como gasto del mes.",
+                                              "Se registran como gasto del mes. Los que llevan " +
+                                                  "conteo entran además al inventario de la sucursal.",
                                               style = MaterialTheme.typography.bodySmall,
                                               color = MaterialTheme.colorScheme.onSurfaceVariant
                                           )
                                           Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                              state.supplierSupplies.forEach { supply ->
+                                              filteredSupplies.forEach { supply ->
                                                   IngredientPurchaseRow(
                                                       ingredient = supply,
                                                       supplierId = state.selectedSupplier!!.id,
@@ -557,20 +681,52 @@ fun PurchaseFormScreen(
                                           }
                                       }
 
-                                      if (state.usesResale && state.supplierResaleProducts.isNotEmpty()) {
+                                      // ── Productos de reventa ──────────────
+                                      // Con proveedor del catálogo siempre se dibuja, aunque no
+                                      // tenga productos todavía: es donde se le agrega uno, y
+                                      // esconderla dejaba al de gaseosas sin forma de capturarse.
+                                      if (state.usesResale && state.selectedSupplier != null) {
                                           Spacer(Modifier.height(8.dp))
-                                          StepHeader("Productos de reventa")
+                                          Row(
+                                              modifier = Modifier.fillMaxWidth(),
+                                              verticalAlignment = Alignment.CenterVertically
+                                          ) {
+                                              Box(Modifier.weight(1f)) { StepHeader("Productos de reventa") }
+                                              TextButton(onClick = { addResaleFor = ""; showAddResale = true }) {
+                                                  Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                                                  Spacer(Modifier.width(4.dp))
+                                                  Text("Agregar producto")
+                                              }
+                                          }
+                                          Text(
+                                              if (state.supplierResaleProducts.isEmpty())
+                                                  "${state.selectedSupplier!!.company} todavía no tiene productos de reventa. " +
+                                                      "Tocá \"Agregar producto\" y decí en qué presentación te lo trae."
+                                              else
+                                                  "Anotá lo que dice la factura: si trajo 2 cajas, poné 2 — las unidades " +
+                                                      "se calculan solas con la presentación.",
+                                              style = MaterialTheme.typography.bodySmall,
+                                              color = MaterialTheme.colorScheme.onSurfaceVariant
+                                          )
                                           Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                              state.supplierResaleProducts.forEach { product ->
+                                              filteredResale.forEach { product ->
+                                                  // Por PRODUCTO, no por tipo de línea: la de un
+                                                  // producto respaldado por insumo se guarda como
+                                                  // línea de insumo y si no, la fila se vería vacía
+                                                  // al reabrir la factura.
                                                   val existing = state.draftLines.find {
-                                                      it.lineKind == PurchaseLineKind.RESALE_PRODUCT &&
                                                       it.productId == product.id
                                                   }
                                                   ResaleProductRow(
                                                       product = product,
+                                                      supplierId = state.selectedSupplier!!.id,
                                                       existingLine = existing,
+                                                      linkedIngredient = state.allIngredients.find {
+                                                          it.id == product.linkedIngredientId
+                                                      },
                                                       formKey = formKey,
-                                                      onLineChanged = { viewModel.updateDraftLine(it) }
+                                                      onLineChanged = { viewModel.updateDraftLine(it) },
+                                                      onDefineFormat = { addResaleFor = product.id; showAddResale = true }
                                                   )
                                               }
                                           }
@@ -587,7 +743,11 @@ fun PurchaseFormScreen(
                                                     it.lineKind == PurchaseLineKind.SERVICE
                                                 },
                                                 assets = state.assets,
-                                                onUpsert = { viewModel.upsertServiceLine(it) },
+                                                concepts = state.purchaseConcepts,
+                                                supplierId = state.selectedSupplier?.id.orEmpty(),
+                                                onUpsert = { line, concept ->
+                                                    viewModel.upsertServiceLine(companyId, line, concept)
+                                                },
                                                 onRemove = { viewModel.removeServiceLine(it) }
                                             )
                                         }
@@ -595,19 +755,34 @@ fun PurchaseFormScreen(
                                         if (perishableLines.isNotEmpty()) {
                                             ExpirySection(
                                                 lines = perishableLines,
-                                                onLineChanged = { viewModel.updateDraftLine(it) }
+                                                onExpiryChanged = { line, date, lot ->
+                                                    viewModel.updateLineExpiry(line, date, lot)
+                                                }
                                             )
                                         }
 
                                         Spacer(Modifier.height(4.dp))
 
                                         Text(
-                                            text = "Estado de la compra",
+                                            text = if (cashSession != null) "Pagada de ${cashSession.registerName.ifEmpty { "la caja" }}"
+                                                   else "Estado de la compra",
                                             style = MaterialTheme.typography.labelMedium,
                                             fontWeight = FontWeight.Medium,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
-                                        Row(
+                                        // Pagada de la gaveta no admite estado: el dinero ya
+                                        // salió y la mercadería ya llegó con el repartidor.
+                                        // Dejar "Por recibir" ahí permitiría descontar el
+                                        // efectivo de una compra que no entró al inventario.
+                                        if (cashSession != null) {
+                                            Text(
+                                                text = "El efectivo se descuenta de esa caja al cuadrarla. " +
+                                                    "Entra al stock y queda saldada, sin cuenta por pagar.",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        if (cashSession == null) Row(
                                             modifier = Modifier.fillMaxWidth(),
                                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
@@ -639,7 +814,7 @@ fun PurchaseFormScreen(
                                         // El estado ya NO es solo una etiqueta: "Por recibir"
                                         // deja el inventario intacto hasta que alguien confirme
                                         // la llegada desde el detalle de la compra.
-                                        Text(
+                                        if (cashSession == null) Text(
                                             text = when (purchaseStatus) {
                                                 PurchaseStatus.PENDING_RECEIPT ->
                                                     "El stock NO entrará todavía. Se ingresa cuando marques la compra como recibida."
@@ -689,8 +864,22 @@ fun PurchaseFormScreen(
                     // El total va fijo abajo, no dentro del scroll: es el número que se coteja
                     // contra el papel mientras se teclea, y antes solo existía en el paso de
                     // revisión — que en tablet ni siquiera se muestra.
-                    if (state.selectedSupplier != null) {
+                    // Con proveedor ocasional también: antes solo se dibujaba con proveedor del
+                    // catálogo, y como es el único botón de guardar, la compra en la tienda de
+                    // la esquina se capturaba entera y no había forma de registrarla.
+                    if (hasSupplier) {
                         PurchaseTotalsBar(
+                            // No se puede pagar de la gaveta con dinero que no está en ella:
+                            // dejarlo pasar no documenta un faltante, inventa uno, y el cierre
+                            // pediría devolver efectivo que nunca entró.
+                            blockingNotice = cashSession?.let { s ->
+                                if (grandTotal > s.expectedCashNow + 0.01) {
+                                    "En ${s.registerName.ifEmpty { "esta caja" }} hay " +
+                                        "Q ${s.expectedCashNow.fmt(2)} y la factura suma " +
+                                        "Q ${grandTotal.fmt(2)}. No se puede pagar de la caja " +
+                                        "más de lo que hay en ella."
+                                } else null
+                            },
                             lineCount = state.draftLines.size,
                             breakdown = breakdown,
                             applyTax = applyTax,
@@ -747,6 +936,49 @@ fun PurchaseFormScreen(
         )
     }
 
+    // Reventa al proveedor ocasional: mismo criterio que el insumo suelto — no deja
+    // presentación nueva detrás, pero sí puede usar las que el producto ya tiene (una caja de
+    // 24 es una caja de 24 aunque hoy la hayan comprado en la tienda de la esquina).
+    if (showAddLooseResale && state.selectedSupplier == null) {
+        LooseResaleLineDialog(
+            candidates = state.allResaleProducts,
+            ingredients = state.allIngredients,
+            onDismiss = { showAddLooseResale = false },
+            onConfirm = { line ->
+                showAddLooseResale = false
+                viewModel.updateDraftLine(line)
+            }
+        )
+    }
+
+    if (showAddResale && state.selectedSupplier != null) {
+        AddSupplierResaleProductDialog(
+            supplierName = state.selectedSupplier!!.company,
+            // Del catálogo completo salen los que este proveedor todavía no vende; desde la fila
+            // de un producto ya viene elegido y solo falta decir en qué empaque llega.
+            candidates = remember(state.allResaleProducts, state.supplierResaleProducts) {
+                val already = state.supplierResaleProducts.mapTo(HashSet()) { it.id }
+                state.allResaleProducts.filter { it.id !in already }
+            },
+            preselected = (state.supplierResaleProducts + state.allResaleProducts)
+                .firstOrNull { addResaleFor.isNotEmpty() && it.id == addResaleFor },
+            isSaving = state.isProcessing,
+            onDismiss = { showAddResale = false },
+            onConfirm = { product, description, unitsPerPackage, packageCost, invoiceName ->
+                showAddResale = false
+                viewModel.addResaleSupplierFormat(
+                    companyId, product, description, unitsPerPackage, packageCost, invoiceName
+                )
+            },
+            onCreate = { name, saleUnit, salePrice, description, perPackage, cost, invoiceName ->
+                showAddResale = false
+                viewModel.createSupplierResaleProduct(
+                    companyId, name, saleUnit, salePrice, description, perPackage, cost, invoiceName
+                )
+            }
+        )
+    }
+
     if (showAddIngredient && state.selectedSupplier != null) {
         AddSupplierIngredientDialog(
             supplierName = state.selectedSupplier!!.company,
@@ -755,11 +987,19 @@ fun PurchaseFormScreen(
                 state.allIngredients.filter { it.id !in already }.sortedBy { it.name.lowercase() }
             },
             isSaving = state.isProcessing,
+            usesSupplies = state.usesSupplies,
             onDismiss = { showAddIngredient = false },
             onConfirm = { ingredient, description, unit, unitsPerPackage, packageCost ->
                 showAddIngredient = false
                 viewModel.addSupplierFormat(
                     companyId, ingredient, description, unit, unitsPerPackage, packageCost
+                )
+            },
+            onCreate = { name, usage, baseUnit, category, tracksStock, description, perPackage, cost ->
+                showAddIngredient = false
+                viewModel.createSupplierIngredient(
+                    companyId, name, usage, baseUnit, category, tracksStock,
+                    description, perPackage, cost
                 )
             }
         )
@@ -885,6 +1125,9 @@ private fun IngredientTableRow(
     fun buildLine(packages: Double): PurchaseLine {
         val cost = packageCostStr.toDoubleOrNull() ?: originalPackageCost
         return PurchaseLine(
+            // Sin esto TODO suministro capturado desde el catálogo entraba como materia
+            // prima y su gasto del mes nunca se generaba. Ver `ingredientPurchaseLineKind`.
+            lineKind = ingredientPurchaseLineKind(ingredient),
             ingredientId = ingredient.id,
             ingredientName = ingredient.name,
             ingredientUnit = ingredient.effectiveBaseUnit,
@@ -906,6 +1149,10 @@ private fun IngredientTableRow(
             // Insumo
             Column(modifier = Modifier.weight(2.5f)) {
                 Text(ingredient.name, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                InvoiceNameLine(
+                    ingredient.purchaseFormats.supplierItemNamesFor(supplierId),
+                    ingredient.name
+                )
                 if (defaultFormat != null) {
                     Text(
                         defaultFormat.description,
@@ -1105,7 +1352,7 @@ private fun QuantityInputDialog(
 @Composable
 private fun PurchaseReviewContent(
     branch: Branch,
-    supplier: Supplier,
+    supplierName: String,
     invoiceNumber: String,
     notes: String,
     purchaseStatus: String,
@@ -1136,7 +1383,7 @@ private fun PurchaseReviewContent(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 ReviewDetailRow("Sucursal", branch.name)
-                ReviewDetailRow("Proveedor", supplier.company)
+                ReviewDetailRow("Proveedor", supplierName)
                 if (invoiceNumber.isNotBlank()) ReviewDetailRow("Nº Factura", invoiceNumber)
                 ReviewDetailRow("Estado", PurchaseStatus.label(purchaseStatus))
             }
@@ -1300,6 +1547,24 @@ private fun ReviewDetailRow(label: String, value: String) {
 
 // ── Sub-composables ───────────────────────────────────────────────────────────
 
+/**
+ * Cómo viene el renglón en la factura de este proveedor, debajo del nombre del catálogo: los
+ * dos nombres a la vista, así se encuentra leyendo cualquiera de los dos. Se omite si es igual
+ * al nombre del catálogo — repetirlo es ruido.
+ */
+@Composable
+private fun InvoiceNameLine(invoiceNames: List<String>, catalogName: String) {
+    val shown = invoiceNames.filterNot { it.equals(catalogName, ignoreCase = true) }
+    if (shown.isEmpty()) return
+    Text(
+        text = shown.joinToString(" / "),
+        style = MaterialTheme.typography.labelSmall,
+        fontStyle = FontStyle.Italic,
+        color = BrandColors.Primary,
+        maxLines = 2
+    )
+}
+
 @Composable
 private fun StepHeader(title: String) {
     Text(
@@ -1417,6 +1682,7 @@ private fun IngredientPurchaseRow(
     fun buildLine(): PurchaseLine {
         val packages = qty.toDoubleOrNull() ?: 0.0
         return PurchaseLine(
+            lineKind = ingredientPurchaseLineKind(ingredient),
             ingredientId = ingredient.id,
             ingredientName = ingredient.name,
             ingredientUnit = ingredient.effectiveBaseUnit,
@@ -1445,6 +1711,10 @@ private fun IngredientPurchaseRow(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(ingredient.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                    InvoiceNameLine(
+                        ingredient.purchaseFormats.supplierItemNamesFor(supplierId),
+                        ingredient.name
+                    )
                     if (defaultFormat != null) {
                         Text(
                             text = defaultFormat.description,
@@ -1540,44 +1810,90 @@ private fun IngredientPurchaseRow(
 
 // ── Fila de producto de reventa ──────────────────────────────────────────────
 
+/**
+ * Una fila por producto del proveedor. Lo tecleado son EMPAQUES de la presentación elegida
+ * —"2 cajas"— y la fila dice en cuántas unidades se convierten, porque ése es el número que
+ * entra al inventario de tienda y el que alguien va a contar después en el estante.
+ *
+ * "Por unidad" siempre se ofrece además de las presentaciones: el repartidor a veces deja seis
+ * latas sueltas, y obligar a expresarlas como "0.25 cajas" mete un redondeo en el costo.
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ResaleProductRow(
     product: Product,
+    supplierId: String,
     existingLine: PurchaseLine?,
+    /**
+     * Insumo del que este producto vende, si vende de uno (la leche). Con él la línea se
+     * redirige a su inventario en vez de crear un stock de tienda que nadie descuenta.
+     */
+    linkedIngredient: Ingredient?,
     formKey: String,
-    onLineChanged: (PurchaseLine) -> Unit
+    onLineChanged: (PurchaseLine) -> Unit,
+    onDefineFormat: () -> Unit
 ) {
+    val formats = remember(product, supplierId) { product.formatsForSupplier(supplierId) }
+    val saleUnit = product.unit.ifBlank { "unidad" }
+
+    // Presentación elegida. Al reabrir una compra manda la de la línea (vacía = se compró por
+    // unidad), no la predeterminada de hoy: si no, corregir la factura cambiaría cajas por latas.
+    var formatId by rememberSaveable(product.id, formKey) {
+        mutableStateOf(existingLine?.formatId ?: formats.firstOrNull()?.id.orEmpty())
+    }
+    // Una presentación agregada desde el diálogo llega después de la primera composición: si
+    // la fila todavía no tiene nada anotado, pasa a usarla en vez de quedarse "por unidad".
+    LaunchedEffect(formats.firstOrNull()?.id) {
+        if (existingLine == null && formatId.isEmpty() && formats.isNotEmpty()) {
+            formatId = formats.first().id
+        }
+    }
+    val format = formats.firstOrNull { it.id == formatId }
+
+    fun seedPrice(fmt: PurchaseFormat?): String {
+        val fromLine = existingLine?.takeIf { it.formatId == fmt?.id.orEmpty() }?.packageCost
+        val seed = fromLine?.takeIf { it > 0 }
+            ?: fmt?.packageCost?.takeIf { it > 0 }
+            ?: if (fmt == null) product.purchaseCost ?: 0.0 else 0.0
+        return if (seed > 0) seed.fmt(2) else ""
+    }
+
     var qty by rememberSaveable(product.id, formKey) {
         mutableStateOf(
-            existingLine?.quantityReceived?.takeIf { it > 0 }
-                ?.let { it.fmt(2).trimEnd('0').trimEnd('.') } ?: ""
+            existingLine?.let { it.packagesReceived.takeIf { p -> p > 0 } ?: it.quantityReceived }
+                ?.takeIf { it > 0 }?.let { formatPurchaseQty(it) } ?: ""
         )
     }
-    var costStr by rememberSaveable(product.id, formKey) {
-        mutableStateOf(
-            (existingLine?.unitCost ?: product.purchaseCost ?: 0.0).takeIf { it > 0 }?.fmt(2) ?: ""
-        )
-    }
-    val currentQty = qty.toDoubleOrNull() ?: 0.0
-    val currentCost = costStr.toDoubleOrNull() ?: 0.0
-    val lineTotal = currentQty * currentCost
-    val isSelected = currentQty > 0
+    var priceStr by rememberSaveable(product.id, formKey, format?.id) { mutableStateOf(seedPrice(format)) }
 
-    fun buildLine() = PurchaseLine(
-        lineKind = PurchaseLineKind.RESALE_PRODUCT,
-        productId = product.id,
-        productName = product.name,
-        quantityReceived = qty.toDoubleOrNull() ?: 0.0,
-        packagesReceived = qty.toDoubleOrNull() ?: 0.0,
-        packageDescription = product.unit,
-        unitCost = costStr.toDoubleOrNull() ?: 0.0,
-        packageCost = costStr.toDoubleOrNull() ?: 0.0
+    val currentQty = qty.replace(",", ".").toDoubleOrNull() ?: 0.0
+    val currentPrice = priceStr.replace(",", ".").toDoubleOrNull() ?: 0.0
+    val preview = resalePurchaseLine(product, format, currentQty, currentPrice, linkedIngredient)
+    // Lo que se cuenta del otro lado: unidades de tienda, o unidades base del insumo cuando
+    // la línea va redirigida ("= 24 lt al inventario de Leche").
+    val stockUnit = if (preview.isRedirectedToIngredient)
+        preview.ingredientUnit.ifEmpty { "unidad" } else saleUnit
+    val isSelected = currentQty > 0
+    val packageWord = format?.description?.split(" ")?.firstOrNull()?.lowercase() ?: saleUnit
+
+    fun emit(fmt: PurchaseFormat? = format, price: String = priceStr) = onLineChanged(
+        resalePurchaseLine(
+            product, fmt,
+            qty.replace(",", ".").toDoubleOrNull() ?: 0.0,
+            price.replace(",", ".").toDoubleOrNull() ?: 0.0,
+            linkedIngredient
+        )
     )
+
+    var zoomedImage by remember { mutableStateOf<String?>(null) }
+    zoomedImage?.let { url ->
+        ZoomableImageDialog(imageUrl = url, title = product.name, onDismiss = { zoomedImage = null })
+    }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = if (isSelected) Color(0xFFFFF3DC) else MaterialTheme.colorScheme.surface
+            containerColor = if (isSelected) BrandColors.AccentSoft else MaterialTheme.colorScheme.surface
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
@@ -1587,48 +1903,169 @@ private fun ResaleProductRow(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                // La foto es lo que evita agarrar el renglón equivocado entre tres presentaciones
+                // de la misma marca. Solo reventa: el insumo no guarda imagen.
+                //
+                // Se toca para verla en grande: en 48dp se distingue el color del empaque pero
+                // no el sabor ni el tamaño, que es justo lo que se está tratando de confirmar.
+                // Misma solución que la foto del pedido especial y la de la factura.
+                product.imageUrl?.takeIf { it.isNotBlank() }?.let { url ->
+                    ProductImage(
+                        imageUrl = url,
+                        contentDescription = product.name,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { zoomedImage = url }
+                    )
+                }
+                // El nombre se lleva TODO el ancho que deja la foto. La cantidad vivía acá con
+                // 130dp fijos y en un teléfono le comía la mitad al renglón, que es justo lo
+                // que hay que leer para saber si esta fila es la de la factura: el nombre del
+                // catálogo, cómo lo factura el proveedor y en qué presentación viene.
                 Column(modifier = Modifier.weight(1f)) {
                     Text(product.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                    if (product.unit.isNotEmpty()) {
-                        Text(
-                            text = product.unit,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    InvoiceNameLine(
+                        product.purchaseFormats.supplierItemNamesFor(supplierId),
+                        product.name
+                    )
+                    Text(
+                        text = format?.description ?: "Por $saleUnit",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
-                OutlinedTextField(
-                    value = qty,
-                    onValueChange = { raw -> qty = raw; onLineChanged(buildLine()) },
-                    label = { Text("Cantidad") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    singleLine = true,
-                    modifier = Modifier.width(115.dp)
-                )
             }
+
+            // Cantidad y precio juntos: son los dos números que se copian del mismo renglón
+            // del papel, y uno al lado del otro se teclean sin cambiar de zona de la pantalla.
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 OutlinedTextField(
-                    value = costStr,
-                    onValueChange = { raw -> costStr = raw; onLineChanged(buildLine()) },
-                    label = { Text("Costo por unidad") },
+                    value = qty,
+                    onValueChange = { raw ->
+                        qty = raw.filter { it.isDigit() || it == '.' || it == ',' }
+                        emit()
+                    },
+                    label = { Text("Cantidad") },
+                    suffix = { Text(packageWord, style = MaterialTheme.typography.labelSmall) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedTextField(
+                    value = priceStr,
+                    onValueChange = { raw ->
+                        priceStr = raw.filter { it.isDigit() || it == '.' || it == ',' }
+                        emit()
+                    },
+                    label = {
+                        Text(
+                            if (format != null) "Precio por $packageWord" else "Costo por $saleUnit",
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    },
                     prefix = { Text("Q ") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     singleLine = true,
                     modifier = Modifier.weight(1f)
                 )
-                if (lineTotal > 0) {
+            }
+
+            // Los chips y el subtotal comparten renglón: las presentaciones de un producto son
+            // dos o tres y no llegan a la mitad del ancho, así que el renglón aparte que tenía
+            // el total era altura regalada — y en un teléfono la altura de la tarjeta decide
+            // cuántos productos se ven de un vistazo.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Box(modifier = Modifier.weight(1f)) {
+                    if (formats.isNotEmpty()) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            (formats.map { it.id to it.description } + ("" to "Por $saleUnit")).forEach { (id, label) ->
+                                FilterChip(
+                                    selected = formatId == id,
+                                    onClick = {
+                                        if (formatId != id) {
+                                            val next = formats.firstOrNull { it.id == id }
+                                            // El precio es de la presentación: el de la caja no
+                                            // sirve como precio de una lata.
+                                            val nextPrice = seedPrice(next)
+                                            formatId = id
+                                            priceStr = nextPrice
+                                            if (currentQty > 0) emit(next, nextPrice)
+                                        }
+                                    },
+                                    label = { Text(label, style = MaterialTheme.typography.labelSmall) }
+                                )
+                            }
+                        }
+                    } else {
+                        TextButton(
+                            onClick = onDefineFormat,
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                "¿Te lo traen en caja o fardo? Definí la presentación",
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+                    }
+                }
+                if (preview.lineTotal > 0) {
                     Text(
-                        text = "Q ${lineTotal.fmt(2)}",
+                        text = "Q ${preview.lineTotal.fmt(2)}",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
                     )
                 }
             }
+
+
+            // La conversión a la vista: es lo que evita anotar 24 cajas cuando llegaron 24 latas.
+            if (format != null && currentQty > 0) {
+                Text(
+                    text = buildString {
+                        append("= ${formatPurchaseQty(preview.quantityReceived)} $stockUnit al inventario")
+                        if (preview.unitCost > 0) append(" · Q ${preview.unitCost.fmt(2)} c/u")
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = BrandColors.Primary
+                )
+            }
+            // Se dice SIEMPRE, no solo al teclear: quien captura eligió este renglón creyendo
+            // que surtía la tienda, y el conteo del estante no va a cuadrar con lo que
+            // pasó de verdad si nadie se lo avisa acá.
+            if (preview.isRedirectedToIngredient) {
+                Text(
+                    "Entra al inventario de ${preview.ingredientName} (insumo): este producto " +
+                        "vende de ese stock, no de uno propio.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = BrandColors.Primary
+                )
+            }
+            if (format != null && currentPrice > 0 && format.packageCost > 0 &&
+                kotlin.math.abs(currentPrice - format.packageCost) > 0.001
+            ) {
+                Text(
+                    "Antes: Q ${format.packageCost.fmt(2)} — se actualiza al guardar",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
+

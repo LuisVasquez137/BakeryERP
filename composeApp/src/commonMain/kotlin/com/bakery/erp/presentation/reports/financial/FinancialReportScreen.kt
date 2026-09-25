@@ -10,6 +10,7 @@ import androidx.compose.material.icons.automirrored.filled.TrendingDown
 import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.AttachMoney
 import androidx.compose.material.icons.filled.Percent
+import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -123,6 +124,24 @@ fun FinancialReportScreen(
                         }
                     }
                     item {
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            KpiTile(
+                                label = "Comprado",
+                                value = "Q ${state.purchases.total.fmtMoney()}",
+                                icon = Icons.Default.ShoppingCart,
+                                color = ReportPrimary,
+                                modifier = Modifier.weight(1f)
+                            )
+                            KpiTile(
+                                label = "Salió de caja",
+                                value = "Q ${state.cashOut.fmtMoney()}",
+                                icon = Icons.AutoMirrored.Filled.TrendingDown,
+                                color = BrandColors.AccentDeep,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                    item {
                         ReportSection(title = "P&L del mes") {
                             PnLLine("Ingresos por ventas", state.sales.totalRevenue, isPositive = true)
                             PnLLine("Mermas valoradas",   -state.merma.totalValue)
@@ -136,6 +155,89 @@ fun FinancialReportScreen(
                                 amount = state.operatingProfit,
                                 isPositive = state.operatingProfit >= 0,
                                 bold = true
+                            )
+                            // Sin esta nota, el dueño que compró Q8,000 de harina no
+                            // entiende por qué el P&L no la muestra y desconfía del número.
+                            if (state.purchases.inventoryTotal > 0.0) {
+                                Spacer(Modifier.height(8.dp))
+                                ReportNote(
+                                    "No incluye Q ${state.purchases.inventoryTotal.fmtMoney()} de " +
+                                        "compras de materia prima y reventa: son inventario hasta " +
+                                        "que el producto se vende. Están abajo, en Compras del mes."
+                                )
+                            }
+                        }
+                    }
+                    item {
+                        ReportSection(title = "Compras del mes") {
+                            if (state.purchases.purchasesCount == 0) {
+                                Text(
+                                    "Sin compras registradas este mes.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFF607585)
+                                )
+                            } else {
+                                PnLLine("Total comprado", state.purchases.total, isPositive = null)
+                                Spacer(Modifier.height(6.dp))
+                                BreakdownRow(
+                                    "A inventario",
+                                    state.purchases.inventoryTotal,
+                                    "Materia prima y reventa. Pega al costo cuando se vende."
+                                )
+                                BreakdownRow(
+                                    "Gasto directo",
+                                    state.purchases.expensedTotal,
+                                    "Suministros y servicios. Ya contados arriba en el P&L."
+                                )
+                                // Solo se dibuja cuando de verdad hay algo sin repartir. Es
+                                // preferible mostrarlo a repartirlo a ojo: adivinar acá sería
+                                // mentir justo en el número que la sección existe para dar.
+                                if (state.purchases.unclassifiedTotal > 0.0) {
+                                    BreakdownRow(
+                                        "Sin desglosar",
+                                        state.purchases.unclassifiedTotal,
+                                        "Compras mixtas registradas antes de esta versión."
+                                    )
+                                }
+                                Spacer(Modifier.height(8.dp))
+                                HorizontalDivider()
+                                Spacer(Modifier.height(8.dp))
+                                PnLLine("Ya pagado", state.purchases.paidTotal, isPositive = null)
+                                PnLLine(
+                                    "Queda debiendo",
+                                    state.purchases.pendingTotal,
+                                    isPositive = state.purchases.pendingTotal <= 0.0
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                ReportNote(
+                                    "${state.purchases.invoiceCount} " +
+                                        (if (state.purchases.invoiceCount == 1) "factura" else "facturas") +
+                                        " · ${state.purchases.quickCount} " +
+                                        (if (state.purchases.quickCount == 1) "compra rápida" else "compras rápidas")
+                                )
+                            }
+                        }
+                    }
+                    item {
+                        ReportSection(title = "Salida de dinero del mes") {
+                            PnLLine("Ventas cobradas", state.sales.totalRevenue, isPositive = true)
+                            PnLLine("Compras pagadas", -state.purchases.paidTotal)
+                            PnLLine("Gastos fuera de compras", -state.expenses.standalone)
+                            PnLLine("Planilla (costo patronal)", -state.payroll.totalEmployerCost)
+                            Spacer(Modifier.height(8.dp))
+                            HorizontalDivider()
+                            Spacer(Modifier.height(8.dp))
+                            PnLLine(
+                                label = "Efectivo neto",
+                                amount = state.netCash,
+                                isPositive = state.netCash >= 0,
+                                bold = true
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            ReportNote(
+                                "Los suministros y servicios no se restan dos veces: van dentro " +
+                                    "de \"Compras pagadas\", no en la línea de gastos. Los abonos a " +
+                                    "facturas de meses anteriores cuentan en su propio mes."
                             )
                         }
                     }
@@ -235,6 +337,32 @@ private fun PnLLine(label: String, amount: Double, isPositive: Boolean? = null, 
             style = MaterialTheme.typography.bodyMedium
         )
     }
+}
+
+/** Renglón de desglose: monto a la derecha y, debajo, por qué está donde está. */
+@Composable
+private fun BreakdownRow(label: String, amount: Double, hint: String) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(label, color = ReportSlate, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "Q ${amount.fmtMoney()}",
+                color = ReportSlate,
+                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
+        Text(hint, style = MaterialTheme.typography.labelSmall, color = Color(0xFF607585))
+    }
+}
+
+@Composable
+private fun ReportNote(text: String) {
+    Text(text, style = MaterialTheme.typography.labelSmall, color = Color(0xFF607585))
 }
 
 @Composable

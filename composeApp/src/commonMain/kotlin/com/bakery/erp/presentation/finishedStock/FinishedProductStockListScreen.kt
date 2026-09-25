@@ -55,7 +55,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.bakery.erp.model.FinishedProductStock
+import com.bakery.erp.model.StoreInventoryRow
+import androidx.compose.material.icons.filled.ShoppingBag
 import com.bakery.erp.model.Permission
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.presentation.auth.AuthViewModel
@@ -85,6 +86,9 @@ fun FinishedProductStockListScreen(
     val canAdjust = user?.hasPermission(Permission.MANAGE_FINISHED_STOCK) == true
     val snackbarHostState = remember { SnackbarHostState() }
     var search by rememberSaveable { mutableStateOf("") }
+    // "" = todos, "PAN" = producido en planta, "REVENTA". Solo se ofrece si hay reventa: un
+    // filtro que siempre muestra lo mismo es ruido.
+    var kindFilter by rememberSaveable { mutableStateOf("") }
 
     LaunchedEffect(companyId, user?.id) {
         if (companyId.isNotEmpty() && user != null) viewModel.loadBranches(companyId, user)
@@ -93,15 +97,23 @@ fun FinishedProductStockListScreen(
         state.error?.let { snackbarHostState.showSnackbar(it); viewModel.clearError() }
     }
 
-    val filtered = remember(state.stocks, search) {
-        if (search.isBlank()) state.stocks
-        else state.stocks.filter { it.productName.contains(search, ignoreCase = true) }
+    val hasResale = state.rows.any { it.isResale }
+    val byKind = remember(state.rows, kindFilter) {
+        when (kindFilter) {
+            "PAN" -> state.rows.filter { !it.isResale }
+            "REVENTA" -> state.rows.filter { it.isResale }
+            else -> state.rows
+        }
     }
-    val totalValue = remember(state.stocks) {
-        state.stocks.sumOf { it.currentStock * it.avgUnitCost }
+    val filtered = remember(byKind, search) {
+        if (search.isBlank()) byKind
+        else byKind.filter { it.productName.contains(search, ignoreCase = true) }
     }
-    val totalUnits = remember(state.stocks) {
-        state.stocks.sumOf { it.currentStock }
+    val totalValue = remember(byKind) {
+        byKind.sumOf { it.currentStock.coerceAtLeast(0.0) * it.avgUnitCost }
+    }
+    val totalUnits = remember(byKind) {
+        byKind.sumOf { it.currentStock }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -154,15 +166,30 @@ fun FinishedProductStockListScreen(
                 }
             }
 
+            if (hasResale) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf("" to "Todos", "PAN" to "Pan propio", "REVENTA" to "Reventa").forEach { (key, label) ->
+                        FilterChip(
+                            selected = kindFilter == key,
+                            onClick = { kindFilter = key },
+                            label = { Text(label, style = MaterialTheme.typography.labelMedium) }
+                        )
+                    }
+                }
+            }
+
             // KPIs
-            if (state.stocks.isNotEmpty()) {
+            if (byKind.isNotEmpty()) {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     KpiCard(
                         label = "Productos",
-                        value = state.stocks.size.toString(),
+                        value = byKind.size.toString(),
                         modifier = Modifier.weight(1f)
                     )
                     KpiCard(
@@ -192,17 +219,18 @@ fun FinishedProductStockListScreen(
 
             Box(modifier = Modifier.fillMaxSize()) {
                 when {
-                    state.isLoading && state.stocks.isEmpty() ->
+                    state.isLoading && state.rows.isEmpty() ->
                         CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                     state.branches.isEmpty() ->
                         EmptyState(
                             title = "Sin sucursales accesibles",
                             body = "Necesitas tener al menos una sucursal asignada con capacidad de venta o almacén."
                         )
-                    state.stocks.isEmpty() ->
+                    byKind.isEmpty() ->
                         EmptyState(
                             title = "Aún no hay producto terminado",
-                            body = "El inventario se llena automáticamente cuando confirmas la recepción de un despacho."
+                            body = "El pan entra al confirmar la recepción de un despacho; la reventa, al " +
+                                "registrar la compra al proveedor."
                         )
                     filtered.isEmpty() ->
                         EmptyState(title = "Sin resultados", body = "Intenta otro término de búsqueda.")
@@ -211,13 +239,19 @@ fun FinishedProductStockListScreen(
                             modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            items(filtered, key = { it.id }) { stock ->
+                            items(filtered, key = { it.productId }) { row ->
                                 StockCard(
-                                    stock = stock,
+                                    row = row,
                                     canSeeValue = canSeeValue,
-                                    canAdjust = canAdjust,
-                                    onClick = { onNavigateToMovements(stock.branchId, stock.productId) },
-                                    onAdjust = { onNavigateToAdjust(stock.branchId, stock.productId) }
+                                    // El de insumo se ajusta en el insumo: acá escribiría un
+                                    // inventario de terminado paralelo que la venta no descuenta.
+                                    canAdjust = canAdjust && !row.isIngredientBacked,
+                                    onClick = {
+                                        if (!row.isIngredientBacked) {
+                                            onNavigateToMovements(state.selectedBranchId, row.productId)
+                                        }
+                                    },
+                                    onAdjust = { onNavigateToAdjust(state.selectedBranchId, row.productId) }
                                 )
                             }
                         }
@@ -249,7 +283,7 @@ private fun KpiCard(label: String, value: String, modifier: Modifier = Modifier)
 
 @Composable
 private fun StockCard(
-    stock: FinishedProductStock,
+    row: StoreInventoryRow,
     canSeeValue: Boolean,
     canAdjust: Boolean,
     onClick: () -> Unit,
@@ -262,23 +296,41 @@ private fun StockCard(
         elevation = CardDefaults.cardElevation(1.dp)
     ) {
         Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Default.BakeryDining, null, tint = DeepSeaBlue, modifier = Modifier.size(28.dp))
+            Icon(
+                if (row.isResale) Icons.Default.ShoppingBag else Icons.Default.BakeryDining,
+                null, tint = DeepSeaBlue, modifier = Modifier.size(28.dp)
+            )
             Spacer(Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(stock.productName, style = MaterialTheme.typography.titleSmall,
+                Text(row.productName, style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold, color = DeepSeaBlue)
                 val sub = buildString {
-                    append("${stock.currentStock.fmt(0)} unidades")
-                    if (canSeeValue && stock.avgUnitCost > 0) {
-                        append(" · costo Q${stock.avgUnitCost.fmt(2)} c/u")
+                    append("${row.currentStock.fmt(0)} unidades")
+                    if (canSeeValue && row.avgUnitCost > 0) {
+                        append(" · costo Q${row.avgUnitCost.fmt(2)} c/u")
                     }
                 }
+                // Sin existencias en naranja oscuro: es lo que hay que reponer, y es también
+                // la señal de que una factura todavía no entró.
                 Text(sub, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    color = if (row.currentStock <= 0.0) BrandColors.AccentDeep
+                            else MaterialTheme.colorScheme.onSurfaceVariant)
+                when {
+                    row.isIngredientBacked -> Text(
+                        "Del inventario del insumo ${row.linkedIngredientName}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    !row.hasStockRecord -> Text(
+                        "Sin movimientos todavía en esta sucursal",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
-            if (canSeeValue && stock.currentStock > 0 && stock.avgUnitCost > 0) {
+            if (canSeeValue && row.currentStock > 0 && row.avgUnitCost > 0) {
                 Text(
-                    "Q${(stock.currentStock * stock.avgUnitCost).fmt(2)}",
+                    "Q${(row.currentStock * row.avgUnitCost).fmt(2)}",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                     color = DeepSeaBlue
@@ -289,7 +341,7 @@ private fun StockCard(
                 AssistChip(
                     onClick = onAdjust,
                     label = { Text("Ajustar", style = MaterialTheme.typography.labelSmall) },
-                    colors = AssistChipDefaults.assistChipColors(containerColor = Color(0xFFFFF3E0))
+                    colors = AssistChipDefaults.assistChipColors(containerColor = BrandColors.AccentSoft)
                 )
             }
         }

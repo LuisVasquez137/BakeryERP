@@ -20,8 +20,21 @@ data class BreadCountLine(
     /** Snapshot de avgUnitCost al iniciar conteo. Permite valorar la merma. */
     val unitCostSnapshot: Double = 0.0,
     /** difference × unitCostSnapshot. Negativo si faltante. */
-    val valueImpact: Double = 0.0
+    val valueImpact: Double = 0.0,
+    /**
+     * Del faltante, cuánto se vendió como grupo de precio ("Pan Q0.50"). Se fija al cerrar.
+     */
+    val soldAsGroup: Double = 0.0,
+    /**
+     * Merma real de la línea: faltante − [soldAsGroup]. `null` en conteos anteriores al
+     * reparto por grupo, donde todo faltante era merma ([effectiveWaste] cae a eso).
+     */
+    val wasteQuantity: Double? = null
 )
+
+/** Unidades de merma de la línea, para reportes. */
+val BreadCountLine.effectiveWaste: Double
+    get() = wasteQuantity ?: if (difference < 0) -difference else 0.0
 
 /**
  * Razones para una línea con faltante. Se persisten como el string del enum (`name`)

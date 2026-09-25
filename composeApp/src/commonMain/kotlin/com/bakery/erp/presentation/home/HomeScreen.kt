@@ -85,12 +85,14 @@ private val ALL_SECTIONS = listOf(
         ModuleItem("Producción",      "Lotes por turno",       Icons.Default.Factory),
         ModuleItem("Preparaciones",   "Adornos y rellenos",    Icons.Default.BakeryDining),
         ModuleItem("Lotes de Preparación", "Preparar lotes",   Icons.Default.Factory),
+        ModuleItem("Anotar material", "Harina de mesa, manteca, limpieza", Icons.Default.Inventory2),
         ModuleItem("Ingreso a Turno", "Marcar asistencia",     Icons.Default.HowToReg),
+        ModuleItem("Anotar gasto",    "Compras y gastos del día", Icons.Default.Bolt),
     )),
     // Inventario = el azul de estructura.
     ModuleSection("Inventario", Icons.Default.Inventory, BrandColors.Primary, BrandColors.PrimaryContainer, listOf(
         ModuleItem("Insumos",    "Costos y stock",       Icons.Default.Kitchen),
-        ModuleItem("Compras",    "Ingreso de insumos",   Icons.Default.ShoppingCart),
+        ModuleItem("Compras",    "Facturas de proveedor",     Icons.Default.ShoppingCart),
         ModuleItem("Despacho",   "Empaque y recepción",  Icons.Default.LocalShipping),
         ModuleItem("Reparto",    "Hojas de ruta",        Icons.Default.LocalShipping),
         ModuleItem("Inventario tienda", "Stock terminado y mermas", Icons.Default.Inventory),
@@ -106,12 +108,14 @@ private val ALL_SECTIONS = listOf(
         ModuleItem("Historial de Ventas", "Transacciones del día", Icons.Default.Receipt),
         ModuleItem("Cierre del día",      "Consolidado por sucursal", Icons.Default.PointOfSale),
         ModuleItem("Cuadre sorpresa",     "Auditoría a cajas abiertas", Icons.Default.PointOfSale),
+        ModuleItem("Créditos",            "Cuentas por cobrar y adelantos", Icons.Default.People),
     )),
     // Administracion = se toca una vez al mes; que se apague es correcto.
     ModuleSection("Administración", Icons.Default.Settings, BrandColors.MutedSlate, BrandColors.Sand, listOf(
         ModuleItem("Configuración",        "Código de invitación y entregas", Icons.Default.Settings),
         ModuleItem("Proveedores",          "Gestión externa",      Icons.Default.Business),
-        ModuleItem("Gastos",               "Control por sucursal", Icons.Default.Receipt),
+        ModuleItem("Gastos",               "Lo gastado del mes",   Icons.Default.Receipt),
+        ModuleItem("Costos Fijos",         "Renta, luz, internet", Icons.Default.EventRepeat),
         ModuleItem("Sucursales",           "Gestión de locales",   Icons.Default.Store),
         ModuleItem("Usuarios",             "Accesos y permisos",   Icons.Default.People),
         ModuleItem("Colaboradores",        "Equipo de trabajo",    Icons.Default.Badge),
@@ -132,13 +136,25 @@ private fun hasModuleAccess(title: String, user: User) = with(user) {
         "Compras"        -> hasPermission(Permission.RECEIVE_STOCK)
         "Inventario tienda" -> hasPermission(Permission.VIEW_PRODUCTS)
         "Sucursales"     -> hasPermission(Permission.VIEW_ALL_BRANCHES) || hasPermission(Permission.MANAGE_BRANCHES)
-        "Gastos"         -> hasPermission(Permission.VIEW_EXPENSES) || hasPermission(Permission.ADD_VARIABLE_EXPENSE) || hasPermission(Permission.MANAGE_FIXED_BUDGET)
+        "Gastos"         -> hasPermission(Permission.VIEW_EXPENSES) || hasPermission(Permission.ADD_VARIABLE_EXPENSE)
+        // Los costos fijos los revisa el dueño, no quien anota el gasto del día: son el
+        // compromiso mensual del negocio y no cambian de una semana a otra.
+        "Costos Fijos"   -> hasPermission(Permission.MANAGE_FIXED_BUDGET)
+        // El acceso directo anota de CAJA GENERAL: no le descuenta a ninguna gaveta. Por eso
+        // pide su propio permiso y no el de anotar desde la caja propia — quien cobra tiene
+        // que anotar lo suyo desde el Punto de Venta, que es donde el faltante queda
+        // explicado al cuadrar.
+        "Anotar gasto"   -> hasPermission(Permission.ADD_GENERAL_EXPENSE)
         "Usuarios"       -> hasPermission(Permission.MANAGE_USERS)
         "Pedidos"        -> hasPermission(Permission.SEND_PRODUCTION_ORDER) || hasPermission(Permission.VIEW_PRODUCTION)
         "Producción"     -> hasPermission(Permission.MANAGE_PRODUCTION_LOTS) || hasPermission(Permission.VIEW_PRODUCTION)
         "Turnos"         -> hasPermission(Permission.MANAGE_PRODUCTION_SHIFTS)
         "Preparaciones"        -> hasPermission(Permission.VIEW_PREPARATIONS)
         "Lotes de Preparación" -> hasPermission(Permission.MANAGE_PREPARATION_BATCHES)
+        // Se ve tanto para el panadero que saca el saco como para el dueño que solo
+        // quiere el reporte de cada cuánto lo sacan: son las dos caras del módulo.
+        "Anotar material"      -> hasPermission(Permission.ISSUE_PLANT_MATERIAL) ||
+                                  hasPermission(Permission.VIEW_INVENTORY_REPORT)
         "Colaboradores"           -> hasPermission(Permission.MANAGE_EMPLOYEES)
         "Ingreso a Turno"         -> hasPermission(Permission.MANAGE_EMPLOYEES)
         "Descriptores de Puestos" -> hasPermission(Permission.MANAGE_EMPLOYEES)
@@ -166,6 +182,7 @@ private fun hasModuleAccess(title: String, user: User) = with(user) {
                                  hasPermission(Permission.MANAGE_CUSTOMER_ORDERS)
         "Configuración"       -> hasPermission(Permission.MANAGE_USERS)
         "Aprobar Revendedores" -> hasPermission(Permission.MANAGE_EXTERNAL_CUSTOMERS)
+        "Créditos"          -> hasPermission(Permission.MANAGE_CREDIT_ACCOUNTS)
         else                      -> true
     }
 }
@@ -179,6 +196,9 @@ fun HomeScreen(
     onNavigateToRecipes: () -> Unit,
     onNavigateToBranches: () -> Unit,
     onNavigateToExpenses: () -> Unit,
+    onNavigateToFixedBudget: () -> Unit,
+    onNavigateToQuickPurchase: () -> Unit,
+    onNavigateToPlantIssues: () -> Unit,
     onNavigateToUsers: () -> Unit,
     onNavigateToPurchases: () -> Unit,
     onNavigateToProductionOrders: () -> Unit = {},
@@ -198,12 +218,14 @@ fun HomeScreen(
     onNavigateToSalesHistory: () -> Unit = {},
     onNavigateToCashRegisterAdmin: () -> Unit = {},
     onNavigateToQuickGroupAdmin: () -> Unit = {},
+    onNavigateToCredit: () -> Unit = {},
     onNavigateToBreadCount: () -> Unit = {},
     onNavigateToDailyCashClose: () -> Unit = {},
     onNavigateToSpotCashCheck: () -> Unit = {},
     onNavigateToSalesReport: () -> Unit = {},
     onNavigateToProductionReport: () -> Unit = {},
     onNavigateToFinancialReport: () -> Unit = {},
+    onNavigateToBranchSupplyReport: () -> Unit = {},
     onNavigateToCustomerOrders: () -> Unit = {},
     onNavigateToOrganizationSettings: () -> Unit = {},
     onNavigateToResellerApproval: () -> Unit = {},
@@ -262,12 +284,15 @@ fun HomeScreen(
             "Compras"        -> onNavigateToPurchases()
             "Sucursales"     -> onNavigateToBranches()
             "Gastos"         -> onNavigateToExpenses()
+            "Costos Fijos"   -> onNavigateToFixedBudget()
+            "Anotar gasto"   -> onNavigateToQuickPurchase()
             "Usuarios"       -> onNavigateToUsers()
             "Pedidos"        -> onNavigateToProductionOrders()
             "Producción"     -> onNavigateToProductionLots()
             "Turnos"          -> onNavigateToProductionShifts()
             "Preparaciones"        -> onNavigateToPreparations()
             "Lotes de Preparación" -> onNavigateToPreparationBatches()
+            "Anotar material"      -> onNavigateToPlantIssues()
             "Colaboradores"           -> onNavigateToEmployees()
             "Ingreso a Turno"         -> onNavigateToShiftClockIn()
             "Descriptores de Puestos" -> onNavigateToJobPositions()
@@ -286,6 +311,7 @@ fun HomeScreen(
             "Pedidos de Clientes"     -> onNavigateToCustomerOrders()
             "Configuración"           -> onNavigateToOrganizationSettings()
             "Aprobar Revendedores"    -> onNavigateToResellerApproval()
+            "Créditos"                -> onNavigateToCredit()
         }
     }
 
@@ -402,6 +428,8 @@ fun HomeScreen(
                         add(Triple("Producción", Icons.Default.Factory, onNavigateToProductionReport))
                     if (u.hasPermission(Permission.VIEW_FINANCIAL_REPORT))
                         add(Triple("Financiero", Icons.Default.PointOfSale, onNavigateToFinancialReport))
+                    if (u.hasPermission(Permission.VIEW_BRANCH_SUPPLY_REPORT))
+                        add(Triple("Pedido vs. recibido", Icons.Default.LocalShipping, onNavigateToBranchSupplyReport))
                 }
                 if (visibleReports.isNotEmpty()) {
                     item {
@@ -718,6 +746,7 @@ private fun navigateAlert(alert: HomeAlert, navigate: (String) -> Unit) {
         AlertTarget.DISPATCH_PRICE_MISSING -> "Listas de Precios"
         AlertTarget.OVERDUE_PURCHASE       -> "Compras"
         AlertTarget.EXPIRING_INGREDIENT    -> "Insumos"
+        AlertTarget.CREDIT_OVERDUE         -> "Créditos"
     }
     navigate(title)
 }

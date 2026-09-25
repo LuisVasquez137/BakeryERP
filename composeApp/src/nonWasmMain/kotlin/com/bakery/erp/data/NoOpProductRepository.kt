@@ -13,5 +13,6 @@ class NoOpProductRepository : ProductRepository {
         gramsByProductId: Map<String, Double>,
         unit: String
     ) = Unit
+    override suspend fun updatePurchaseFormats(companyId: String, product: Product) = Unit
     override suspend fun uploadImage(imageBytes: ByteArray, productId: String): String = ""
 }

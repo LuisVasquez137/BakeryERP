@@ -64,6 +64,17 @@ class FirebaseProductRepositoryJs(
         }
     }
 
+    override suspend fun updatePurchaseFormats(companyId: String, product: Product) {
+        productsCol(companyId).document(product.id).update(
+            firestoreSafeOf(
+                *productPurchaseFormatFields(product.purchaseFormats).toList().toTypedArray(),
+                "supplierId" to product.supplierId,
+                "supplierName" to product.supplierName,
+                "purchaseCost" to product.purchaseCost
+            )
+        )
+    }
+
     override suspend fun uploadImage(imageBytes: ByteArray, productId: String): String {
         val ref = storage.reference.child("products/$productId.jpg")
         ref.putData(Data(imageBytes.toUint8Array()))
@@ -76,7 +87,7 @@ class FirebaseProductRepositoryJs(
         // timestamps se mandan como Double (número JS nativo); epoch millis
         // cabe de sobra en Double sin pérdida de precisión.
         val now = Clock.System.now().toEpochMilliseconds().toDouble()
-        return mapOf(
+        return (mapOf(
             "id" to id,
             "name" to name,
             "description" to description,
@@ -84,6 +95,7 @@ class FirebaseProductRepositoryJs(
             "imageUrl" to imageUrl,
             "active" to active,
             "salePrice" to salePrice,
+            "employeeDiscountPercent" to employeeDiscountPercent,
             "unit" to unit,
             "weightPerUnit" to weightPerUnit,
             "rawWeightGrams" to rawWeightGrams,
@@ -120,6 +132,7 @@ class FirebaseProductRepositoryJs(
             "supplierName" to supplierName,
             "purchaseCost" to purchaseCost,
             "barcode" to barcode,
+            "isPerishable" to isPerishable,
             // Producto respaldado por un insumo (huevo): vende del BranchStock del insumo
             "linkedIngredientId" to linkedIngredientId,
             "linkedIngredientName" to linkedIngredientName,
@@ -127,7 +140,7 @@ class FirebaseProductRepositoryJs(
             "notes" to notes,
             "createdAt" to if (createdAt == 0L) now else createdAt.toDouble(),
             "updatedAt" to now
-        ).filterValues { it != null }
+        ) + productPurchaseFormatFields(purchaseFormats)).filterValues { it != null }
     }
 
     private fun DocumentSnapshot.toProduct() = Product(
@@ -138,6 +151,7 @@ class FirebaseProductRepositoryJs(
         imageUrl = get<String?>("imageUrl"),
         active = get<Boolean?>("active") ?: true,
         salePrice = get<Double?>("salePrice") ?: 0.0,
+        employeeDiscountPercent = runCatching { get<Double?>("employeeDiscountPercent") }.getOrNull() ?: 0.0,
         unit = get<String?>("unit") ?: "",
         weightPerUnit = get<Double?>("weightPerUnit"),
         rawWeightGrams = get<Double?>("rawWeightGrams"),
@@ -191,10 +205,12 @@ class FirebaseProductRepositoryJs(
             }
         }.getOrElse { emptyList() },
         isInHouseProduced = runCatching { get<Boolean?>("isInHouseProduced") }.getOrNull() ?: true,
+        purchaseFormats = readProductPurchaseFormats(),
         supplierId = runCatching { get<String?>("supplierId") }.getOrNull(),
         supplierName = runCatching { get<String?>("supplierName") }.getOrNull(),
         purchaseCost = runCatching { get<Double?>("purchaseCost") }.getOrNull(),
         barcode = runCatching { get<String?>("barcode") }.getOrNull() ?: "",
+        isPerishable = runCatching { get<Boolean?>("isPerishable") }.getOrNull() ?: false,
         linkedIngredientId = runCatching { get<String?>("linkedIngredientId") }.getOrNull() ?: "",
         linkedIngredientName = runCatching { get<String?>("linkedIngredientName") }.getOrNull() ?: "",
         // 0 en docs viejos; `ingredientUnitsFor` lo trata como uno a uno.

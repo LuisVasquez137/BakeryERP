@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.bakery.erp.domain.AssetHistoryRepository
 import com.bakery.erp.domain.AuthRepository
 import com.bakery.erp.domain.BranchRepository
+import com.bakery.erp.domain.CashSessionRepository
 import com.bakery.erp.domain.ExpenseRepository
 import com.bakery.erp.domain.FixedAssetRepository
 import com.bakery.erp.domain.FinishedStockRepository
@@ -13,12 +14,20 @@ import com.bakery.erp.domain.NewStockLot
 import com.bakery.erp.domain.PurchaseLotEntry
 import com.bakery.erp.domain.ProductRepository
 import com.bakery.erp.domain.PurchaseInvoiceImageUploader
+import com.bakery.erp.domain.PurchaseConceptRepository
+import com.bakery.erp.domain.PriceListRepository
 import com.bakery.erp.domain.PurchaseRepository
 import com.bakery.erp.domain.SupplierRepository
 import com.bakery.erp.model.AssetHistoryEntry
 import com.bakery.erp.model.Branch
 import com.bakery.erp.model.BranchCapability
 import com.bakery.erp.model.canAccessBranch
+import com.bakery.erp.model.CashMovement
+import com.bakery.erp.model.CashMovementType
+import com.bakery.erp.model.CashSession
+import com.bakery.erp.model.CashSessionStatus
+import com.bakery.erp.model.expectedCashNow
+import com.bakery.erp.model.ExpensePaidFrom
 import com.bakery.erp.model.FinishedMovementReference
 import com.bakery.erp.model.FinishedMovementType
 import com.bakery.erp.model.FinishedStockMovement
@@ -26,11 +35,23 @@ import com.bakery.erp.model.FixedAsset
 import com.bakery.erp.model.IngredientUsage
 import com.bakery.erp.model.Ingredient
 import com.bakery.erp.model.Product
+import com.bakery.erp.model.PriceListType
+import com.bakery.erp.model.ProductPrice
+import com.bakery.erp.model.Permission
+import com.bakery.erp.model.hasPermission
 import com.bakery.erp.model.Purchase
+import com.bakery.erp.model.isQuick
+import com.bakery.erp.model.listTitle
 import com.bakery.erp.model.PURCHASE_BALANCE_EPSILON
+import com.bakery.erp.model.PurchaseConcept
+import com.bakery.erp.model.afterPurchase
+import com.bakery.erp.model.findByName
 import com.bakery.erp.model.PurchaseDisplayStatus
 import com.bakery.erp.model.PurchaseFilters
 import com.bakery.erp.model.PurchaseFormat
+import com.bakery.erp.model.RESALE_CATEGORY
+import com.bakery.erp.model.RepriceSuggestion
+import com.bakery.erp.model.repriceSuggestionFor
 import com.bakery.erp.model.effectiveBranchId
 import com.bakery.erp.model.effectiveBranchName
 import com.bakery.erp.model.PurchaseKind
@@ -48,11 +69,17 @@ import com.bakery.erp.model.balanceDue
 import com.bakery.erp.presentation.assets.applyAssetEntrySideEffects
 import com.bakery.erp.presentation.assets.recalcAndPersistAssetCounters
 import com.bakery.erp.model.kindsPresent
+import com.bakery.erp.model.formatsWithPaidPrices
+import com.bakery.erp.model.purchaseFormatsForEditing
+import com.bakery.erp.model.suppliedBy
+import com.bakery.erp.model.withDerivedPurchaseReference
 import com.bakery.erp.model.itemName
 import com.bakery.erp.model.nearestExpiry
 import com.bakery.erp.model.nearestExpiryLine
+import com.bakery.erp.model.purchaseLineTouchesStock
 import com.bakery.erp.model.purchaseTotal
 import com.bakery.erp.model.taxBreakdownFromGross
+import com.bakery.erp.util.fmt
 import com.bakery.erp.util.fmtMoney
 import kotlin.random.Random
 import kotlin.time.Clock
@@ -91,6 +118,13 @@ data class PurchaseUiState(
      */
     val occasionalSupplierName: String = "",
     // Formulario — paso 3: líneas de insumos
+    /**
+     * Productos de reventa a los que la factura recién registrada les subió el costo, con el
+     * precio que conserva su margen. Se llena DESPUÉS de guardar, a propósito: la compra es un
+     * hecho y el precio de venta es otra decisión —a veces de otra persona—, y bloquear el
+     * guardado con una pregunta de precios hace que se cierre sin leer para poder seguir.
+     */
+    val repriceSuggestions: List<RepriceSuggestion> = emptyList(),
     val supplierIngredients: List<Ingredient> = emptyList(),
     val isLoadingIngredients: Boolean = false,
     // Formulario — paso 3b: productos de reventa del proveedor
@@ -107,9 +141,38 @@ data class PurchaseUiState(
     val usesResale: Boolean = false,
     val usesSupplies: Boolean = false,
     val usesServices: Boolean = false,
+    /**
+     * `true` cuando ya se leyó la configuración de la empresa. Mientras es `false` los tres
+     * flags de arriba valen su default, que es indistinguible de "apagado" — y por eso
+     * `CaptureKindStep` no dibuja sus opciones hasta acá: sin esto la de reventa aparecía
+     * sola un par de segundos después de las otras dos, como si el toque anterior la
+     * hubiera invocado.
+     */
+    val purchaseFlowsLoaded: Boolean = false,
+    /** Conceptos sin inventario que se ofrecen al capturar. Vacío si la empresa no usa servicios. */
+    val purchaseConcepts: List<PurchaseConcept> = emptyList(),
     /** Catálogo completo, solo para el picker de "agregar insumo fuera del proveedor". */
     val allIngredients: List<Ingredient> = emptyList(),
+    /**
+     * Productos de reventa de TODA la empresa, sin filtrar por proveedor.
+     *
+     * [supplierResaleProducts] no sirve para la compra rápida: solo se llena al elegir un
+     * proveedor del catálogo, y una compra rápida no tiene proveedor. Mientras esta lista no
+     * existió, la sección de reventa del diálogo rápido recibía siempre una lista vacía y
+     * las tostadas compradas en el mercado caían como gasto suelto, sin entrar nunca al
+     * inventario de tienda.
+     */
+    val allResaleProducts: List<Product> = emptyList(),
     val draftLines: List<PurchaseLine> = emptyList(),
+    /**
+     * Caja a la que se carga lo que se está anotando. La fija quien abre la pantalla —el POS
+     * pasa la sesión que se está operando— y **nunca se elige de una lista**: quien anota
+     * suele ser el mismo que está cobrando, con gente esperando, y un desplegable de cajas
+     * es una forma de marcar la equivocada sin darse cuenta. El precio de ese error no lo
+     * paga quien lo comete sino la cajera de la otra gaveta, que aparece con un faltante que
+     * no es suyo. `null` = caja general, que es el caso del acceso de Operaciones.
+     */
+    val pinnedSession: CashSession? = null,
     /** Compra que se está editando; null = alta. */
     val editingPurchase: Purchase? = null,
     /** Líneas tal como estaban al abrir la edición — la base para corregir el stock. */
@@ -141,7 +204,18 @@ class PurchaseViewModel(
     private val assetRepository: FixedAssetRepository,
     private val assetHistoryRepository: AssetHistoryRepository,
     // Solo para leer qué flujos de compra tiene encendidos la empresa.
-    private val authRepository: AuthRepository
+    private val authRepository: AuthRepository,
+    // Una compra rápida pagada desde una gaveta escribe además el `CashMovement` que la
+    // descuenta al cuadrar. Ese movimiento es lo único que hace que el faltante de la caja
+    // esté explicado; sin él la cajera aparece corta y nadie sabe por qué.
+    private val cashSessionRepository: CashSessionRepository,
+    // Catálogo de cosas que se compran seguido y no llevan inventario (bolsas, fletes). Es lo
+    // que permite que el historial del proveedor se pueda sumar. Ver `PurchaseConcept`.
+    private val conceptRepository: PurchaseConceptRepository,
+    // Subir el precio de venta de un producto de reventa NO es escribir `salePrice` y ya:
+    // ese campo es la fuente de verdad de la lista RETAIL predeterminada y el formulario del
+    // producto escribe los dos. Escribiendo solo uno, el POS podría seguir cobrando el viejo.
+    private val priceListRepository: PriceListRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(PurchaseUiState())
@@ -171,6 +245,10 @@ class PurchaseViewModel(
             val lines = if (purchase != null)
                 runCatching { purchaseRepository.getLines(companyId, purchaseId) }.getOrElse { emptyList() }
             else emptyList()
+            // Quien recibe la mercadería compara el dibujo de la caja contra el renglón, y la
+            // foto vive en el producto, no en la línea. Se resuelve contra el catálogo en vez
+            // de guardarla como snapshot para que las compras VIEJAS también la muestren.
+            if (lines.any { it.productId.isNotEmpty() }) ensureResaleCatalog(companyId)
             val payments = if (purchase != null)
                 runCatching { purchaseRepository.getPayments(companyId, purchaseId) }.getOrElse { emptyList() }
             else emptyList()
@@ -183,6 +261,18 @@ class PurchaseViewModel(
                 )
             }
         }
+    }
+
+    /**
+     * Carga el catálogo de reventa una sola vez. Lo llena normalmente `selectSupplier`, pero al
+     * detalle de una compra se puede llegar directo —desde la lista, o de un push— sin haber
+     * pasado nunca por la captura.
+     */
+    private suspend fun ensureResaleCatalog(companyId: String) {
+        if (_uiState.value.allResaleProducts.isNotEmpty()) return
+        val all = runCatching { productRepository.getProducts(companyId) }.getOrElse { return }
+        val resale = all.filter { it.active && !it.isInHouseProduced }.sortedBy { it.name.lowercase() }
+        _uiState.update { it.copy(allResaleProducts = resale) }
     }
 
     fun selectPurchase(purchase: Purchase, companyId: String) {
@@ -277,6 +367,12 @@ class PurchaseViewModel(
     // ── Formulario ───────────────────────────────────────────────────────────
 
     fun loadFormData(companyId: String, currentUser: User) {
+        // La configuración de la empresa va en su PROPIA corrutina, no al final de la
+        // cadena. Es una sola lectura, pero encolada detrás de sucursales + proveedores +
+        // insumos llegaba segundos tarde, y de ella cuelga qué opciones ofrece la pantalla
+        // de "¿qué vas a anotar?": las dos primeras salían de inmediato y la de reventa se
+        // agregaba sola después.
+        viewModelScope.launch { loadPurchaseFlows(companyId) }
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingBranches = true) }
             val allBranches = runCatching { branchRepository.getBranches(companyId) }.getOrElse { emptyList() }
@@ -302,7 +398,6 @@ class PurchaseViewModel(
                     isLoadingBranches = false
                 )
             }
-            loadPurchaseFlows(companyId)
         }
     }
 
@@ -315,17 +410,47 @@ class PurchaseViewModel(
      * significaría que encender un flujo no se ve hasta volver a entrar a la app.
      */
     private suspend fun loadPurchaseFlows(companyId: String) {
-        val org = authRepository.getOrganization(companyId).getOrNull() ?: return
+        val org = authRepository.getOrganization(companyId).getOrNull() ?: run {
+            // Sin organización legible no hay nada que esperar: se marca resuelto igual para
+            // no dejar la pantalla de elección en un spinner eterno.
+            _uiState.update { it.copy(purchaseFlowsLoaded = true) }
+            return
+        }
         _uiState.update {
             it.copy(
                 usesResale = org.usesResalePurchases,
                 usesSupplies = org.usesSupplyPurchases,
-                usesServices = org.usesServicePurchases
+                usesServices = org.usesServicePurchases,
+                purchaseFlowsLoaded = true
             )
         }
         if (org.usesServicePurchases && _uiState.value.assets.isEmpty()) {
             val assets = runCatching { assetRepository.getAssets(companyId) }.getOrElse { emptyList() }
             _uiState.update { st -> st.copy(assets = assets.filter { it.active }) }
+        }
+        // El catálogo de conceptos se lee entero: son decenas de nombres, no miles, y sirve
+        // tanto para sugerir como para evitar que el mismo se dé de alta dos veces escrito
+        // distinto. Que falle no puede impedir capturar: se sigue con texto libre.
+        //
+        // NO se gatea con `usesServicePurchases`: esa bandera decide si la FACTURA muestra su
+        // sección de servicios, y el gasto anotado desde la caja no pasa por ahí. Gatearlo
+        // dejaría al caso más común —el gasto del día— sin catálogo y sin historial sumable.
+        if (_uiState.value.purchaseConcepts.isEmpty()) {
+            val concepts = runCatching { conceptRepository.getConcepts(companyId) }
+                .getOrElse { emptyList() }
+            _uiState.update { st -> st.copy(purchaseConcepts = concepts.filter { it.active }) }
+        }
+        // El catálogo de reventa se trae acá y no en `selectSupplier` porque la compra
+        // rápida lo necesita sin proveedor de por medio. Ver `allResaleProducts`.
+        if (org.usesResalePurchases && _uiState.value.allResaleProducts.isEmpty()) {
+            val products = runCatching { productRepository.getProducts(companyId) }.getOrElse { emptyList() }
+            _uiState.update { st ->
+                st.copy(
+                    allResaleProducts = products
+                        .filter { it.active && !it.isInHouseProduced }
+                        .sortedBy { it.name.lowercase() }
+                )
+            }
         }
     }
 
@@ -358,7 +483,7 @@ class PurchaseViewModel(
                 .partition { it.usage == IngredientUsage.SUPPLY }
             val lineProductIds = lines.map { it.productId }.filter { it.isNotEmpty() }.toSet()
             val resale = products.filter { p ->
-                (p.active && !p.isInHouseProduced && p.supplierId == purchase.supplierId) || p.id in lineProductIds
+                (p.active && !p.isInHouseProduced && p.suppliedBy(purchase.supplierId)) || p.id in lineProductIds
             }.sortedBy { it.name.lowercase() }
 
             _uiState.update {
@@ -478,6 +603,7 @@ class PurchaseViewModel(
                 syncPurchaseSideEffects(
                     companyId, updated, if (isReceived) newLines else emptyList(), oldLines, currentUser
                 )
+                syncPurchaseConcepts(companyId, updated.supplierId, newLines, date)
                 updated
             }.onSuccess { updated ->
                 _uiState.update {
@@ -518,11 +644,12 @@ class PurchaseViewModel(
         currentUser: User,
         perishableIds: Set<String>
     ) {
-        // La clave incluye la SUCURSAL, no solo el insumo: en una vuelta de compras la misma
+        // La clave incluye la SUCURSAL, no solo el insumo: en una compra rápida la misma
         // papa puede ir a dos sucursales, y agrupando solo por insumo el ajuste caería
         // entero sobre una de las dos. En una factura la sucursal es una sola y esto se
         // comporta igual que antes.
         fun index(lines: List<PurchaseLine>) = lines
+            .filter { purchaseLineTouchesStock(it.lineKind) }
             .filter { it.lineKind != PurchaseLineKind.RESALE_PRODUCT && it.ingredientId.isNotEmpty() }
             .groupBy { StockKey(it.effectiveBranchId(purchase), it.ingredientId) }
             .mapValues { (_, v) ->
@@ -571,6 +698,7 @@ class PurchaseViewModel(
 
         // Reventa: mismo criterio, contra el inventario de producto terminado.
         fun indexResale(lines: List<PurchaseLine>) = lines
+            .filter { purchaseLineTouchesStock(it.lineKind) }
             .filter { it.lineKind == PurchaseLineKind.RESALE_PRODUCT && it.productId.isNotEmpty() }
             .groupBy { StockKey(it.effectiveBranchId(purchase), it.productId) }
             .mapValues { (_, v) -> v.sumOf { it.quantityReceived } to v.first() }
@@ -617,6 +745,14 @@ class PurchaseViewModel(
             runCatching {
                 val purchase = purchaseRepository.getPurchase(companyId, purchaseId)
                     ?: error("No se encontró la compra")
+                // Borrar mueve inventario y dinero hacia atrás, así que pide permiso. La
+                // excepción es lo que se pagó de la propia gaveta mientras sigue abierta:
+                // ver `canManageOwnDrawerPurchase`.
+                if (!currentUser.hasPermission(Permission.DELETE_PURCHASES) &&
+                    !canManageOwnDrawerPurchase(companyId, purchase, currentUser)
+                ) {
+                    error("No tenés permiso para eliminar esta compra")
+                }
                 val lines = purchaseRepository.getLines(companyId, purchaseId)
                 if (purchase.status != PurchaseStatus.PENDING_RECEIPT) {
                     applyStockDelta(
@@ -639,8 +775,29 @@ class PurchaseViewModel(
                 // qué activos hay que ir a limpiar. Se llama también en `PENDING_RECEIPT`:
                 // no debería haber dejado nada, pero si lo hizo, acá se recoge.
                 syncPurchaseSideEffects(companyId, purchase, emptyList(), lines, currentUser)
+
+                // Si salió de una gaveta, ese efectivo vuelve. Se hace con el MISMO helper que
+                // lo descontó, con el total nuevo en cero: un reverso escrito aparte termina
+                // usando otra cantidad y deja la caja cuadrando contra un gasto que ya no
+                // existe. Si la caja ya cerró no se toca —su cierre está firmado— y se avisa.
+                val drawer = purchase.cashSessionId.takeIf { it.isNotEmpty() }?.let { sid ->
+                    runCatching { cashSessionRepository.getSession(companyId, sid) }
+                        .getOrNull()
+                        ?.takeIf { it.status == CashSessionStatus.OPEN }
+                }
+                syncPurchaseCashMovement(
+                    companyId = companyId,
+                    session = drawer,
+                    previousTotal = purchase.totalAmount,
+                    newTotal = 0.0,
+                    concept = purchase.listTitle(),
+                    currentUser = currentUser,
+                    purchaseId = purchaseId,
+                    isDeletion = true
+                )
                 purchaseRepository.deletePurchase(companyId, purchaseId)
-            }.onSuccess {
+                purchase.cashSessionId.isNotEmpty() && drawer == null
+            }.onSuccess { drawerLocked ->
                 _uiState.update { st ->
                     st.copy(
                         isProcessing = false,
@@ -649,7 +806,10 @@ class PurchaseViewModel(
                         selectedPurchase = st.selectedPurchase?.takeIf { it.id != purchaseId },
                         selectedPurchaseLines = emptyList(),
                         selectedPurchasePayments = emptyList(),
-                        message = "Compra eliminada"
+                        message = if (drawerLocked) {
+                            "Compra eliminada. La caja de la que salió ya está cerrada, así que " +
+                                "su efectivo no se devolvió."
+                        } else "Compra eliminada"
                     )
                 }
             }.onFailure { err ->
@@ -733,13 +893,231 @@ class PurchaseViewModel(
         }
     }
 
+    /**
+     * Catálogo de reventa del proveedor: los productos que tienen una presentación suya
+     * (`suppliedBy`). Un mismo producto aparece en el catálogo de cada proveedor que lo vende —
+     * la lata de Coca-Cola la trae la distribuidora y también el mayorista—, y el inventario
+     * sigue siendo uno solo porque es la misma lata.
+     */
     private fun loadResaleProductsBySupplier(companyId: String, supplierId: String) {
         viewModelScope.launch {
             val all = runCatching { productRepository.getProducts(companyId) }.getOrElse { emptyList() }
-            val filtered = all.filter { p ->
-                p.active && !p.isInHouseProduced && p.supplierId == supplierId
-            }.sortedBy { it.name.lowercase() }
-            _uiState.update { it.copy(supplierResaleProducts = filtered) }
+            val resale = all.filter { it.active && !it.isInHouseProduced }.sortedBy { it.name.lowercase() }
+            _uiState.update {
+                it.copy(
+                    supplierResaleProducts = resale.filter { p -> p.suppliedBy(supplierId) },
+                    // Se refresca también el catálogo completo: es de donde sale el picker de
+                    // "agregar producto de este proveedor", y una presentación recién creada
+                    // desde el formulario de producto tiene que verse sin reabrir la app.
+                    allResaleProducts = resale
+                )
+            }
+        }
+    }
+
+    /**
+     * Da de alta un insumo que NO existía en ningún catálogo y se lo asocia al proveedor, sin
+     * salir de la captura.
+     *
+     * [addSupplierFormat] resuelve el caso de un insumo que ya existe y al que le falta la
+     * presentación de este proveedor. Faltaba el otro: la factura trae algo que nunca se compró,
+     * y el único camino era mandarlo a "Servicios y gastos". Eso lo guarda como TEXTO
+     * (`conceptName`) — media factura quedaba en el catálogo y la otra media en texto suelto, sin
+     * inventario, sin historial sumable por ítem y sin forma de encontrarlo la próxima vez, que
+     * es justo lo que el catálogo existe para evitar.
+     *
+     * Se pide el mínimo que no se puede arreglar después sin re-teclear la factura: nombre, para
+     * qué es, y la unidad —de la unidad cuelgan el stock, el Kardex y la conversión de la
+     * presentación—. La categoría nace en "Otros" si no la eligen: solo afecta filtros y se
+     * corrige en un segundo desde el catálogo.
+     */
+    fun createSupplierIngredient(
+        companyId: String,
+        name: String,
+        usage: IngredientUsage,
+        baseUnit: String,
+        category: String,
+        tracksStock: Boolean,
+        description: String,
+        unitsPerPackage: Double,
+        packageCost: Double,
+        supplierItemName: String = ""
+    ) {
+        val supplier = _uiState.value.selectedSupplier ?: return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isProcessing = true, error = null) }
+            runCatching {
+                val now = Clock.System.now().toEpochMilliseconds()
+                val ingredient = Ingredient(
+                    id = generateId(),
+                    name = name.trim(),
+                    category = category,
+                    usage = usage,
+                    allowedUnits = listOf(baseUnit),
+                    // La materia prima siempre cuenta: de ese stock sale el descuento de
+                    // producción. Solo el suministro puede no hacerlo. Misma regla que
+                    // `ingredientPurchaseLineKind`, que tampoco confía en lo que venga marcado.
+                    tracksStock = usage == IngredientUsage.PRODUCTION || tracksStock,
+                    active = true,
+                    createdAt = now,
+                    updatedAt = now
+                )
+                ingredientRepository.addIngredient(companyId, ingredient)
+                val saved = ingredientRepository.addPurchaseFormat(
+                    companyId, ingredient.id,
+                    PurchaseFormat(
+                        description = description.trim(),
+                        unit = baseUnit,
+                        supplierId = supplier.id,
+                        supplierName = supplier.company,
+                        unitsPerPackage = unitsPerPackage.coerceAtLeast(0.0001),
+                        packageCost = packageCost,
+                        // Es la primera que tiene, así que es la de costeo por definición.
+                        isDefault = true,
+                        supplierItemName = supplierItemName.trim()
+                    )
+                )
+                ingredient.copy(purchaseFormats = listOf(saved))
+            }.onSuccess { created ->
+                _uiState.update { st ->
+                    val isSupply = created.usage == IngredientUsage.SUPPLY
+                    st.copy(
+                        isProcessing = false,
+                        supplierIngredients = if (isSupply) st.supplierIngredients
+                            else (st.supplierIngredients + created).sortedBy { it.name.lowercase() },
+                        supplierSupplies = if (isSupply)
+                            (st.supplierSupplies + created).sortedBy { it.name.lowercase() }
+                            else st.supplierSupplies,
+                        allIngredients = st.allIngredients + created,
+                        message = created.name + " creado y agregado a " + supplier.company
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(isProcessing = false, error = err.message ?: "No se pudo crear el insumo")
+                }
+            }
+        }
+    }
+
+    /**
+     * Lo mismo para un producto de reventa que todavía no existe.
+     *
+     * Acá había una decisión explícita en contra —"dar de alta uno nuevo pide precio de venta,
+     * listas y código de barras, y eso no se hace con el repartidor esperando"—. Lo que se
+     * corrigió no es esa premisa sino la conclusión: el problema era PEDIR todo eso, no crear el
+     * producto. Nace con nombre, unidad de venta y, si lo saben, el precio; lo demás se completa
+     * en su ficha cuando haya tiempo. Sin precio todavía no se puede vender en el POS, y el
+     * diálogo lo dice — pero la factura entra al inventario con su costo, que es lo único que no
+     * se puede recuperar después.
+     */
+    fun createSupplierResaleProduct(
+        companyId: String,
+        name: String,
+        saleUnit: String,
+        salePrice: Double,
+        description: String,
+        unitsPerPackage: Double,
+        packageCost: Double,
+        supplierItemName: String = ""
+    ) {
+        val supplier = _uiState.value.selectedSupplier ?: return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isProcessing = true, error = null) }
+            runCatching {
+                val unit = saleUnit.trim().ifBlank { "unidad" }
+                val format = PurchaseFormat(
+                    id = generateId(),
+                    description = description.trim(),
+                    unit = unit,
+                    supplierId = supplier.id,
+                    supplierName = supplier.company,
+                    unitsPerPackage = unitsPerPackage.coerceAtLeast(0.0001),
+                    packageCost = packageCost,
+                    isDefault = true,
+                    supplierItemName = supplierItemName.trim()
+                )
+                val product = Product(
+                    id = generateId(),
+                    name = name.trim(),
+                    category = RESALE_CATEGORY,
+                    unit = unit,
+                    salePrice = salePrice,
+                    isInHouseProduced = false,
+                    active = true,
+                    purchaseFormats = listOf(format)
+                ).withDerivedPurchaseReference()
+                productRepository.addProduct(companyId, product)
+                product
+            }.onSuccess { created ->
+                _uiState.update { st ->
+                    st.copy(
+                        isProcessing = false,
+                        supplierResaleProducts = (st.supplierResaleProducts + created)
+                            .sortedBy { it.name.lowercase() },
+                        allResaleProducts = st.allResaleProducts + created,
+                        message = created.name + " creado y agregado a " + supplier.company
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(isProcessing = false, error = err.message ?: "No se pudo crear el producto")
+                }
+            }
+        }
+    }
+
+    /**
+     * Da de alta una presentación de compra de [product] para el proveedor seleccionado y lo
+     * suma a su catálogo, sin salir de la captura. Mismo criterio que [addSupplierFormat]: si se
+     * lo compraste a este proveedor, eso es una presentación suya, y la próxima factura ya no
+     * vuelve a preguntar cuántas latas trae la caja.
+     */
+    fun addResaleSupplierFormat(
+        companyId: String,
+        product: Product,
+        description: String,
+        unitsPerPackage: Double,
+        packageCost: Double,
+        supplierItemName: String = ""
+    ) {
+        val supplier = _uiState.value.selectedSupplier ?: return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isProcessing = true, error = null) }
+            runCatching {
+                // Un producto viejo guarda su proveedor único fuera de las presentaciones:
+                // convertirlo primero evita que agregarle la caja lo borre del catálogo de su
+                // proveedor de siempre.
+                val existing = product.purchaseFormatsForEditing { generateId() }
+                val format = PurchaseFormat(
+                    id = generateId(),
+                    description = description.trim(),
+                    unit = product.unit.ifBlank { "unidad" },
+                    supplierId = supplier.id,
+                    supplierName = supplier.company,
+                    unitsPerPackage = unitsPerPackage.coerceAtLeast(0.0001),
+                    packageCost = packageCost,
+                    isDefault = existing.isEmpty(),
+                    supplierItemName = supplierItemName.trim()
+                )
+                val updated = product.copy(purchaseFormats = existing + format).withDerivedPurchaseReference()
+                productRepository.updatePurchaseFormats(companyId, updated)
+                updated
+            }.onSuccess { updated ->
+                _uiState.update { st ->
+                    st.copy(
+                        isProcessing = false,
+                        supplierResaleProducts = (st.supplierResaleProducts.filterNot { it.id == updated.id } + updated)
+                            .sortedBy { it.name.lowercase() },
+                        allResaleProducts = st.allResaleProducts.map { if (it.id == updated.id) updated else it },
+                        message = "${updated.name} agregado a ${supplier.company}"
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(isProcessing = false, error = err.message ?: "No se pudo agregar la presentación")
+                }
+            }
         }
     }
 
@@ -751,9 +1129,13 @@ class PurchaseViewModel(
      * conceptos distintos de la misma factura ("mantenimiento del horno" y "flete")
      * compartirían clave y el segundo pisaría al primero.
      */
-    private fun PurchaseLine.matchKey(): String = when (lineKind) {
-        PurchaseLineKind.RESALE_PRODUCT -> "P:$productId"
-        PurchaseLineKind.SERVICE -> "S:$id"
+    private fun PurchaseLine.matchKey(): String = when {
+        lineKind == PurchaseLineKind.SERVICE -> "S:$id"
+        // Por producto SIEMPRE que la línea salga de una fila de producto — incluida la
+        // redirigida al insumo (la leche), que se guarda como línea de insumo. Si esa
+        // compartiera clave con la fila del insumo, capturar las dos reemplazaría una por
+        // otra en silencio en vez de sumarlas, que es lo que el inventario espera.
+        productId.isNotEmpty() -> "P:$productId"
         else -> "I:$ingredientId"
     }
 
@@ -761,12 +1143,66 @@ class PurchaseViewModel(
      * Agrega o reemplaza una línea de servicio del borrador. Se le genera id si no lo trae
      * —es la clave con la que se distingue de los demás conceptos de la misma factura.
      */
-    fun upsertServiceLine(line: PurchaseLine) {
+    fun upsertServiceLine(
+        companyId: String,
+        line: PurchaseLine,
+        newConcept: PurchaseConcept? = null
+    ) {
         val withId = if (line.id.isEmpty()) line.copy(id = generateId()) else line
         _uiState.update { state ->
             val others = state.draftLines.filter { it.matchKey() != withId.matchKey() }
             state.copy(draftLines = others + withId)
         }
+        // El concepto se da de alta YA, no al guardar la factura: su id tiene que estar en la
+        // línea para que el historial la pueda agrupar, y esperarse al final significaría
+        // arrastrar el objeto a través de todo el guardado para ponérselo después. Si falla,
+        // la línea queda como texto libre — se pierde la agrupación, no el renglón.
+        val concept = newConcept ?: return
+        viewModelScope.launch {
+            val saved = runCatching { conceptRepository.saveConcept(companyId, concept) }
+                .getOrNull() ?: return@launch
+            _uiState.update { state ->
+                state.copy(
+                    purchaseConcepts = state.purchaseConcepts + saved,
+                    draftLines = state.draftLines.map {
+                        if (it.id == withId.id) it.copy(
+                            conceptId = saved.id,
+                            conceptUnit = it.conceptUnit.ifEmpty { saved.unit }
+                        ) else it
+                    }
+                )
+            }
+        }
+    }
+
+    /**
+     * Deja en cada concepto lo que la compra recién guardada le enseñó: a qué proveedor se le
+     * compró, a cuánto y cuándo. Nunca lanza — una factura correcta no se puede perder porque
+     * falle la actualización de un catálogo de nombres.
+     */
+    private suspend fun syncPurchaseConcepts(
+        companyId: String,
+        supplierId: String,
+        lines: List<PurchaseLine>,
+        date: Long
+    ) {
+        val byId = _uiState.value.purchaseConcepts.associateBy { it.id }
+        lines.filter { it.conceptId.isNotEmpty() }
+            .groupBy { it.conceptId }
+            .forEach { (conceptId, group) ->
+                val current = byId[conceptId] ?: return@forEach
+                val line = group.first()
+                val updated = current.afterPurchase(supplierId, line.unitCost, date) ?: return@forEach
+                runCatching {
+                    conceptRepository.recordPurchase(
+                        companyId, conceptId, updated.supplierIds,
+                        updated.lastUnitCost, updated.lastPurchaseDate
+                    )
+                }
+                _uiState.update { st ->
+                    st.copy(purchaseConcepts = st.purchaseConcepts.map { if (it.id == conceptId) updated else it })
+                }
+            }
     }
 
     /** Quita una línea del borrador por su clave de catálogo (insumo o producto). */
@@ -786,80 +1222,341 @@ class PurchaseViewModel(
         }
     }
 
-    // ── Vuelta de compras ────────────────────────────────────────────────────
+    // ── Compra rápida ────────────────────────────────────────────────────
 
     /**
-     * Guarda una vuelta al mercado: un solo desembolso, muchas cosas, varias sucursales.
+     * Guarda una compra rápida: un solo desembolso, muchas cosas, varias sucursales.
      *
      * Reutiliza `savePurchase` por dentro en vez de tener su propio camino de escritura: los
      * efectos son los mismos (inventario por línea, gasto del mes, Kardex) y duplicarlos
      * sería duplicar el riesgo de doble ingreso, que es lo que este módulo lleva evitando.
-     * Lo único propio de la vuelta es cómo se arman las líneas y que nace pagada — es
+     * Lo único propio de la compra rápida es cómo se arman las líneas y que nace pagada — es
      * efectivo, no genera cuenta por pagar.
      */
-    internal fun saveMarketRun(
+    internal fun saveQuickPurchase(
         companyId: String,
         currentUser: User,
         defaultBranch: Branch,
-        lines: List<MarketRunDraftLine>,
+        lines: List<QuickPurchaseDraftLine>,
         date: Long,
         notes: String?,
-        expenseCategory: String,
-        photoBytes: ByteArray? = null
+        photoBytes: ByteArray? = null,
+        /**
+         * Compra que se está corrigiendo, o `null` para dar de alta una nueva.
+         *
+         * Lo manda la pantalla y no se deduce de `editingPurchase` a propósito: el
+         * ViewModel es singleton, así que abrir una corrección y salirse sin guardar deja
+         * ese campo puesto. Deducirlo de ahí haría que la SIGUIENTE compra nueva
+         * sobreescribiera en silencio la que se había abierto antes.
+         */
+        purchaseId: String? = null,
+        /**
+         * Caja de la que salió el efectivo, o `null` si no salió de ninguna gaveta.
+         *
+         * Se revalida contra Firestore antes de escribir: entre que se abrió la pantalla y
+         * se tocó guardar, el cajero pudo haber cerrado su turno, y meterle un movimiento a
+         * una caja ya cuadrada le cambiaría un cierre que alguien ya firmó. Si eso pasa la
+         * compra se guarda igual como caja general y se avisa — perder el registro del
+         * desembolso sería peor que perder la atribución a la gaveta.
+         */
+        session: CashSession? = null,
+        /** Número de la factura o del recibo, cuando el papel lo trae. */
+        invoiceNumber: String? = null,
+        /**
+         * A quién se le compró. Puede ir solo [supplierName] con [supplierId] vacío —el
+         * proveedor ocasional, la ferretería de una sola vez— igual que en la factura: al que
+         * le comprás una vez no es un proveedor, y darlo de alta llena el catálogo de nombres
+         * que nadie vuelve a tocar.
+         */
+        supplierId: String = "",
+        supplierName: String = ""
     ) {
         if (lines.isEmpty()) return
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             runCatching {
-                val purchaseId = generateId()
+                // Al corregir se conserva el documento: borrar y recrear le cambiaría el id,
+                // y con él se irían los gastos y los lotes que ya cuelgan de esta compra.
+                val editing = purchaseId?.let { id ->
+                    _uiState.value.editingPurchase?.takeIf { it.id == id && it.isQuick }
+                }
+                if (editing != null &&
+                    !currentUser.hasPermission(Permission.EDIT_PURCHASES) &&
+                    !canManageOwnDrawerPurchase(companyId, editing, currentUser)
+                ) {
+                    error("No tenés permiso para corregir esta compra")
+                }
+                val docId = purchaseId ?: generateId()
                 val photoUrl = photoBytes?.let { bytes ->
                     runCatching {
-                        invoiceImageUploader.uploadInvoicePhoto(bytes, companyId, purchaseId)
-                    }.getOrDefault("")
-                }.orEmpty()
-                val purchaseLines = lines.map { it.toPurchaseLine(expenseCategory) }
+                        invoiceImageUploader.uploadInvoicePhoto(bytes, companyId, docId)
+                    }.getOrNull()
+                } ?: editing?.invoicePhotoUrl.orEmpty()
+                val purchaseLines = lines.map { it.toPurchaseLine() }
                 val total = purchaseLines.purchaseTotal()
-                val purchase = Purchase(
-                    id = purchaseId,
-                    kind = PurchaseKind.MARKET_RUN,
-                    // Default de las líneas que no declararon sucursal propia.
-                    branchId = defaultBranch.id,
-                    branchName = defaultBranch.name,
-                    // Sin proveedor: el lugar es de cada línea. El nombre visible en la
-                    // lista lo arma la pantalla a partir de los lugares que trae.
-                    supplierId = "",
-                    supplierName = "",
-                    date = date,
-                    notes = notes?.trim()?.ifEmpty { null },
+                // De qué gaveta salió. Manda la caja que pasa la pantalla; al corregir desde
+                // Compras no viene ninguna y entonces manda la que quedó guardada en la
+                // compra, que es la que tiene el movimiento a ajustar.
+                val intendedSessionId = session?.id?.ifEmpty { null } ?: editing?.cashSessionId.orEmpty()
+                val liveSession = intendedSessionId.takeIf { it.isNotEmpty() }?.let { sid ->
+                    runCatching { cashSessionRepository.getSession(companyId, sid) }
+                        .getOrNull()
+                        ?.takeIf { it.status == CashSessionStatus.OPEN }
+                }
+                // La caja de la que salió ya cerró. La atribución NO se reescribe: el
+                // movimiento que la descontó vive dentro de un cierre que alguien firmó, y
+                // volverla "caja general" dejaría ese faltante sin nada que lo explique.
+                val drawerLocked = liveSession == null && !editing?.cashSessionId.isNullOrEmpty()
+                // Antes de escribir NADA: si no alcanza el efectivo, esto revienta y no queda
+                // ni compra a medio guardar ni inventario movido.
+                assertCashAvailable(
+                    session = liveSession,
+                    amount = total,
+                    alreadyCharged = if (editing != null && editing.cashSessionId == liveSession?.id) {
+                        editing.totalAmount
+                    } else 0.0
+                )
+                val base = editing ?: Purchase(
+                    id = docId,
+                    kind = PurchaseKind.QUICK,
                     receivedById = currentUser.id,
                     receivedByName = currentUser.displayName.ifEmpty { currentUser.email },
                     // Nace saldada: es efectivo del momento, no hay cuenta por pagar que
                     // vigilar ni vencimiento que calcular.
                     status = PurchaseStatus.PAID,
-                    totalAmount = total,
-                    paidAmount = total,
                     paymentTermsDays = 0,
-                    dueDate = 0L,
+                    dueDate = 0L
+                )
+                val purchase = base.copy(
+                    // Default de las líneas que no declararon sucursal propia.
+                    branchId = defaultBranch.id,
+                    branchName = defaultBranch.name,
+                    // Puede ir vacío: en una vuelta de compras el lugar es de cada línea y el
+                    // nombre visible en la lista sale de lo que trae (ver `Purchase.listTitle`).
+                    // Se llena cuando el desembolso SÍ tiene un solo dueño —el de gaseosas que
+                    // llegó a la puerta—, que es el caso en que uno quiere buscarlo por ahí.
+                    supplierId = supplierId,
+                    supplierName = supplierName,
+                    date = date,
+                    notes = notes?.trim()?.ifEmpty { null },
+                    totalAmount = total,
+                    // Se pagó completa en el momento, así que el abono sigue al total: si al
+                    // corregir el monto quedara el viejo, la compra arrastraría un saldo (o un
+                    // sobrepago) que nadie debe.
+                    paidAmount = total,
                     receivedAt = date,
                     nearestExpiryDate = purchaseLines.nearestExpiry(),
                     nearestExpiryItemName = purchaseLines.nearestExpiryLine()?.itemName.orEmpty(),
-                    invoicePhotoUrl = photoUrl
+                    invoicePhotoUrl = photoUrl,
+                    invoiceNumber = invoiceNumber?.trim()?.ifEmpty { null } ?: editing?.invoiceNumber,
+                    // La atribución se guarda en el encabezado y de ahí la copian los gastos
+                    // que la compra genere. Es el encabezado y no la línea porque es UN
+                    // desembolso: todo salió de la misma bolsa.
+                    paidFrom = when {
+                        liveSession != null -> ExpensePaidFrom.CASH_DRAWER
+                        drawerLocked -> editing?.paidFrom.orEmpty()
+                        else -> ExpensePaidFrom.GENERAL
+                    },
+                    cashSessionId = liveSession?.id
+                        ?: editing?.cashSessionId.takeIf { drawerLocked }.orEmpty(),
+                    cashRegisterName = liveSession?.registerName
+                        ?: editing?.cashRegisterName.takeIf { drawerLocked }.orEmpty()
                 )
-                purchaseRepository.savePurchase(companyId, purchase, purchaseLines)
-                applyStockForPurchase(
-                    companyId, purchase, purchaseLines, currentUser,
-                    perishableIngredientIds(companyId)
+                val perishableIds = perishableIngredientIds(companyId)
+                if (editing == null) {
+                    purchaseRepository.savePurchase(companyId, purchase, purchaseLines)
+                    applyStockForPurchase(companyId, purchase, purchaseLines, currentUser, perishableIds)
+                } else {
+                    // El inventario se corrige POR DIFERENCIA con el mismo `applyStockDelta`
+                    // que usa la factura: reaplicar la compra entera duplicaría el ingreso, y
+                    // escribir un reverso aparte perdería las guardas ya probadas.
+                    val oldLines = _uiState.value.editingOriginalLines
+                    purchaseRepository.updatePurchase(companyId, purchase, purchaseLines)
+                    applyStockDelta(companyId, purchase, oldLines, purchaseLines, currentUser, perishableIds)
+                    reconcileLotsPerBranch(companyId, purchase, purchaseLines, perishableIds)
+                }
+                syncPurchaseSideEffects(
+                    companyId, purchase, purchaseLines,
+                    _uiState.value.editingOriginalLines, currentUser
                 )
-                syncPurchaseSideEffects(companyId, purchase, purchaseLines, emptyList(), currentUser)
-            }.onSuccess {
+                // Lo mismo que en la factura: los conceptos del catálogo aprenden a quién se
+                // le compró y a cuánto. Con proveedor ocasional (sin id) solo se guarda el
+                // precio — no hay ficha a la que agregarlo.
+                syncPurchaseConcepts(companyId, supplierId, purchaseLines, date)
+                syncPurchaseCashMovement(
+                    companyId = companyId,
+                    session = liveSession,
+                    // Lo que esta compra YA le había descontado a ESTA gaveta. Si la compra
+                    // es nueva, o si el desembolso se atribuye ahora a otra caja, no hay
+                    // nada previo que compensar y entra el total completo.
+                    previousTotal = if (editing != null && editing.cashSessionId == liveSession?.id) {
+                        editing.totalAmount
+                    } else 0.0,
+                    newTotal = total,
+                    // De las LÍNEAS y no de `purchase.listTitle()`: los nombres se
+                    // denormalizan en el encabezado al escribirlo, así que el objeto que
+                    // está acá en memoria todavía los trae vacíos y el movimiento de la
+                    // caja habría quedado como "Compra rápida" — que es justo lo que no
+                    // sirve cuando alguien busca qué explica el faltante.
+                    concept = purchaseLines.map { it.itemName }
+                        .filter { it.isNotEmpty() }
+                        .distinct()
+                        .take(3)
+                        .joinToString(", ")
+                        .ifEmpty { "Compra rápida" },
+                    currentUser = currentUser,
+                    purchaseId = docId
+                )
+                // Se avisa solo cuando lo guardado no es lo que el usuario pidió.
+                when {
+                    drawerLocked -> "Se corrigió la compra, pero la caja \"${'$'}{editing?.cashRegisterName.orEmpty()}\" " +
+                        "ya está cerrada: su efectivo no se movió."
+                    session != null && liveSession == null ->
+                        "La caja se cerró mientras anotabas. Quedó como caja general."
+                    else -> null
+                }
+            }.onSuccess { drawerWarning ->
+                val wasEdit = purchaseId != null
                 _uiState.update {
-                    it.copy(isLoading = false, isSaved = true, message = "Vuelta registrada")
+                    it.copy(
+                        isLoading = false,
+                        isSaved = true,
+                        editingPurchase = null,
+                        editingOriginalLines = emptyList(),
+                        draftLines = emptyList(),
+                        pinnedSession = null,
+                        // El aviso viaja en `message` y no en `error` porque la pantalla
+                        // navega hacia atrás apenas ve `isSaved`: un snackbar lanzado desde
+                        // el formulario se va con el formulario. `resetForm` limpia `error`
+                        // y no `message`, así que este sí llega a la lista.
+                        message = drawerWarning
+                            ?: if (wasEdit) "Compra rápida actualizada" else "Compra rápida registrada"
+                    )
                 }
             }.onFailure { err ->
                 _uiState.update {
-                    it.copy(isLoading = false, error = err.message ?: "No se pudo guardar la vuelta")
+                    it.copy(isLoading = false, error = err.message ?: "No se pudo guardar la compra")
                 }
             }
+        }
+    }
+
+    /**
+     * Lee la caja a la que se va a cargar lo que se anote. `null` la limpia — el caso del
+     * acceso de Operaciones, donde el desembolso es de caja general y no toca ninguna gaveta.
+     *
+     * Solo se acepta si sigue ABIERTA: cargarle un gasto a una caja ya cuadrada cambiaría un
+     * cierre que alguien firmó.
+     */
+    fun loadPinnedSession(companyId: String, sessionId: String?) {
+        if (sessionId.isNullOrEmpty()) {
+            _uiState.update { it.copy(pinnedSession = null) }
+            return
+        }
+        viewModelScope.launch {
+            val session = runCatching { cashSessionRepository.getSession(companyId, sessionId) }
+                .getOrNull()
+                ?.takeIf { it.status == CashSessionStatus.OPEN }
+            _uiState.update { it.copy(pinnedSession = session) }
+        }
+    }
+
+    /**
+     * Deja la gaveta descontada por lo que esta compra se llevó.
+     *
+     * Al corregir **no reescribe el movimiento original: escribe la diferencia**, igual que
+     * el inventario se corrige por diferencia contra `editingOriginalLines` en vez de
+     * reaplicarse. Un movimiento reescrito borraría del historial de la caja el hecho de que
+     * el monto cambió, que es exactamente lo que alguien va a querer ver cuando el cuadre no
+     * dé; y el repositorio de cajas no expone borrar ni editar movimientos a propósito.
+     *
+     * Si el total bajó, la diferencia entra como DEPOSIT: ese efectivo nunca salió.
+     */
+    private suspend fun syncPurchaseCashMovement(
+        companyId: String,
+        session: CashSession?,
+        previousTotal: Double,
+        newTotal: Double,
+        concept: String,
+        currentUser: User,
+        /** Compra que provoca el movimiento, para poder volver a ella desde la gaveta. */
+        purchaseId: String = "",
+        /** `true` cuando el movimiento repone lo de una compra que se está borrando. */
+        isDeletion: Boolean = false
+    ) {
+        if (session == null) return
+        val delta = newTotal - previousTotal
+        // Centavos de redondeo no son una corrección. Mismo umbral que el saldo de la factura.
+        if (kotlin.math.abs(delta) < PURCHASE_BALANCE_EPSILON) return
+        val isCorrection = previousTotal > 0.0
+        cashSessionRepository.addMovement(
+            companyId,
+            CashMovement(
+                sessionId = session.id,
+                type = if (delta > 0) CashMovementType.EXPENSE else CashMovementType.DEPOSIT,
+                amount = kotlin.math.abs(delta),
+                reason = when {
+                    isDeletion -> "Eliminado: $concept"
+                    isCorrection -> "Corrección: $concept"
+                    else -> concept
+                },
+                createdByUserId = currentUser.id,
+                createdByUserName = currentUser.displayName.ifEmpty { currentUser.email },
+                sourcePurchaseId = purchaseId
+            )
+        )
+    }
+
+    /**
+     * Deja que quien opera una caja corrija o elimine **lo que se pagó de su propia gaveta**,
+     * aunque no tenga los permisos de Compras.
+     *
+     * Es el error del día: se tecleó 325 en vez de 32.50, o el dinero no salió de esa caja.
+     * Exigir `EDIT_PURCHASES` para eso obliga a la cajera a llamar a alguien antes de cerrar,
+     * y el desvío termina cuadrándose a mano — que es exactamente lo que este módulo evita.
+     *
+     * El permiso amplio sigue mandando; esto solo lo suple cuando se cumplen las tres cosas:
+     * es una compra rápida, está atribuida a una gaveta, y esa gaveta **sigue abierta**. Con
+     * la caja cerrada nadie la toca: ese cierre ya lo firmó alguien. Y nada se pierde, porque
+     * tanto corregir como borrar dejan su movimiento en el historial de la caja.
+     */
+    private suspend fun canManageOwnDrawerPurchase(
+        companyId: String,
+        purchase: Purchase?,
+        currentUser: User
+    ): Boolean {
+        if (purchase == null || !purchase.isQuick) return false
+        val sid = purchase.cashSessionId.takeIf { it.isNotEmpty() } ?: return false
+        val session = runCatching { cashSessionRepository.getSession(companyId, sid) }.getOrNull()
+        return session?.status == CashSessionStatus.OPEN &&
+            currentUser.hasPermission(Permission.ADD_VARIABLE_EXPENSE)
+    }
+
+    /**
+     * Se niega a pagar de una gaveta más efectivo del que hay en ella.
+     *
+     * La cajera lleva vendido Q300 y quiere pagar un gasto de Q325: ese billete no existe.
+     * Dejarlo pasar no "documenta un faltante", **inventa uno**: el cuadre del cierre pediría
+     * devolver dinero que nunca entró, y el reclamo cae sobre quien anotó de buena fe.
+     *
+     * El tope es `expectedCashNow` —fondo de cambio + ventas en efectivo + movimientos—, y se
+     * calcula sobre la sesión **recién leída**, no sobre la que traía la pantalla: entre abrir
+     * la captura y guardar pudo entrar una venta o salir un retiro. Mismo criterio que
+     * `addPayment`, que revalida el saldo de la factura contra lo leído en ese momento.
+     *
+     * [alreadyCharged] es lo que esta misma compra ya le había descontado a esta gaveta, y
+     * vuelve a estar disponible al corregirla: sin restarlo, subir de Q50 a Q60 se compararía
+     * contra una caja a la que ya se le quitaron los Q50.
+     */
+    private fun assertCashAvailable(session: CashSession?, amount: Double, alreadyCharged: Double) {
+        if (session == null) return
+        val available = session.expectedCashNow + alreadyCharged
+        if (amount > available + PURCHASE_BALANCE_EPSILON) {
+            throw IllegalStateException(
+                "En ${session.registerName.ifEmpty { "esta caja" }} hay Q ${available.fmt(2)} " +
+                    "y estás anotando Q ${amount.fmt(2)}. Si el dinero salió de otro lado, " +
+                    "anotalo desde Operaciones en vez de desde la caja."
+            )
         }
     }
 
@@ -875,7 +1572,7 @@ class PurchaseViewModel(
         (st.supplierIngredients + st.supplierSupplies + st.allIngredients)
             .firstOrNull { it.barcode.isNotEmpty() && it.barcode == trimmed }
             ?.let { return BarcodeMatch.OfIngredient(it) }
-        st.supplierResaleProducts
+        (st.supplierResaleProducts + st.allResaleProducts)
             .firstOrNull { it.barcode.isNotEmpty() && it.barcode == trimmed }
             ?.let { return BarcodeMatch.OfProduct(it) }
         return null
@@ -935,11 +1632,32 @@ class PurchaseViewModel(
         }
     }
 
+    /**
+     * Las filas del catálogo rearman la línea completa en cada tecla, sin saber del lote ni del
+     * vencimiento (se capturan aparte, en la sección "Vencimientos"). Por eso se CONSERVAN los de
+     * la línea anterior: sin esto, anotar la fecha y después corregir la cantidad la borraba en
+     * silencio. Para cambiarlos está [updateLineExpiry].
+     */
     fun updateDraftLine(line: PurchaseLine) {
         _uiState.update { state ->
+            val previous = state.draftLines.firstOrNull { it.matchKey() == line.matchKey() }
+            val merged = if (previous != null && line.expiryDate == 0L && line.lotCode.isEmpty()) {
+                line.copy(expiryDate = previous.expiryDate, lotCode = previous.lotCode)
+            } else line
             val others = state.draftLines.filter { it.matchKey() != line.matchKey() }
-            val updated = if (line.quantityReceived > 0.0) others + line else others
+            val updated = if (merged.quantityReceived > 0.0) others + merged else others
             state.copy(draftLines = updated)
+        }
+    }
+
+    /** Lote y vencimiento de una línea ya anotada. Único camino que puede dejarlos vacíos. */
+    fun updateLineExpiry(line: PurchaseLine, expiryDate: Long, lotCode: String) {
+        _uiState.update { state ->
+            state.copy(
+                draftLines = state.draftLines.map {
+                    if (it.matchKey() == line.matchKey()) it.copy(expiryDate = expiryDate, lotCode = lotCode) else it
+                }
+            )
         }
     }
 
@@ -954,7 +1672,13 @@ class PurchaseViewModel(
         dueDateOverride: Long? = null,
         taxRatePercent: Double = 0.0,
         declaredTotal: Double = 0.0,
-        invoicePhotoBytes: ByteArray? = null
+        invoicePhotoBytes: ByteArray? = null,
+        /**
+         * Caja de la que salió el efectivo, o `null` si la factura queda por pagar / la paga
+         * el dueño. Es el caso del proveedor que llega a la puerta y le pagan del cajón: la
+         * factura es idéntica a cualquier otra, lo único distinto es de qué bolsa salió.
+         */
+        session: CashSession? = null
     ) {
         viewModelScope.launch {
             val branch = _uiState.value.selectedBranch ?: return@launch
@@ -976,8 +1700,16 @@ class PurchaseViewModel(
                         invoiceImageUploader.uploadInvoicePhoto(bytes, companyId, purchaseId)
                     }.getOrDefault("")
                 }.orEmpty()
+                // Se relee la sesión en vez de confiar en la que trae la pantalla: entre
+                // abrirla y guardar, el cajero pudo haber cerrado su turno.
+                val liveSession = session?.let { chosen ->
+                    runCatching { cashSessionRepository.getSession(companyId, chosen.id) }
+                        .getOrNull()
+                        ?.takeIf { it.status == CashSessionStatus.OPEN }
+                }
                 val terms = (paymentTermsDaysOverride ?: supplier?.paymentTermsDays ?: 0).coerceAtLeast(0)
                 val total = lines.purchaseTotal()
+                assertCashAvailable(liveSession, total, alreadyCharged = 0.0)
                 val tax = taxBreakdownFromGross(total, taxRatePercent).tax
                 val purchase = Purchase(
                     id = purchaseId,
@@ -1004,7 +1736,11 @@ class PurchaseViewModel(
                     // Contado (0 días) no genera vencimiento que vigilar.
                     dueDate = dueDateOverride ?: if (terms > 0) date + terms * 86_400_000L else 0L,
                     receivedAt = if (status == PurchaseStatus.PENDING_RECEIPT) 0L else date,
-                    invoicePhotoUrl = photoUrl
+                    invoicePhotoUrl = photoUrl,
+                    paidFrom = if (liveSession != null) ExpensePaidFrom.CASH_DRAWER
+                               else ExpensePaidFrom.GENERAL,
+                    cashSessionId = liveSession?.id.orEmpty(),
+                    cashRegisterName = liveSession?.registerName.orEmpty()
                 )
                 purchaseRepository.savePurchase(companyId, purchase, lines)
 
@@ -1012,6 +1748,9 @@ class PurchaseViewModel(
                 // que el proveedor cotizó y que el usuario acaba de teclear.
                 lines.forEach { line ->
                     if (line.lineKind == PurchaseLineKind.RESALE_PRODUCT) return@forEach
+                    // Una línea con producto detrás trae el formato del PRODUCTO, no el del
+                    // insumo: su precio lo actualiza `syncResaleFormatPrices`.
+                    if (line.productId.isNotEmpty()) return@forEach
                     if (line.formatId.isEmpty() || line.packageCost <= 0) return@forEach
                     val ingredient = _uiState.value.supplierIngredients.find { it.id == line.ingredientId }
                     val originalFormat = ingredient?.purchaseFormats?.find { it.id == line.formatId }
@@ -1024,6 +1763,13 @@ class PurchaseViewModel(
                     }
                 }
 
+                // Mismo criterio para la reventa: la caja de gaseosas que hoy costó Q126 es la
+                // que la próxima factura debe proponer.
+                syncResaleFormatPrices(companyId, lines)
+                // Y lo mismo para los conceptos sin inventario: el proveedor al que se le
+                // compró y el precio que cobró hoy.
+                syncPurchaseConcepts(companyId, supplier?.id.orEmpty(), lines, date)
+
                 // Una compra "pendiente de recibir" NO toca el inventario: el pan todavía está
                 // en el camión del proveedor. El stock entra con `receivePurchase`.
                 if (status != PurchaseStatus.PENDING_RECEIPT) {
@@ -1034,12 +1780,129 @@ class PurchaseViewModel(
                     // mantenimiento su evento en el historial del activo.
                     syncPurchaseSideEffects(companyId, purchase, lines, emptyList(), currentUser)
                 }
-            }.onSuccess {
-                _uiState.update { it.copy(isLoading = false, isSaved = true, draftLines = emptyList()) }
+                // El efectivo sale de la gaveta aunque lo comprado sea inventario y no gasto:
+                // lo que se cuadra al cierre es el dinero, no el destino contable.
+                syncPurchaseCashMovement(
+                    companyId = companyId,
+                    session = liveSession,
+                    previousTotal = 0.0,
+                    newTotal = total,
+                    concept = supplierLabel,
+                    currentUser = currentUser,
+                    purchaseId = purchaseId
+                )
+                session != null && liveSession == null
+            }.onSuccess { drawerClosedMidway ->
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        isSaved = true,
+                        draftLines = emptyList(),
+                        pinnedSession = null,
+                        message = if (drawerClosedMidway) {
+                            "La caja se cerró mientras capturabas. La compra quedó registrada, " +
+                                "pero su efectivo no se descontó de ninguna gaveta."
+                        } else null
+                    )
+                }
             }.onFailure { err ->
                 _uiState.update { it.copy(isLoading = false, error = err.message ?: "Error al guardar la compra") }
             }
         }
+    }
+
+    /** Escribe el precio pagado en las presentaciones de reventa que cambiaron. Nunca lanza. */
+    private suspend fun syncResaleFormatPrices(companyId: String, lines: List<PurchaseLine>) {
+        // Por producto y no por tipo de línea: la compra de un producto respaldado por insumo
+        // se guarda como línea de insumo y su presentación se actualiza igual.
+        val productIds = lines.filter { it.productId.isNotEmpty() && it.formatId.isNotEmpty() }
+            .mapTo(HashSet()) { it.productId }
+        if (productIds.isEmpty()) return
+        val catalog = _uiState.value.let { it.supplierResaleProducts + it.allResaleProducts }
+        val suggestions = mutableListOf<RepriceSuggestion>()
+        productIds.forEach { id ->
+            val product = catalog.firstOrNull { it.id == id } ?: return@forEach
+            val formats = product.formatsWithPaidPrices(lines) ?: return@forEach
+            val updated = product.copy(purchaseFormats = formats).withDerivedPurchaseReference()
+            runCatching { productRepository.updatePurchaseFormats(companyId, updated) }
+                .onSuccess {
+                    // Se compara `purchaseCost` —el costo derivado de la presentación
+                    // PREDETERMINADA— y no el precio de cualquier formato: si subió el de un
+                    // proveedor al que casi no le comprás, tu costo de venta no cambió y
+                    // proponer un aumento sería mentir sobre el margen.
+                    repriceSuggestionFor(
+                        product = updated,
+                        oldCost = product.purchaseCost ?: 0.0,
+                        newCost = updated.purchaseCost ?: 0.0
+                    )?.let(suggestions::add)
+                }
+        }
+        if (suggestions.isNotEmpty()) {
+            _uiState.update { it.copy(repriceSuggestions = suggestions.sortedBy { s -> s.productName }) }
+        }
+    }
+
+    /**
+     * Aplica los precios aceptados en el diálogo posterior a la factura.
+     *
+     * Escribe `salePrice` **y** el `ProductPrice` de la lista RETAIL predeterminada, que es
+     * exactamente lo que hace `ProductViewModel.saveProduct`: `salePrice` es la fuente de
+     * verdad de esa lista y las dos puntas tienen que quedar de acuerdo, o el POS cobra una y
+     * el resto del sistema muestra la otra.
+     *
+     * Usa `updateProduct` (escritura completa) sobre el producto del catálogo en memoria, que
+     * es el que se acaba de actualizar con el costo nuevo — releerlo sería una consulta de más
+     * para volver a tener lo mismo.
+     */
+    fun applyRepricing(companyId: String, pricesByProductId: Map<String, Double>) {
+        val accepted = pricesByProductId.filterValues { it > 0.0 }
+        if (accepted.isEmpty()) { dismissRepricing(); return }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isProcessing = true) }
+            val retail = runCatching {
+                priceListRepository.getDefaultList(companyId, PriceListType.RETAIL)
+            }.getOrNull()
+            val catalog = _uiState.value.let { it.supplierResaleProducts + it.allResaleProducts }
+            var applied = 0
+            accepted.forEach { (productId, price) ->
+                val product = catalog.firstOrNull { it.id == productId } ?: return@forEach
+                runCatching {
+                    productRepository.updateProduct(companyId, product.copy(salePrice = price))
+                    if (retail != null) {
+                        priceListRepository.upsertPrice(
+                            companyId,
+                            ProductPrice(
+                                productId = productId,
+                                priceListId = retail.id,
+                                priceListName = retail.name,
+                                unitPrice = price
+                            )
+                        )
+                    }
+                }.onSuccess { applied++ }
+            }
+            _uiState.update { st ->
+                st.copy(
+                    isProcessing = false,
+                    repriceSuggestions = emptyList(),
+                    // El catálogo en memoria tiene que reflejarlo: si no, reabrir la misma
+                    // factura volvería a proponer el aumento que ya se aplicó.
+                    supplierResaleProducts = st.supplierResaleProducts.map { p ->
+                        accepted[p.id]?.let { p.copy(salePrice = it) } ?: p
+                    },
+                    allResaleProducts = st.allResaleProducts.map { p ->
+                        accepted[p.id]?.let { p.copy(salePrice = it) } ?: p
+                    },
+                    message = if (applied == 1) "Precio actualizado"
+                              else "Precios actualizados ($applied)"
+                )
+            }
+        }
+    }
+
+    /** Cierra el diálogo sin tocar precios. El costo nuevo ya quedó guardado igual. */
+    fun dismissRepricing() {
+        _uiState.update { it.copy(repriceSuggestions = emptyList()) }
     }
 
     /**
@@ -1051,7 +1914,7 @@ class PurchaseViewModel(
      * Reconcilia los lotes de la compra **una vez por sucursal**.
      *
      * `reconcilePurchaseLots` recibe UNA sucursal porque el libro de lotes está llaveado por
-     * `{branchId}_{ingredientId}`. En una vuelta que lleva fruta a dos sucursales, llamarlo
+     * `{branchId}_{ingredientId}`. En una compra que lleva fruta a dos sucursales, llamarlo
      * con la del encabezado dejaría los lotes de la otra sin registrar y el aviso de
      * caducidad apuntando a fruta que está en otro lado. Se le pasa a cada sucursal SOLO sus
      * líneas: una lista vacía para una sucursal que ya no recibe nada es justamente lo que
@@ -1065,7 +1928,10 @@ class PurchaseViewModel(
         extraBranches: List<Pair<String, String>> = emptyList()
     ) {
         val perishable = lines.filter {
-            it.ingredientId.isNotEmpty() &&
+            // Sin conteo no hay libro de lotes que llevar: el lote existe para consumirse
+            // FEFO contra un stock que acá no se mueve.
+            purchaseLineTouchesStock(it.lineKind) &&
+                it.ingredientId.isNotEmpty() &&
                 (it.ingredientId in perishableIds || it.expiryDate > 0L)
         }
         val branches = (lines.branchesTouched(purchase) + extraBranches).distinct()
@@ -1163,11 +2029,12 @@ class PurchaseViewModel(
         perishableIds: Set<String>
     ) {
         lines.forEach { line ->
-            // ── Servicio: no mueve inventario. Su efecto es el gasto, que sincroniza
-            //    `syncPurchaseSideEffects` aparte. Sin esta guarda caería al camino de
-            //    insumo con `ingredientId` vacío y escribiría stock de la nada.
-            if (line.lineKind == PurchaseLineKind.SERVICE) return@forEach
-            // La sucursal es la de LA LÍNEA, no la del encabezado: una vuelta al mercado
+            // ── Lo que no mueve inventario se salta acá: el servicio (sin catálogo) y el
+            //    suministro sin conteo (la bolsa, que SÍ tiene catálogo y por eso llega con
+            //    `ingredientId` lleno — sin esta guarda le escribiría stock igual). Su
+            //    efecto es el gasto, que sincroniza `syncPurchaseSideEffects` aparte.
+            if (!purchaseLineTouchesStock(line.lineKind)) return@forEach
+            // La sucursal es la de LA LÍNEA, no la del encabezado: una compra rápida
             // surte a varias de una sola salida. En una factura las dos coinciden.
             val branchId = line.effectiveBranchId(purchase)
             val branchName = line.effectiveBranchName(purchase)

@@ -178,5 +178,6 @@ private fun AlertTarget.icon(): ImageVector = when (this) {
     AlertTarget.OVERDUE_CASH_SESSION  -> Icons.Default.PointOfSale
     AlertTarget.DISPATCH_PRICE_MISSING -> Icons.Default.AttachMoney
     AlertTarget.OVERDUE_PURCHASE      -> Icons.Default.ReceiptLong
+    AlertTarget.CREDIT_OVERDUE        -> Icons.Default.ReceiptLong
     AlertTarget.EXPIRING_INGREDIENT   -> Icons.Default.EventBusy
 }

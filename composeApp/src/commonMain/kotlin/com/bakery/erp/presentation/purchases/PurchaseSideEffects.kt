@@ -55,7 +55,7 @@ internal fun expensesForPurchase(
         .map { line ->
             Expense(
                 orgId = companyId,
-                // La sucursal es la de LA LÍNEA: en una vuelta al mercado los trapos del
+                // La sucursal es la de LA LÍNEA: en una compra rápida los trapos del
                 // restaurante no son gasto de la panadería, y el reporte financiero desglosa
                 // por sucursal.
                 branchId = line.effectiveBranchId(purchase),
@@ -68,12 +68,20 @@ internal fun expensesForPurchase(
                 amount = line.lineTotal,
                 period = period,
                 notes = listOfNotNull(
-                    // En una vuelta el lugar es de la línea; en una factura, del encabezado.
+                    // En una compra rápida el lugar es de la línea; en una factura, del encabezado.
                     line.placeName.takeIf { it.isNotEmpty() } ?: purchase.supplierName.takeIf { it.isNotEmpty() },
                     purchase.invoiceNumber?.let { "Factura $it" }
                 ).joinToString(" · ").ifEmpty { null },
                 sourcePurchaseId = purchase.id,
                 sourcePurchaseLineId = line.id,
+                // De qué bolsa salió, copiado del encabezado: es UN desembolso, así que
+                // todas sus líneas salieron del mismo lado. Sin esto, un gasto pagado de la
+                // gaveta se vería en el mes como si lo hubiera puesto el dueño, y la caja
+                // aparecería con un faltante que nada explica.
+                paidFrom = purchase.paidFrom,
+                cashSessionId = purchase.cashSessionId,
+                cashRegisterName = purchase.cashRegisterName,
+                photoUrl = purchase.invoicePhotoUrl,
                 createdAt = purchase.date
             )
         }

@@ -6,7 +6,8 @@ import com.bakery.erp.model.PayrollRecord
 interface PayrollRepository {
     suspend fun getPayrollHistory(companyId: String, employeeId: String): List<PayrollRecord>
     suspend fun getPayrollRecord(companyId: String, employeeId: String, payrollId: String): PayrollRecord?
-    suspend fun savePayroll(companyId: String, employeeId: String, record: PayrollRecord)
+    /** Devuelve la planilla guardada, con su id (el descuento de créditos se identifica por él). */
+    suspend fun savePayroll(companyId: String, employeeId: String, record: PayrollRecord): PayrollRecord
     suspend fun deletePayroll(companyId: String, employeeId: String, payrollId: String)
 
     /**

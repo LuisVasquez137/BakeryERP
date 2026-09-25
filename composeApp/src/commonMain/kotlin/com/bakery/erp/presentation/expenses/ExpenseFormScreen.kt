@@ -256,6 +256,10 @@ fun ExpenseFormScreen(
                         modifier = Modifier.fillMaxWidth().menuAnchor()
                     )
                     ExposedDropdownMenu(expanded = categoryExpanded, onDismissRequest = { categoryExpanded = false }) {
+                        // Acá SÍ se ofrece la lista entera, a diferencia de la captura: esta
+                        // pantalla solo edita gastos que ya existen, incluidos los que nacieron
+                        // como compromiso del mes, y recortarla dejaría sin forma de corregir
+                        // uno mal clasificado.
                         ExpenseCategory.entries.forEach { cat ->
                             DropdownMenuItem(
                                 text = { Text(cat.label) },

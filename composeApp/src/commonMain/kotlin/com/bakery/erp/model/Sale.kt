@@ -73,8 +73,65 @@ data class Sale(
     val paymentBreakdown: Map<String, Double> = emptyMap(),
     /** Cuándo se recibió el efectivo en caja. 0 mientras siga pendiente. */
     val collectedAt: Long = 0L,
+    /**
+     * Unidades vendidas por grupo de precio ("Pan Q0.50"), en arreglos paralelos:
+     * `groupIds[i]` vendió `groupUnits[i]`. Son líneas que no descuentan ningún producto al
+     * cobrarse — el conteo de cierre las reparte (ver `allocateGroupSales`).
+     *
+     * Van denormalizadas en el encabezado para que el conteo lea UNA consulta de ventas y
+     * no la subcolección de líneas de cada ticket. Arreglos y no mapa porque GitLive no
+     * decodifica `Map<String, Any?>`.
+     */
+    val groupIds: List<String> = emptyList(),
+    val groupUnits: List<Double> = emptyList(),
+    /**
+     * Un cobro en caja puede pagar varias ventas de una vez: el pan del mostrador más la
+     * cuenta del restaurante que el cliente trajo. Todas llevan el mismo [checkoutId] y los
+     * mismos datos del pago —[checkoutTotal], [tenderedAmount], [changeAmount] y los
+     * billetes—, porque lo que se reclama ("me dio mal el vuelto") es el cobro, no cada venta.
+     * Vacío = venta cobrada sola (o anterior a esto): el cobro es la venta misma.
+     */
+    val checkoutId: String = "",
+    /** Lo que se cobró en total en ese cobro. 0 = igual a [total]. */
+    val checkoutTotal: Double = 0.0,
+    /**
+     * Con qué billetes pagó el cliente, en arreglos paralelos: `billValues[i]` × `billCounts[i]`.
+     * Solo se sabe cuando la cajera los marcó tocando los billetes; si tecleó el monto, van
+     * vacíos y queda solo [tenderedAmount].
+     */
+    val billValues: List<Double> = emptyList(),
+    val billCounts: List<Double> = emptyList(),
+    /**
+     * Venta a crédito ([SalePaymentMethod.CREDIT]): a qué cuenta se cargó y quién se llevó la
+     * mercadería. Snapshot, igual que el resto de la venta: sigue diciendo lo mismo aunque la
+     * cuenta se renombre. El cargo vive en `creditMovements` con `saleId` = esta venta.
+     */
+    val creditAccountId: String = "",
+    val creditAccountName: String = "",
+    val creditPersonName: String = "",
+    /**
+     * Descuento de colaborador por pagar en efectivo: a qué cuenta (colaborador) se le hizo y
+     * con qué %. El monto va en [discount]. Snapshot: el % puede cambiar mañana.
+     */
+    val discountAccountId: String = "",
+    val discountLabel: String = "",
     val createdAt: Long = 0L
 )
+
+/** Total del cobro al que pertenece esta venta. */
+val Sale.effectiveCheckoutTotal: Double
+    get() = checkoutTotal.takeIf { it > 0.0 } ?: total
+
+/** Billetes con los que se pagó, de mayor a menor. Vacío si se tecleó el monto. */
+val Sale.tenderedBills: List<Pair<Double, Int>>
+    get() = billValues.zip(billCounts).map { it.first to it.second.toInt() }
+        .filter { it.second > 0 }
+        .sortedByDescending { it.first }
+
+/** Unidades vendidas por grupo de precio en esta venta. */
+val Sale.groupUnitsById: Map<String, Double>
+    get() = groupIds.zip(groupUnits).groupBy({ it.first }, { it.second })
+        .mapValues { (_, v) -> v.sum() }
 
 /** De dónde vino la venta. */
 object SaleSource {
@@ -100,14 +157,21 @@ object SalePaymentMethod {
     const val CASH     = "CASH"
     const val CARD     = "CARD"
     const val TRANSFER = "TRANSFER"
+    /**
+     * Fiado: no entra dinero, se carga a una cuenta de crédito. No suma al efectivo esperado
+     * de la gaveta (`expectedCashNow` solo mira `totalCashSales`), así que no descuadra caja.
+     */
+    const val CREDIT   = "CREDIT"
 
     fun label(method: String) = when (method) {
         CASH     -> "Efectivo"
         CARD     -> "Tarjeta"
         TRANSFER -> "Transferencia"
+        CREDIT   -> "Crédito"
         else     -> "Desconocido"
     }
 
+    /** Formas con las que entra dinero. [CREDIT] se ofrece aparte, solo con permiso. */
     val all = listOf(CASH, CARD, TRANSFER)
 }
 

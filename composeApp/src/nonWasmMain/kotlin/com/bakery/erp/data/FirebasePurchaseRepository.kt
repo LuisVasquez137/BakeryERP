@@ -2,7 +2,10 @@ package com.bakery.erp.data
 
 import com.bakery.erp.domain.PurchaseRepository
 import com.bakery.erp.model.PURCHASE_BALANCE_EPSILON
+import com.bakery.erp.domain.report.PurchaseSummary
+import com.bakery.erp.domain.report.aggregatePurchases
 import com.bakery.erp.model.Purchase
+import com.bakery.erp.model.amountSplit
 import com.bakery.erp.model.PurchaseLine
 import com.bakery.erp.model.PurchaseKind
 import com.bakery.erp.model.PurchaseLineKind
@@ -48,6 +51,13 @@ class FirebasePurchaseRepository(
     override suspend fun getPurchases(companyId: String): List<Purchase> =
         col(companyId).get().documents.map { it.toPurchase() }.sortedByDescending { it.date }
 
+    override suspend fun aggregatePurchasesInRange(
+        companyId: String,
+        fromMillis: Long,
+        untilExclusiveMillis: Long
+    ): PurchaseSummary =
+        aggregatePurchases(getPurchases(companyId), fromMillis, untilExclusiveMillis)
+
     override suspend fun getPurchase(companyId: String, purchaseId: String): Purchase? =
         runCatching { col(companyId).document(purchaseId).get().toPurchase() }.getOrNull()
 
@@ -61,6 +71,10 @@ class FirebasePurchaseRepository(
             // Denormalizados desde las líneas: el monto alimenta los KPIs de la lista y los
             // nombres permiten buscar por contenido sin abrir la subcolección de cada factura.
             totalAmount = lines.purchaseTotal(),
+            // El corte inventario/gasto va al encabezado para que el reporte financiero no
+            // tenga que abrir las líneas de cada compra del mes. Ver `PurchaseAmountSplit`.
+            inventoryAmount = lines.amountSplit().inventory,
+            expensedAmount = lines.amountSplit().expensed,
             itemIds = lines.map { it.itemId }.filter { it.isNotEmpty() }.distinct(),
             itemNames = lines.map { it.itemName }.filter { it.isNotEmpty() }.distinct(),
             lineKinds = lines.kindsPresent(),
@@ -80,6 +94,8 @@ class FirebasePurchaseRepository(
             purchase.copy(
                 lineCount = lines.size,
                 totalAmount = lines.purchaseTotal(),
+                inventoryAmount = lines.amountSplit().inventory,
+                expensedAmount = lines.amountSplit().expensed,
                 itemIds = lines.map { it.itemId }.filter { it.isNotEmpty() }.distinct(),
                 itemNames = lines.map { it.itemName }.filter { it.isNotEmpty() }.distinct(),
                 lineKinds = lines.kindsPresent(),
@@ -206,6 +222,8 @@ class FirebasePurchaseRepository(
         "status" to status,
         "totalAmount" to totalAmount,
         "paidAmount" to paidAmount,
+        "inventoryAmount" to inventoryAmount,
+        "expensedAmount" to expensedAmount,
         "taxAmount" to taxAmount,
         "taxRatePercent" to taxRatePercent,
         "declaredTotal" to declaredTotal,
@@ -218,7 +236,10 @@ class FirebasePurchaseRepository(
         "itemIds" to itemIds,
         "itemNames" to itemNames,
         "lineKinds" to lineKinds,
-        "kind" to kind
+        "kind" to kind,
+        "paidFrom" to paidFrom,
+        "cashSessionId" to cashSessionId,
+        "cashRegisterName" to cashRegisterName
     )
 
     private fun PurchaseLine.toLineMap(): Map<String, Any?> = firestoreSafeOf(
@@ -239,11 +260,13 @@ class FirebasePurchaseRepository(
         "lotCode" to lotCode,
         // Línea de servicio / gasto (sin catálogo detrás)
         "conceptName" to conceptName,
+        "conceptId" to conceptId,
+        "conceptUnit" to conceptUnit,
         "expenseCategory" to expenseCategory,
         "assetId" to assetId,
         "assetName" to assetName,
         "assetEventType" to assetEventType,
-        // Vuelta de compras: sucursal y lugar propios de la línea
+        // Compra rápida: sucursal y lugar propios de la línea
         "branchId" to branchId,
         "branchName" to branchName,
         "placeName" to placeName
@@ -277,6 +300,10 @@ class FirebasePurchaseRepository(
         status = get<String?>("status") ?: PurchaseStatus.RECEIVED_PENDING_PAYMENT,
         totalAmount = readDouble("totalAmount"),
         paidAmount = readDouble("paidAmount"),
+        // Ausentes en compras anteriores al desglose: quedan en 0 y `Purchase.amountSplit()`
+        // lo deduce del encabezado en vez de exigir una migración.
+        inventoryAmount = readDouble("inventoryAmount"),
+        expensedAmount = readDouble("expensedAmount"),
         taxAmount = readDouble("taxAmount"),
         taxRatePercent = readDouble("taxRatePercent"),
         declaredTotal = readDouble("declaredTotal"),
@@ -289,8 +316,13 @@ class FirebasePurchaseRepository(
         itemIds = runCatching { get<List<String>?>("itemIds") }.getOrNull().orEmpty(),
         itemNames = runCatching { get<List<String>?>("itemNames") }.getOrNull().orEmpty(),
         lineKinds = runCatching { get<List<String>?>("lineKinds") }.getOrNull().orEmpty(),
-        // Las compras anteriores a la vuelta de compras son todas facturas.
-        kind = runCatching { get<String?>("kind") }.getOrNull() ?: PurchaseKind.INVOICE
+        // Las compras anteriores a la compra rápida son todas facturas.
+        kind = runCatching { get<String?>("kind") }.getOrNull() ?: PurchaseKind.INVOICE,
+        // Ausentes en las compras anteriores a la atribución de caja: quedan vacías, que es
+        // exactamente "no se declaró de dónde salió" y no "salió de caja general".
+        paidFrom = get<String?>("paidFrom") ?: "",
+        cashSessionId = get<String?>("cashSessionId") ?: "",
+        cashRegisterName = get<String?>("cashRegisterName") ?: ""
     )
 
     private fun DocumentSnapshot.toPurchaseLine() = PurchaseLine(
@@ -310,6 +342,8 @@ class FirebasePurchaseRepository(
         expiryDate = readMillis("expiryDate"),
         lotCode = get<String?>("lotCode") ?: "",
         conceptName = runCatching { get<String?>("conceptName") }.getOrNull() ?: "",
+        conceptId = runCatching { get<String?>("conceptId") }.getOrNull() ?: "",
+        conceptUnit = runCatching { get<String?>("conceptUnit") }.getOrNull() ?: "",
         expenseCategory = runCatching { get<String?>("expenseCategory") }.getOrNull() ?: "",
         assetId = runCatching { get<String?>("assetId") }.getOrNull() ?: "",
         assetName = runCatching { get<String?>("assetName") }.getOrNull() ?: "",

@@ -3,6 +3,8 @@ package com.bakery.erp.presentation.reports.shared
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -103,14 +105,16 @@ fun BranchFilterRow(
     branches: List<Pair<String, String>>, // (id, name)
     selectedBranchId: String?,             // null = "todas"
     onSelect: (String?) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** false = reporte de una sucursal a la vez, sin chip "Todas". */
+    allowAll: Boolean = true
 ) {
     if (branches.isEmpty()) return
     Row(
-        modifier = modifier.fillMaxWidth().padding(vertical = 4.dp),
+        modifier = modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        AssistChip(
+        if (allowAll) AssistChip(
             onClick = { onSelect(null) },
             label = { Text("Todas") },
             colors = AssistChipDefaults.assistChipColors(

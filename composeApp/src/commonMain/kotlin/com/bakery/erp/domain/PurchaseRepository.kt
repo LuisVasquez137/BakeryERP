@@ -1,11 +1,22 @@
 package com.bakery.erp.domain
 
+import com.bakery.erp.domain.report.PurchaseSummary
 import com.bakery.erp.model.Purchase
 import com.bakery.erp.model.PurchaseLine
 import com.bakery.erp.model.PurchasePayment
 
 interface PurchaseRepository {
     suspend fun getPurchases(companyId: String): List<Purchase>
+
+    /**
+     * Compras del rango, agregadas para el reporte financiero. Ver [aggregatePurchases]:
+     * el criterio vive ahí como lógica pura y esto solo trae los datos.
+     */
+    suspend fun aggregatePurchasesInRange(
+        companyId: String,
+        fromMillis: Long,
+        untilExclusiveMillis: Long
+    ): PurchaseSummary
     suspend fun getPurchase(companyId: String, purchaseId: String): Purchase?
     suspend fun savePurchase(companyId: String, purchase: Purchase, lines: List<PurchaseLine>)
     suspend fun getLines(companyId: String, purchaseId: String): List<PurchaseLine>

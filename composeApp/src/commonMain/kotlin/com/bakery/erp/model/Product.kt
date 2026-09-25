@@ -29,6 +29,12 @@ data class Product(
     val active: Boolean = true,
     // Datos comerciales
     val salePrice: Double = 0.0,        // Precio por presentación, en Q
+    /**
+     * % de descuento cuando un colaborador con derecho ([CreditAccount.cashDiscountEligible])
+     * lo compra y paga en EFECTIVO en ese momento. 0 = sin descuento. Es por producto porque
+     * no todo lleva: mayormente lo empacado y la reventa, y el % varía de uno a otro.
+     */
+    val employeeDiscountPercent: Double = 0.0,
     val unit: String = "",              // Presentación de venta (ej: "unidad", "tira de 6")
     // Datos físicos del ítem terminado
     val weightPerUnit: Double? = null,  // Peso por unidad en onzas
@@ -65,9 +71,24 @@ data class Product(
      * terminado.
      */
     val isInHouseProduced: Boolean = true,
-    // Reventa: proveedor y costo de compra de referencia. Solo relevantes cuando
-    // isInHouseProduced=false. El costo real por sucursal vive en FinishedProductStock.avgUnitCost;
-    // purchaseCost sirve para prellenar la línea al registrar la compra.
+    /**
+     * Presentaciones en que se le compra este producto de reventa a cada proveedor ("Caja de
+     * 24 latas" a Q120 con la distribuidora, "Six pack" a Q33 con el mayorista). Misma clase y
+     * mismo criterio que `Ingredient.purchaseFormats`: la relación producto↔proveedor es de
+     * muchos a muchos y vive en la presentación, así que el catálogo de un proveedor se DEDUCE
+     * de aquí (ver `suppliedBy`). `unit` es la presentación de venta del producto y
+     * `unitsPerPackage` cuántas de ésas trae el empaque: es lo que convierte "1 caja" en las
+     * 24 unidades que entran al inventario de tienda.
+     *
+     * Vive en el mismo documento (arreglos paralelos) y no en subcolección como la de insumos:
+     * `getProducts` lo lee el POS y media app, y una subcolección sería una lectura extra por
+     * cada producto — incluido todo el pan propio, que nunca lleva presentaciones.
+     */
+    val purchaseFormats: List<PurchaseFormat> = emptyList(),
+    // Reventa: proveedor y costo de compra de referencia. Con presentaciones se DERIVAN de la
+    // predeterminada al guardar (`withDerivedPurchaseReference`); se siguen escribiendo porque
+    // el POS usa `purchaseCost` como costo de venta. Sin presentaciones son el dato viejo, de
+    // cuando un producto solo podía tener un proveedor.
     val supplierId: String? = null,
     val supplierName: String? = null,
     val purchaseCost: Double? = null,
@@ -79,6 +100,14 @@ data class Product(
      * El pan propio no lleva: nadie le imprime un código a un pirujo.
      */
     val barcode: String = "",
+    /**
+     * Si caduca (lácteos, jugos, embutidos de reventa). Mismo criterio que
+     * `Ingredient.isPerishable`: solo a éstos se les pide lote y vencimiento al capturar la
+     * factura — pedírselo a una lata de gaseosa o a un chocolate en barra sería ruido en la
+     * pantalla donde la velocidad de captura importa. Solo aplica a reventa: el pan propio no
+     * pasa por compras.
+     */
+    val isPerishable: Boolean = false,
     /**
      * Insumo del que este producto saca su stock, para lo que se compra como insumo y
      * además se vende en el mostrador (el caso del huevo: entra a las recetas Y se

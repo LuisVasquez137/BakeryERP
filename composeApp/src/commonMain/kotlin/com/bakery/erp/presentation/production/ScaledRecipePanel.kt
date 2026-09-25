@@ -72,6 +72,17 @@ fun ScaledRecipePanel(
     view: ScaledRecipeView,
     modifier: Modifier = Modifier,
     onClose: (() -> Unit)? = null,
+    /**
+     * `false` cuando el panel va DENTRO de otra lista que ya scrollea (la hoja de
+     * ajustes de producción lo pinta en un `item()` de su `LazyColumn`).
+     *
+     * No es cosmético: un componente con `verticalScroll` dentro de un `item()` recibe
+     * altura máxima infinita y Compose lanza `IllegalStateException` en el measure —
+     * la pantalla se cae entera al dibujar, no al tocar nada. Con `false` el scroll lo
+     * hace la lista de afuera, que es lo correcto: dos scrolls anidados en el mismo eje
+     * dejan al usuario adivinando cuál se va a mover.
+     */
+    scrollable: Boolean = true,
     headerExtra: @Composable ColumnScope.() -> Unit = {}
 ) {
     val sponge = view.sponge
@@ -83,7 +94,7 @@ fun ScaledRecipePanel(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .verticalScroll(scrollState)
+                .then(if (scrollable) Modifier.verticalScroll(scrollState) else Modifier)
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
@@ -217,7 +228,10 @@ fun ScaledRecipePanel(
         // ── Indicador de scroll: aparece solo si la receta no cabe entera en
         // lo que se ve y todavía queda algo abajo; desaparece al llegar al
         // final. Tocarlo baja de una vez hasta el fondo. ─────────────────────
-        val canScrollMore = scrollState.maxValue > 0 && scrollState.value < scrollState.maxValue - 4
+        // Sin scroll propio no hay nada que indicar: la receta se ve entera dentro de
+        // la lista de afuera, y el botón bajaría un scroll que no existe.
+        val canScrollMore = scrollable &&
+            scrollState.maxValue > 0 && scrollState.value < scrollState.maxValue - 4
         if (canScrollMore) {
             val infiniteTransition = rememberInfiniteTransition(label = "scrollHint")
             val bounce by infiniteTransition.animateFloat(

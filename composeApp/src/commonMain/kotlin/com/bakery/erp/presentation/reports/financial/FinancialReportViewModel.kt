@@ -7,10 +7,12 @@ import com.bakery.erp.domain.BreadCountRepository
 import com.bakery.erp.domain.ExpenseRepository
 import com.bakery.erp.domain.FinishedStockRepository
 import com.bakery.erp.domain.PayrollRepository
+import com.bakery.erp.domain.PurchaseRepository
 import com.bakery.erp.domain.SaleRepository
 import com.bakery.erp.domain.report.ExpenseSummary
 import com.bakery.erp.domain.report.MermaSummary
 import com.bakery.erp.domain.report.PayrollSummary
+import com.bakery.erp.domain.report.PurchaseSummary
 import com.bakery.erp.domain.report.SalesSummary
 import com.bakery.erp.domain.report.StockMovementSummary
 import com.bakery.erp.model.Branch
@@ -40,18 +42,38 @@ data class FinancialReportUiState(
     val expenses: ExpenseSummary = ExpenseSummary(),
     val payroll: PayrollSummary = PayrollSummary(),
     val merma: MermaSummary = MermaSummary(),
-    val stock: StockMovementSummary = StockMovementSummary()
+    val stock: StockMovementSummary = StockMovementSummary(),
+    val purchases: PurchaseSummary = PurchaseSummary()
 ) {
+    /**
+     * Utilidad contable del mes. **Las compras de inventario no van acá a propósito**: la
+     * harina es un activo hasta que se vende, y restarla al comprarla haría que un mes en el
+     * que se llenó la bodega saliera en pérdida y el siguiente en ganancia inventada.
+     */
     val operatingProfit: Double
         get() = sales.totalRevenue - expenses.total - payroll.totalEmployerCost - merma.totalValue
     val marginPct: Double
         get() = if (sales.totalRevenue > 0) operatingProfit / sales.totalRevenue * 100.0 else 0.0
+
+    /**
+     * Lo que de verdad salió de la caja, que es la otra pregunta —"¿en qué se me fue el
+     * mes?"— y la que el reporte no contestaba.
+     *
+     * Se restan las compras **pagadas** (no las que quedaron a crédito) y, de los gastos,
+     * solo los que NO vienen de una compra: los suministros y los servicios ya están adentro
+     * del monto de su factura, y contarlos otra vez acá los duplicaría.
+     */
+    val cashOut: Double
+        get() = purchases.paidTotal + expenses.standalone + payroll.totalEmployerCost
+
+    val netCash: Double get() = sales.totalRevenue - cashOut
 }
 
 class FinancialReportViewModel(
     private val saleRepository: SaleRepository,
     private val expenseRepository: ExpenseRepository,
     private val payrollRepository: PayrollRepository,
+    private val purchaseRepository: PurchaseRepository,
     private val finishedStockRepository: FinishedStockRepository,
     private val breadCountRepository: BreadCountRepository,
     private val branchRepository: BranchRepository
@@ -117,16 +139,20 @@ class FinancialReportViewModel(
                         finishedStockRepository.aggregateMovementsInRange(user.orgId, "", start, endExclusive)
                     }
                     val mermaAsync = async { breadCountRepository.aggregateMermasForMonth(user.orgId, "", period) }
+                    val purchAsync = async {
+                        purchaseRepository.aggregatePurchasesInRange(user.orgId, start, endExclusive)
+                    }
 
-                    Quintuple(
+                    Sextuple(
                         salesAsync.await(),
                         expAsync.await(),
                         payAsync.await(),
                         stockAsync.await(),
-                        mermaAsync.await()
+                        mermaAsync.await(),
+                        purchAsync.await()
                     )
                 }
-            }.onSuccess { (sales, exp, pay, stock, merma) ->
+            }.onSuccess { (sales, exp, pay, stock, merma, purch) ->
                 _uiState.update {
                     it.copy(
                         isLoading = false,
@@ -134,7 +160,8 @@ class FinancialReportViewModel(
                         expenses = exp,
                         payroll = pay,
                         stock = stock,
-                        merma = merma
+                        merma = merma,
+                        purchases = purch
                     )
                 }
             }.onFailure { e ->
@@ -144,4 +171,6 @@ class FinancialReportViewModel(
     }
 }
 
-private data class Quintuple<A, B, C, D, E>(val a: A, val b: B, val c: C, val d: D, val e: E)
+private data class Sextuple<A, B, C, D, E, F>(
+    val a: A, val b: B, val c: C, val d: D, val e: E, val f: F
+)

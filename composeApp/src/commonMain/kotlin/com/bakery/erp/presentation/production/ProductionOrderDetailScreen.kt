@@ -1,5 +1,6 @@
 package com.bakery.erp.presentation.production
 
+import com.bakery.erp.presentation.reports.branchsupply.BranchSupplyTable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -178,6 +179,13 @@ fun ProductionOrderDetailContent(
     val order = state.selectedOrder
     val lines = state.selectedOrderLines
 
+    LaunchedEffect(order?.id, order?.status) {
+        if (order != null && order.id == orderId && companyId.isNotEmpty()) {
+            viewModel.loadOrderSupply(companyId, order)
+            viewModel.loadRecipeRefByProductIdIfNeeded(companyId)
+        }
+    }
+
     if (state.isDetailLoading || order == null || order.id != orderId) {
         Box(modifier, contentAlignment = Alignment.Center) {
             CircularProgressIndicator()
@@ -333,6 +341,34 @@ fun ProductionOrderDetailContent(
                         "${line.requestedQuantity.toInt()} uds.",
                         fontWeight = FontWeight.Bold,
                         color = BrandColors.AccentDeep
+                    )
+                }
+            }
+        }
+
+        // Seguimiento: aparece en cuanto la planta arranca el lote y nacen las notas.
+        // Antes de eso no hay nada que seguir más allá de lo pedido, que ya está arriba.
+        val supply = state.orderSupply?.takeIf { state.orderSupplyForId == order.id }
+        if (supply != null && supply.columns.isNotEmpty()) {
+            item {
+                Text(
+                    "Seguimiento",
+                    fontWeight = FontWeight.Bold,
+                    color = BrandColors.Primary
+                )
+                Text(
+                    "Lo que la planta asignó en cada turno, lo que se empacó y lo que contó la sucursal.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray
+                )
+            }
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                    BranchSupplyTable(
+                        report = supply,
+                        recipeRefByProductId = state.recipeRefByProductId,
+                        showSold = false,
+                        modifier = Modifier.padding(12.dp)
                     )
                 }
             }

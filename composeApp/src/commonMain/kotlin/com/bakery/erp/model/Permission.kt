@@ -10,6 +10,7 @@ enum class Permission {
     // Gastos
     VIEW_EXPENSES,
     ADD_VARIABLE_EXPENSE,
+    ADD_GENERAL_EXPENSE,
     MANAGE_FIXED_BUDGET,
 
     // Compras
@@ -28,6 +29,14 @@ enum class Permission {
     SEND_PRODUCTION_ORDER,
     MANAGE_PRODUCTION_LOTS,
     MANAGE_PRODUCTION_SHIFTS,
+    /**
+     * Sacar materia prima de bodega para el trabajo de planta (ver [PlantIssue]).
+     *
+     * Permiso propio y no reuso de EDIT_INGREDIENTS ni RECEIVE_STOCK a propósito: el
+     * punto entero del módulo es que el panadero anote su saco de harina sin poder
+     * además editar el catálogo ni ajustar el stock a mano.
+     */
+    ISSUE_PLANT_MATERIAL,
 
     // Preparaciones
     VIEW_PREPARATIONS,
@@ -70,6 +79,7 @@ enum class Permission {
     VIEW_PRODUCTION_REPORT,
     VIEW_FINANCIAL_REPORT,
     VIEW_INVENTORY_REPORT,
+    VIEW_BRANCH_SUPPLY_REPORT,
 
     // Pedidos de Clientes
     VIEW_CUSTOMER_ORDERS,
@@ -78,7 +88,13 @@ enum class Permission {
     CREATE_CAKE_ORDER,
     MANAGE_CUSTOMER_ORDERS,
     MANAGE_EXTERNAL_CUSTOMERS,
-    COLLECT_ORDER_PAYMENT;
+    COLLECT_ORDER_PAYMENT,
+
+    // Créditos
+    SELL_ON_CREDIT,
+    COLLECT_CREDIT_PAYMENT,
+    GIVE_EMPLOYEE_ADVANCE,
+    MANAGE_CREDIT_ACCOUNTS;
 
     val label: String get() = when (this) {
         VIEW_PRODUCTS -> "Ver productos"
@@ -90,7 +106,8 @@ enum class Permission {
         VIEW_SUPPLIERS -> "Ver proveedores"
         EDIT_SUPPLIERS -> "Editar proveedores"
         VIEW_EXPENSES -> "Ver gastos"
-        ADD_VARIABLE_EXPENSE -> "Ingresar gastos variables"
+        ADD_VARIABLE_EXPENSE -> "Anotar gastos de su caja"
+        ADD_GENERAL_EXPENSE -> "Anotar gastos de caja general"
         MANAGE_FIXED_BUDGET -> "Gestionar presupuesto fijo"
         RECEIVE_STOCK -> "Ingresar materia prima"
         MANAGE_PURCHASE_PAYMENTS -> "Registrar pagos a proveedores"
@@ -103,6 +120,7 @@ enum class Permission {
         SEND_PRODUCTION_ORDER -> "Enviar pedidos de producción"
         MANAGE_PRODUCTION_LOTS -> "Gestionar lotes de producción"
         MANAGE_PRODUCTION_SHIFTS -> "Configurar turnos de producción"
+        ISSUE_PLANT_MATERIAL -> "Anotar material de planta"
         VIEW_PREPARATIONS -> "Ver preparaciones"
         EDIT_PREPARATIONS -> "Editar preparaciones"
         MANAGE_PREPARATION_BATCHES -> "Producir lotes de preparación"
@@ -132,6 +150,7 @@ enum class Permission {
         VIEW_PRODUCTION_REPORT -> "Ver reporte de producción"
         VIEW_FINANCIAL_REPORT -> "Ver reporte financiero"
         VIEW_INVENTORY_REPORT -> "Ver reporte de inventario"
+        VIEW_BRANCH_SUPPLY_REPORT -> "Ver pedido vs. recibido"
         VIEW_CUSTOMER_ORDERS -> "Ver pedidos de clientes"
         CREATE_RESELLER_ORDER -> "Crear pedido de revendedor"
         CREATE_RETAIL_SPECIAL_ORDER -> "Crear encargo de cliente"
@@ -139,6 +158,10 @@ enum class Permission {
         MANAGE_CUSTOMER_ORDERS -> "Confirmar y gestionar pedidos de clientes"
         MANAGE_EXTERNAL_CUSTOMERS -> "Gestionar clientes externos y revendedores"
         COLLECT_ORDER_PAYMENT -> "Cobrar anticipos y saldos de pedidos"
+        SELL_ON_CREDIT -> "Vender a crédito"
+        COLLECT_CREDIT_PAYMENT -> "Cobrar créditos en caja"
+        GIVE_EMPLOYEE_ADVANCE -> "Dar adelantos a colaboradores"
+        MANAGE_CREDIT_ACCOUNTS -> "Administrar cuentas de crédito"
     }
 
     val description: String get() = when (this) {
@@ -151,7 +174,8 @@ enum class Permission {
         VIEW_SUPPLIERS -> "Puede ver el listado de proveedores"
         EDIT_SUPPLIERS -> "Puede crear y editar proveedores"
         VIEW_EXPENSES -> "Puede ver los gastos variables y presupuesto fijo"
-        ADD_VARIABLE_EXPENSE -> "Puede registrar gastos variables"
+        ADD_VARIABLE_EXPENSE -> "Puede anotar lo que se paga desde la caja que está operando: sale de su gaveta y le tiene que faltar al cuadrar"
+        ADD_GENERAL_EXPENSE -> "Puede anotar gastos que NO salen de ninguna gaveta — caja general o del bolsillo del dueño. Es el acceso directo de Operaciones y el de Gastos"
         MANAGE_FIXED_BUDGET -> "Puede configurar y editar el presupuesto fijo"
         RECEIVE_STOCK -> "Puede registrar compras e ingreso de materia prima"
         MANAGE_PURCHASE_PAYMENTS -> "Puede abonar y saldar facturas de proveedor"
@@ -164,6 +188,7 @@ enum class Permission {
         SEND_PRODUCTION_ORDER -> "Puede crear pedidos de producción para las plantas"
         MANAGE_PRODUCTION_LOTS -> "Puede crear, ejecutar y completar lotes de producción"
         MANAGE_PRODUCTION_SHIFTS -> "Puede configurar los turnos de producción por planta"
+        ISSUE_PLANT_MATERIAL -> "Puede anotar el material que se usa en planta fuera de las recetas (harina para enharinar, manteca para engrasar) y descontarlo del inventario con un motivo"
         VIEW_PREPARATIONS -> "Puede ver las preparaciones (concha, rellenos, etc.)"
         EDIT_PREPARATIONS -> "Puede crear y editar preparaciones"
         MANAGE_PREPARATION_BATCHES -> "Puede producir lotes de preparación y descontar inventario"
@@ -193,6 +218,7 @@ enum class Permission {
         VIEW_PRODUCTION_REPORT -> "Puede consultar el reporte formal de producción: planeado vs producido, eficiencia, mermas en tránsito y discrepancias"
         VIEW_FINANCIAL_REPORT -> "Puede consultar el estado financiero del mes: ingresos, gastos, planilla, utilidad operativa y margen"
         VIEW_INVENTORY_REPORT -> "Puede consultar el reporte de inventario: rotación, mermas valoradas y movimientos por sucursal"
+        VIEW_BRANCH_SUPPLY_REPORT -> "Puede ver, para sus sucursales, cuánto pidieron, cuánto les mandó la planta en cada turno, cuánto recibieron y cuánto vendieron"
         VIEW_CUSTOMER_ORDERS -> "Puede ver el listado y detalle de pedidos de clientes (revendedores, encargos especiales, pasteles)"
         CREATE_RESELLER_ORDER -> "Puede crear pedidos para tiendas revendedoras con lista mayorista"
         CREATE_RETAIL_SPECIAL_ORDER -> "Puede crear encargos especiales de cliente final (panes especiales, cantidades grandes)"
@@ -200,6 +226,10 @@ enum class Permission {
         MANAGE_CUSTOMER_ORDERS -> "Puede confirmar, editar y cancelar pedidos de clientes; consolidarlos en lotes de producción"
         MANAGE_EXTERNAL_CUSTOMERS -> "Puede crear y editar la agenda de clientes externos y revendedores"
         COLLECT_ORDER_PAYMENT -> "Puede registrar anticipos, depósitos y cobros del saldo de un pedido (en POS o directo)"
+        SELL_ON_CREDIT -> "Puede cargar una venta del POS a la cuenta de un cliente, institución o colaborador"
+        COLLECT_CREDIT_PAYMENT -> "Puede recibir en su caja el pago de una cuenta de crédito"
+        GIVE_EMPLOYEE_ADVANCE -> "Puede entregar un adelanto de salario desde su caja; se carga a la cuenta del colaborador"
+        MANAGE_CREDIT_ACCOUNTS -> "Puede crear cuentas de crédito, autorizar personas, registrar pagos y ajustes"
     }
 
     val group: String get() = when (this) {
@@ -207,7 +237,7 @@ enum class Permission {
         VIEW_RECIPES, EDIT_RECIPES -> "Catálogo"
         VIEW_INGREDIENTS, EDIT_INGREDIENTS,
         VIEW_SUPPLIERS, EDIT_SUPPLIERS -> "Insumos"
-        VIEW_EXPENSES, ADD_VARIABLE_EXPENSE,
+        VIEW_EXPENSES, ADD_VARIABLE_EXPENSE, ADD_GENERAL_EXPENSE,
         MANAGE_FIXED_BUDGET -> "Gastos"
         RECEIVE_STOCK -> "Compras"
         MANAGE_PURCHASE_PAYMENTS -> "Compras"
@@ -216,7 +246,8 @@ enum class Permission {
         VIEW_ALL_BRANCHES, MANAGE_BRANCHES,
         MANAGE_USERS -> "Administración"
         VIEW_PRODUCTION, SEND_PRODUCTION_ORDER,
-        MANAGE_PRODUCTION_LOTS, MANAGE_PRODUCTION_SHIFTS -> "Producción"
+        MANAGE_PRODUCTION_LOTS, MANAGE_PRODUCTION_SHIFTS,
+        ISSUE_PLANT_MATERIAL -> "Producción"
         VIEW_PREPARATIONS, EDIT_PREPARATIONS,
         MANAGE_PREPARATION_BATCHES -> "Preparaciones"
         MANAGE_EMPLOYEES -> "Administración"
@@ -232,11 +263,13 @@ enum class Permission {
         COUNT_FINISHED_STOCK, VIEW_BREAD_COUNTS -> "Distribución"
         VIEW_OPERATIONS_REPORT, VIEW_SALES_REPORT,
         VIEW_PRODUCTION_REPORT, VIEW_FINANCIAL_REPORT,
-        VIEW_INVENTORY_REPORT -> "Reportes"
+        VIEW_INVENTORY_REPORT, VIEW_BRANCH_SUPPLY_REPORT -> "Reportes"
         VIEW_CUSTOMER_ORDERS, CREATE_RESELLER_ORDER,
         CREATE_RETAIL_SPECIAL_ORDER, CREATE_CAKE_ORDER,
         MANAGE_CUSTOMER_ORDERS, MANAGE_EXTERNAL_CUSTOMERS,
         COLLECT_ORDER_PAYMENT -> "Pedidos de Clientes"
+        SELL_ON_CREDIT, COLLECT_CREDIT_PAYMENT,
+        GIVE_EMPLOYEE_ADVANCE, MANAGE_CREDIT_ACCOUNTS -> "Créditos"
     }
 
     /**

@@ -89,6 +89,19 @@ fun PayrollFormScreen(
     var overtimePayStr by rememberSaveable { mutableStateOf(existing?.overtimePay?.toString() ?: "0") }
     var tipsStr by rememberSaveable { mutableStateOf(existing?.tips?.toString() ?: "0") }
     var advancesStr by rememberSaveable { mutableStateOf(existing?.advances?.toString() ?: "0") }
+    // Planilla nueva: se propone lo que debe en su cuenta de crédito (compras fiadas +
+    // adelantos). Una sola vez, para no pisar lo que la persona corrija a mano.
+    var creditPrefilled by rememberSaveable { mutableStateOf(existing != null) }
+    LaunchedEffect(employeeId, companyId) {
+        if (companyId.isNotEmpty()) viewModel.loadEmployeeCreditBalance(companyId, employeeId)
+    }
+    LaunchedEffect(state.employeeCreditBalance) {
+        val b = state.employeeCreditBalance
+        if (!creditPrefilled && b != null) {
+            if (b > 0.0) advancesStr = b.fmt(2)
+            creditPrefilled = true
+        }
+    }
     var bonusesStr by rememberSaveable { mutableStateOf(existing?.bonuses?.toString() ?: "0") }
     var otherDeductionsStr by rememberSaveable { mutableStateOf(existing?.otherDeductions?.toString() ?: "0") }
     var vacationDaysStr by rememberSaveable { mutableStateOf(existing?.vacationDays?.toString() ?: "0") }
@@ -215,7 +228,15 @@ fun PayrollFormScreen(
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     PayFieldM("ISR (Q)", isrStr, { isrStr = it }, Modifier.weight(1f))
-                    PayFieldM("Anticipos (Q)", advancesStr, { advancesStr = it }, Modifier.weight(1f))
+                    PayFieldM("Créditos y adelantos (Q)", advancesStr, { advancesStr = it }, Modifier.weight(1f))
+                }
+                state.employeeCreditBalance?.let { debt ->
+                    Text(
+                        "En su cuenta de crédito debe Q ${debt.fmt(2)}. Lo que pongas en \"Créditos y " +
+                            "adelantos\" se descuenta de esa cuenta cuando la planilla quede como Pagada.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     PayFieldM("Otras deduc. (Q)", otherDeductionsStr, { otherDeductionsStr = it }, Modifier.weight(1f))
@@ -237,7 +258,7 @@ fun PayrollFormScreen(
                         PaySummaryRow("Total bruto", "Q${totalGross.fmt(2)}", false)
                         PaySummaryRow("IGSS empleado", "- Q${igssEmployee.fmt(2)}", false)
                         PaySummaryRow("ISR", "- Q${isr.fmt(2)}", false)
-                        if (advances > 0) PaySummaryRow("Anticipos", "- Q${advances.fmt(2)}", false)
+                        if (advances > 0) PaySummaryRow("Créditos y adelantos", "- Q${advances.fmt(2)}", false)
                         if (otherDeductions > 0) PaySummaryRow("Otras deducciones", "- Q${otherDeductions.fmt(2)}", false)
                         HorizontalDivider()
                         PaySummaryRow("TOTAL NETO", "Q${totalNet.fmt(2)}", true)

@@ -21,5 +21,7 @@ enum class AlertTarget {
     OVERDUE_CASH_SESSION,
     DISPATCH_PRICE_MISSING,
     OVERDUE_PURCHASE,
-    EXPIRING_INGREDIENT
+    EXPIRING_INGREDIENT,
+    /** Cuentas de crédito con compras sin pagar de hace más de 30 días. */
+    CREDIT_OVERDUE
 }

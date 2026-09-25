@@ -13,7 +13,14 @@ data class PurchaseFormat(
     val supplierName: String = "",       // Desnormalizado para display rápido
     val unitsPerPackage: Double = 1.0,   // Cuántas unidades trae el paquete (en `unit`)
     val packageCost: Double = 0.0,       // Costo del paquete en Q
-    val isDefault: Boolean = false       // Formato preferido para calcular costos
+    val isDefault: Boolean = false,      // Formato preferido para calcular costos
+    /**
+     * Cómo le llama ESTE proveedor al producto en su factura ("Azúcar blanca Don Justo
+     * cabal"), cuando no coincide con el nombre del catálogo ("Azúcar"). Vive en la
+     * presentación y no en el insumo porque cada proveedor lo escribe distinto. Sirve para
+     * encontrar el renglón leyendo la factura tal cual. Vacío = el mismo nombre del catálogo.
+     */
+    val supplierItemName: String = ""
 ) {
     /** Costo por unidad calculado automáticamente */
     val costPerUnit: Double
@@ -80,6 +87,20 @@ data class Ingredient(
      * donde la velocidad de captura importa.
      */
     val isPerishable: Boolean = false,
+    /**
+     * Si se le lleva el conteo de existencias. Solo tiene sentido en un suministro
+     * ([IngredientUsage.SUPPLY]): la materia prima siempre lleva stock, porque de ahí sale
+     * el descuento de producción.
+     *
+     * Apagado, el ítem sigue estando en el catálogo del proveedor —aparece como fila en su
+     * factura, con su presentación y su precio— pero su compra **no toca `BranchStock` ni
+     * escribe Kardex**: es solo gasto del mes. Existe porque la bolsa y la bandeja se
+     * consumen de a una con cada venta y nadie va a registrar ese consumo: un stock que solo
+     * sube miente, y una alerta de mínimo que nunca suena es peor que no tener alerta.
+     *
+     * Default `true` para no cambiarle el comportamiento a ningún insumo ya cargado.
+     */
+    val tracksStock: Boolean = true,
     val notes: String? = null,
     val active: Boolean = true,
     val createdAt: Long = 0L,
@@ -112,11 +133,6 @@ data class Ingredient(
 }
 
 /**
- * Categorías de suministros de operación. Se listan aparte de [INGREDIENT_CATEGORIES]
- * porque "Harinas" no significa nada para el cloro y "Limpieza" no significa nada para
- * la masa: mezclarlas dejaría los dos formularios con dos tercios de opciones inútiles.
- */
-/**
  * Los insumos que tiene sentido escribir en una receta o en una preparación.
  *
  * [keepIds] conserva los que la receta YA tiene aunque hoy estén marcados como suministro:
@@ -126,9 +142,24 @@ data class Ingredient(
 fun List<Ingredient>.usableInRecipes(keepIds: Set<String> = emptySet()): List<Ingredient> =
     filter { it.usage == IngredientUsage.PRODUCTION || it.id in keepIds }
 
+/**
+ * Categorías de suministros de operación. Se listan aparte de [INGREDIENT_CATEGORIES]
+ * porque "Harinas" no significa nada para el cloro y "Limpieza" no significa nada para
+ * la masa: mezclarlas dejaría los dos formularios con dos tercios de opciones inútiles.
+ *
+ * "Comestibles" es lo que se consume en la cafetería o el restaurante —café, azúcar de
+ * sobre, salsas, la fruta del jugo—. No va en [INGREDIENT_CATEGORIES] porque no entra a
+ * ninguna receta de panadería: nadie registra su consumo, así que se gasta el día que se
+ * compra, igual que el cloro. Se llama por lo que es y no "Restaurante" porque el
+ * restaurante entra como SUCURSAL —sus gastos ya se separan solos por ahí— y lo que
+ * faltaba era el renglón de en qué se fueron. Es la pareja de
+ * `ExpenseCategory.COCINA` ("Cocina / Cafetería"), a propósito: quien da de alta el café y
+ * quien anota el gasto del café tienen que estar clasificando la misma cosa.
+ */
 val SUPPLY_CATEGORIES = listOf(
     "Limpieza y desinfección",
     "Empaque y desechables",
+    "Comestibles (cocina y cafetería)",
     "Papelería",
     "Repuestos y ferretería",
     "Uniformes y protección",
@@ -162,3 +193,18 @@ val INGREDIENT_UNITS = listOf(
     "docena",
     "saco"
 )
+
+/**
+ * Qué tipo de línea de compra le corresponde a este insumo.
+ *
+ * Vive acá y no en cada pantalla porque son CUATRO los lugares que arman una línea a partir
+ * de un insumo —la fila del catálogo, la tabla compacta, el insumo suelto del proveedor
+ * ocasional y el gasto rápido— y al que se le olvide deja la compra mal clasificada. Se
+ * descubrió por eso mismo: las filas del catálogo no lo ponían y **todo suministro capturado
+ * desde la factura entraba como materia prima**, con lo que su gasto del mes nunca se generaba.
+ */
+fun ingredientPurchaseLineKind(ingredient: Ingredient): String = when {
+    ingredient.usage != IngredientUsage.SUPPLY -> PurchaseLineKind.INGREDIENT
+    ingredient.tracksStock -> PurchaseLineKind.SUPPLY
+    else -> PurchaseLineKind.SUPPLY_NO_STOCK
+}

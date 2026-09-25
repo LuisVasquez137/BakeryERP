@@ -18,7 +18,30 @@ data class CashMovement(
     /** Si forma parte de un transfer, la sesión contraparte (origen si este es IN, destino si es OUT). */
     val linkedSessionId: String? = null,
     /** Si fue creado por un cuadre sorpresa con FORCE_ADJUST, el id del [SpotCashCheck]. */
-    val spotCheckId: String? = null
+    val spotCheckId: String? = null,
+    /**
+     * Compra que provocó este movimiento, cuando el gasto se anotó desde la caja.
+     *
+     * Es lo que permite ir del renglón de la gaveta —"¿por qué me faltan Q325?"— al documento
+     * que lo explica, para corregirle el monto o borrarlo si no salió de esa caja. Sin el
+     * vínculo, el movimiento es un texto suelto y lo único que quedaba era cuadrar a mano.
+     * Vacío = movimiento capturado a mano (retiro, depósito, traslado).
+     */
+    val sourcePurchaseId: String = "",
+    /**
+     * Movimiento al que este corrige o revierte.
+     *
+     * Los gastos se ligan por [sourcePurchaseId] porque detrás hay un documento; un ingreso no
+     * tiene más que a sí mismo, y sin este vínculo la corrección quedaría como un movimiento
+     * suelto que nadie puede emparejar con lo que corrigió. Vacío = movimiento original.
+     */
+    val sourceMovementId: String = "",
+    /**
+     * Movimiento de crédito que lo causó: el abono de una cuenta que entró en efectivo, o el
+     * adelanto a un colaborador que salió de la gaveta. Estos no se corrigen desde la lista de
+     * la caja: se corrigen en la cuenta, que es donde el saldo tiene que cuadrar.
+     */
+    val sourceCreditMovementId: String = ""
 )
 
 object CashMovementType {
@@ -43,6 +66,29 @@ object CashMovementType {
         TRANSFER_OUT  -> "Traslado a otra caja"
         TRANSFER_IN   -> "Recibido de otra caja"
         else          -> "Desconocido"
+    }
+
+    /**
+     * Cómo se llama el movimiento **en la lista de la caja**, que es donde alguien busca por
+     * qué no le cuadra el efectivo.
+     *
+     * "Depósito" no dice nada cuando el dinero volvió porque se eliminó o se corrigió un gasto:
+     * quien lee la lista se pregunta quién depositó y por qué. El texto sale del motivo, que ya
+     * distingue los dos casos ("Eliminado: …" / "Corrección: …").
+     */
+    fun listLabel(movement: CashMovement): String = when {
+        movement.sourcePurchaseId.isNotEmpty() && movement.reason.startsWith("Eliminado:") ->
+            "Devuelto — gasto eliminado"
+        movement.sourcePurchaseId.isNotEmpty() && movement.reason.startsWith("Corrección:") ->
+            "Ajuste — gasto corregido"
+        movement.type == EXPENSE && movement.sourcePurchaseId.isNotEmpty() ->
+            "Gasto pagado de la caja"
+        movement.spotCheckId != null -> "Ajuste por cuadre sorpresa"
+        movement.sourceCreditMovementId.isNotEmpty() && movement.type == DEPOSIT -> "Abono a crédito"
+        movement.sourceCreditMovementId.isNotEmpty() && movement.type == WITHDRAWAL -> "Adelanto a colaborador"
+        movement.type == FUND_ADDITION -> "Ingreso desde caja general"
+        movement.type == DEPOSIT -> "Ingreso — otro origen"
+        else -> label(movement.type)
     }
 
     /** Signo del movimiento sobre el efectivo esperado. */

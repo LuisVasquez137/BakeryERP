@@ -3,6 +3,7 @@ package com.bakery.erp.domain
 import com.bakery.erp.domain.report.MermaSummary
 import com.bakery.erp.model.BreadCount
 import com.bakery.erp.model.BreadCountLine
+import com.bakery.erp.model.GroupSalesWindow
 import kotlinx.coroutines.flow.Flow
 
 interface BreadCountRepository {
@@ -37,8 +38,16 @@ interface BreadCountRepository {
     suspend fun updateLine(companyId: String, countId: String, line: BreadCountLine)
 
     /**
-     * Cierra el conteo: por cada línea con diff != 0 dispara un movimiento
-     * en `FinishedStockRepository` (MERMA si diff<0, AJUSTE positivo si diff>0).
+     * Ventas por grupo de precio ("Pan Q0.50") que le tocan a este conteo: desde el cierre del
+     * conteo anterior de la sucursal hasta ahora. Es lo que el cierre reparte entre los panes
+     * del grupo; la pantalla lo pide para mostrar el reparto antes de cerrar.
+     */
+    suspend fun groupSalesWindow(companyId: String, countId: String): GroupSalesWindow
+
+    /**
+     * Cierra el conteo. El faltante de los panes de un grupo de precio se explica primero con
+     * las ventas de ese grupo ([groupSalesWindow], movimiento VENTA) y solo el resto es MERMA;
+     * el de los demás productos es MERMA entero. Sobrante → AJUSTE positivo.
      * Recalcula totales del header y lo marca CLOSED inmutable.
      */
     suspend fun closeCount(
@@ -50,7 +59,8 @@ interface BreadCountRepository {
     ): BreadCount
 
     /**
-     * Suma faltantes (líneas con `difference<0`) de todos los conteos CLOSED del mes.
+     * Suma la merma real (`effectiveWaste`, sin lo vendido como grupo) de todos los conteos
+     * CLOSED del mes.
      * Devuelve unidades y valor agrupado por [BreadCountReason]. Si [branchId] está vacío,
      * agrega para toda la organización.
      */

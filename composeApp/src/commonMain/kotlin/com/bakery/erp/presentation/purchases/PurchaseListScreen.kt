@@ -70,6 +70,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.PurchaseKind
 import com.bakery.erp.model.Purchase
+import com.bakery.erp.model.isQuick
+import com.bakery.erp.model.listTitle
 import com.bakery.erp.model.PurchaseDisplayStatus
 import com.bakery.erp.model.PurchasePeriod
 import com.bakery.erp.model.applyPurchaseFilters
@@ -83,15 +85,15 @@ import com.bakery.erp.ui.ZoomableImageDialog
 import com.bakery.erp.ui.theme.BrandColors
 import com.bakery.erp.util.fmtMoney
 import kotlin.time.Clock
+import com.bakery.erp.model.Product
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PurchaseListScreen(
     onNavigateBack: () -> Unit,
     onNavigateToForm: () -> Unit,
-    onNavigateToMarketRun: () -> Unit,
     onNavigateToDetail: (String) -> Unit,
-    onNavigateToEdit: (String) -> Unit,
+    onNavigateToEdit: (String, Boolean) -> Unit,
     authViewModel: AuthViewModel,
     viewModel: PurchaseViewModel
 ) {
@@ -103,10 +105,10 @@ fun PurchaseListScreen(
     var showFilterSheet by rememberSaveable { mutableStateOf(false) }
     // Foto que se está viendo en grande desde la lista, sin entrar al detalle.
     var photoPreview by rememberSaveable { mutableStateOf<String?>(null) }
-    // Facturas y vueltas se ven en pestañas separadas: son dos formas de gastar que se
-    // revisan por preguntas distintas ("¿a quién le debo?" vs "¿en qué se fue la semana?"),
+    // Facturas y compras rápidas se ven en pestañas separadas: son dos formas de gastar que
+    // se revisan por preguntas distintas ("¿a quién le debo?" vs "¿en qué se fue la semana?"),
     // y mezcladas en una sola lista los KPIs de cuentas por pagar dejan de significar algo.
-    var showMarketRuns by rememberSaveable { mutableStateOf(false) }
+    var showQuickPurchases by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(companyId, currentUser) {
         if (companyId.isNotEmpty() && currentUser != null) {
@@ -124,14 +126,9 @@ fun PurchaseListScreen(
     // valor a mitad de un scroll, y recalcularlo por fila haría inestable el `remember`.
     val now = remember { Clock.System.now().toEpochMilliseconds() }
 
-    /** Solo se ofrecen las pestañas si la empresa ya registró alguna vuelta. */
-    val hasMarketRuns = remember(state.purchases) {
-        state.purchases.any { it.kind == PurchaseKind.MARKET_RUN }
-    }
-
-    val displayed = remember(state.purchases, state.filters, now, showMarketRuns) {
+    val displayed = remember(state.purchases, state.filters, now, showQuickPurchases) {
         state.purchases
-            .filter { (it.kind == PurchaseKind.MARKET_RUN) == showMarketRuns }
+            .filter { it.isQuick == showQuickPurchases }
             .applyPurchaseFilters(state.filters, now)
     }
     val kpis = remember(displayed, now) { displayed.purchaseKpis(now) }
@@ -162,16 +159,6 @@ fun PurchaseListScreen(
                     }
                 },
                 actions = {
-                    // Punto de entrada a la PRIMERA vuelta: la pestaña no existe hasta que
-                    // haya una, así que sin esto no habría forma de crearla.
-                    if (!hasMarketRuns) {
-                        IconButton(onClick = onNavigateToMarketRun) {
-                            Icon(
-                                Icons.Default.ShoppingBasket,
-                                contentDescription = "Registrar una vuelta de compras"
-                            )
-                        }
-                    }
                     IconButton(onClick = { showFilterSheet = true }) {
                         FilterIconWithBadge(state.filters.activeCount) {
                             Icon(Icons.Default.FilterList, contentDescription = "Filtros")
@@ -187,36 +174,51 @@ fun PurchaseListScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = if (showMarketRuns) onNavigateToMarketRun else onNavigateToForm
-            ) {
-                Icon(
-                    Icons.Default.Add,
-                    contentDescription = if (showMarketRuns) "Nueva vuelta" else "Nueva compra"
-                )
+            // Solo en Facturas. Una compra rápida ya no se registra desde acá: se anota
+            // donde salió el dinero —el acceso de Operaciones, o la caja abierta del POS—
+            // porque eso es lo que decide de qué gaveta se descuenta. Un alta desde Compras
+            // no tiene forma de saberlo y nacía siempre como caja general, que es
+            // exactamente el faltante de caja que nadie podía explicar.
+            if (!showQuickPurchases) {
+                FloatingActionButton(onClick = onNavigateToForm) {
+                    Icon(Icons.Default.Add, contentDescription = "Nueva factura")
+                }
             }
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
 
-            // ── Facturas / Vueltas ────────────────────────────────────────────
-            // La pestaña de vueltas solo aparece cuando ya hay alguna. Quien nunca hizo una
-            // no debería tener que entender qué es antes de poder ver sus facturas; el botón
-            // para crear la primera vive en el menú del TopAppBar.
-            if (hasMarketRuns) {
-                TabRow(selectedTabIndex = if (showMarketRuns) 1 else 0) {
-                    Tab(
-                        selected = !showMarketRuns,
-                        onClick = { showMarketRuns = false },
-                        text = { Text("Facturas") }
-                    )
-                    Tab(
-                        selected = showMarketRuns,
-                        onClick = { showMarketRuns = true },
-                        text = { Text("Vueltas") }
-                    )
-                }
+            // ── Facturas / Compras rápidas ────────────────────────────────────
+            // Las dos pestañas están SIEMPRE, aunque no haya ninguna compra rápida todavía.
+            //
+            // La segunda es de CONSULTA Y CORRECCIÓN, no de alta: es el único lugar donde se
+            // ven completas. Las que entran a inventario —materia prima, reventa— no generan
+            // `Expense`, así que no aparecen en Gastos, y sin esta pestaña un monto mal
+            // tecleado en una compra de tostadas no tendría dónde corregirse.
+            TabRow(selectedTabIndex = if (showQuickPurchases) 1 else 0) {
+                Tab(
+                    selected = !showQuickPurchases,
+                    onClick = { showQuickPurchases = false },
+                    text = { Text("Facturas") }
+                )
+                Tab(
+                    selected = showQuickPurchases,
+                    onClick = { showQuickPurchases = true },
+                    text = { Text("Compras rápidas") }
+                )
+            }
+
+            // Sin esto la pestaña se lee como rota: no tiene botón de crear y no dice dónde
+            // está el que sí funciona.
+            if (showQuickPurchases) {
+                Text(
+                    "Se anotan desde \"Anotar gasto\" o desde la caja abierta, que es lo que " +
+                        "decide de qué gaveta salió el dinero. Acá se consultan y se corrigen.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+                )
             }
 
             // ── Barra de búsqueda ─────────────────────────────────────────────
@@ -345,6 +347,9 @@ fun PurchaseListScreen(
                                 when {
                                     state.isDetailLoading -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                                     state.selectedPurchase != null -> PurchaseDetailContent(
+                                        imageByProductId = remember(state.allResaleProducts) {
+                                            resaleImagesByProductId(state.allResaleProducts)
+                                        },
                                         purchase = state.selectedPurchase!!,
                                         lines = state.selectedPurchaseLines,
                                         payments = state.selectedPurchasePayments,
@@ -376,7 +381,10 @@ fun PurchaseListScreen(
                                                 )
                                             }
                                         },
-                                        onEdit = { onNavigateToEdit(state.selectedPurchase!!.id) }
+                                        onEdit = {
+                                            val p = state.selectedPurchase!!
+                                            onNavigateToEdit(p.id, p.isQuick)
+                                        }
                                     )
                                     else -> Text(
                                         text = "Selecciona una compra para ver el detalle",
@@ -547,7 +555,7 @@ private fun PurchaseCard(purchase: Purchase, now: Long, onClick: () -> Unit, onP
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = purchase.supplierName.ifEmpty { "Sin proveedor" },
+                        text = purchase.listTitle(),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = BrandColors.TextSlate,
@@ -695,7 +703,7 @@ private fun PurchaseTableRow(
         // mismo peso y tamaño que la sucursal y la fecha, así que no había dónde apoyar la
         // vista al recorrerla.
         Text(
-            text = purchase.supplierName.ifEmpty { "Sin proveedor" },
+            text = purchase.listTitle(),
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.SemiBold,
             color = BrandColors.TextSlate,

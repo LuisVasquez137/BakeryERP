@@ -49,6 +49,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.bakery.erp.model.expectedCashNow
 import com.bakery.erp.model.CashDenominations
 import com.bakery.erp.model.SpotCashCheckResolution
 import com.bakery.erp.presentation.auth.AuthViewModel
@@ -94,9 +95,7 @@ fun SpotCashCheckScreen(
     }
 
     val session = state.activeSession
-    val expected = session?.let {
-        it.openingBalance + it.totalCashSales + it.totalMovementsIn - it.totalMovementsOut
-    } ?: 0.0
+    val expected = session?.expectedCashNow ?: 0.0
     val counted = counts.entries.sumOf { (code, qty) ->
         (CashDenominations.byCode(code)?.value ?: 0.0) * qty
     }

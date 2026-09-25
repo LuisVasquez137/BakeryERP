@@ -26,5 +26,14 @@ interface ProductRepository {
      * equivocada.
      */
     suspend fun updateRawWeights(companyId: String, gramsByProductId: Map<String, Double>, unit: String)
+
+    /**
+     * Reescribe solo las presentaciones de compra de un producto de reventa (y el costo de
+     * referencia que se deriva de ellas). Escritura parcial: la llama la captura de la factura
+     * —al agregarle una presentación a un proveedor o al registrar un precio nuevo— y un
+     * `updateProduct` completo desde ahí pisaría lo que alguien editó del producto mientras
+     * tanto.
+     */
+    suspend fun updatePurchaseFormats(companyId: String, product: Product)
     suspend fun uploadImage(imageBytes: ByteArray, productId: String): String
 }

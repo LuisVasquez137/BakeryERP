@@ -54,8 +54,23 @@ interface CashSessionRepository {
         companyId: String,
         sessionId: String,
         countedCash: Double,
-        notes: String?
+        notes: String?,
+        /** Ver [CashSession.autoClosed]. Lo pone el cierre por quedarse abierta de un día a otro. */
+        autoClosed: Boolean = false
     ): CashSession
+
+    /**
+     * Cierra las sesiones que quedaron abiertas de días anteriores, asumiendo pago exacto.
+     *
+     * Una caja que nadie cerró bloquea su registradora —no se puede abrir otra sesión ahí— y
+     * arrastra las ventas de ayer al cuadre de hoy. Se cierran con `countedCash = expectedCash`
+     * porque no hay nadie a quien preguntarle cuánto había, y quedan marcadas con
+     * [CashSession.autoClosed] para que ese cero no se lea como un conteo real.
+     *
+     * Devuelve cuántas cerró. Solo toca sesiones de días ANTERIORES: la de hoy sigue viva
+     * aunque lleve muchas horas abierta, porque el turno puede cruzar la medianoche.
+     */
+    suspend fun autoCloseStaleSessions(companyId: String, todayStartMillis: Long): Int
 
     /**
      * Persiste el desglose por denominaciones (apertura o cierre).

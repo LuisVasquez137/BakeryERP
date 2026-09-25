@@ -1,5 +1,6 @@
 package com.bakery.erp.domain.report
 
+import com.bakery.erp.model.ProductionWasteSummary
 import com.bakery.erp.model.ExpenseCategory
 
 data class SalesSummary(
@@ -13,6 +14,11 @@ data class SalesSummary(
     val byCashier: List<CashierSalesStat> = emptyList(),
     val byBranch: List<BranchSalesStat> = emptyList(),
     val topProducts: List<ProductSalesStat> = emptyList(),
+    /**
+     * Unidades vendidas de CADA producto (`productId` → unidades). [topProducts] se corta
+     * en 20 para la gráfica; el reporte "Pedido vs. recibido" necesita el resto.
+     */
+    val unitsByProduct: Map<String, Double> = emptyMap(),
     val hourHistogram: Map<Int, Double> = emptyMap(),
     val byDay: List<DailySalesPoint> = emptyList()
 )
@@ -55,6 +61,17 @@ data class ProductionSummary(
     val producedTotal: Double = 0.0,
     val efficiencyPct: Double = 0.0,
     val lateOrderCount: Int = 0,
+    /**
+     * Unidades que se amasaron y se perdieron en el horno (ver
+     * `ProductionLotLine.wasteQuantity`). Dato que no existía: había merma en
+     * tránsito (despacho) y merma de tienda, pero lo que se quema nunca se
+     * registraba, así que su costo aparecía después como un faltante de insumos
+     * sin explicación.
+     */
+    val wasteTotal: Double = 0.0,
+    /** Unidades horneadas de más por encargo, fuera de lo que pidieron las sucursales. */
+    val extraTotal: Double = 0.0,
+    val wasteByProduct: List<ProductionWasteSummary> = emptyList(),
     val byShift: List<ShiftProductionStat> = emptyList(),
     val byProduct: List<ProductProductionStat> = emptyList(),
     val byDay: List<DailyProductionPoint> = emptyList()
@@ -108,8 +125,19 @@ data class ExpenseSummary(
     val total: Double = 0.0,
     val recordsCount: Int = 0,
     val byCategory: Map<ExpenseCategory, Double> = emptyMap(),
-    val byBranch: List<BranchExpenseStat> = emptyList()
-)
+    val byBranch: List<BranchExpenseStat> = emptyList(),
+    /**
+     * Parte de [total] que generó una compra (`Expense.sourcePurchaseId` puesto).
+     *
+     * El flujo de caja resta las compras pagadas por su lado, así que sin este corte los
+     * suministros y los servicios se restarian dos veces: una dentro de la compra y otra
+     * como gasto del mes.
+     */
+    val fromPurchases: Double = 0.0
+) {
+    /** Gastos capturados por fuera de una compra. [total] menos [fromPurchases]. */
+    val standalone: Double get() = (total - fromPurchases).coerceAtLeast(0.0)
+}
 
 data class BranchExpenseStat(
     val branchId: String,
@@ -175,4 +203,40 @@ data class CustomerStat(
     val customerName: String,
     val ordersCount: Int,
     val totalAmount: Double
+)
+
+/**
+ * Las compras del mes, vistas como salida de dinero.
+ *
+ * El reporte financiero no las conocía: los egresos eran gastos + planilla, así que la
+ * harina y el azúcar —la mayor salida de efectivo de una panadería— no aparecían en ningún
+ * lado. Contablemente es correcto (son inventario hasta que se venden), pero deja sin
+ * respuesta la pregunta de "¿en qué se me fue el mes?".
+ *
+ * Por eso viven en su propia sección y NO dentro de la utilidad operativa: mezclarlas ahí
+ * rompería la contabilidad de inventario y contaría doble cuando llegue el costo por
+ * producto.
+ */
+data class PurchaseSummary(
+    val purchasesCount: Int = 0,
+    val invoiceCount: Int = 0,
+    val quickCount: Int = 0,
+    /** Total comprado en el período, sin importar si ya se pagó. */
+    val total: Double = 0.0,
+    /** Lo que entró a inventario y lo que ya se gastó. Ver `PurchaseAmountSplit`. */
+    val inventoryTotal: Double = 0.0,
+    val expensedTotal: Double = 0.0,
+    val unclassifiedTotal: Double = 0.0,
+    /**
+     * Lo ya abonado de las compras FECHADAS en el período.
+     *
+     * No es exactamente el efectivo que salió este mes: un abono hecho hoy a una factura de
+     * agosto cuenta en agosto, no acá. Se acepta a sabiendas porque lo contrario obliga a
+     * abrir la subcolección de abonos de cada compra —una lectura por factura— para mover un
+     * número que en una panadería que paga casi todo de contado apenas cambia. La pantalla
+     * lo dice en vez de dar a entender que es un flujo de caja exacto.
+     */
+    val paidTotal: Double = 0.0,
+    /** Saldo que queda debiendo de las compras del período. */
+    val pendingTotal: Double = 0.0
 )

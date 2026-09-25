@@ -2,6 +2,8 @@ package com.bakery.erp.data
 
 import com.bakery.erp.domain.BreadCountRepository
 import com.bakery.erp.domain.FinishedStockRepository
+import com.bakery.erp.domain.POSCategoryRepository
+import com.bakery.erp.domain.SaleRepository
 import com.bakery.erp.domain.report.MermaReasonStat
 import com.bakery.erp.domain.report.MermaSummary
 import com.bakery.erp.model.BreadCount
@@ -11,6 +13,16 @@ import com.bakery.erp.model.BreadCountStatus
 import com.bakery.erp.model.FinishedMovementReference
 import com.bakery.erp.model.FinishedMovementType
 import com.bakery.erp.model.FinishedStockMovement
+import com.bakery.erp.model.GroupSalesWindow
+import com.bakery.erp.model.POSCategory
+import com.bakery.erp.model.SaleStatus
+import com.bakery.erp.model.allocateGroupSales
+import com.bakery.erp.model.effectiveWaste
+import com.bakery.erp.model.groupDisplayName
+import com.bakery.erp.model.groupUnitsById
+import kotlinx.datetime.LocalDate
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.atStartOfDayIn
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -26,7 +38,9 @@ import kotlinx.coroutines.flow.map
 
 class FirebaseBreadCountRepository(
     private val firestore: FirebaseFirestore,
-    private val finishedStockRepo: FinishedStockRepository
+    private val finishedStockRepo: FinishedStockRepository,
+    private val saleRepository: SaleRepository,
+    private val posCategoryRepository: POSCategoryRepository
 ) : BreadCountRepository {
 
     private fun countsCol(companyId: String) =
@@ -124,6 +138,63 @@ class FirebaseBreadCountRepository(
             .set(line.copy(difference = diff, valueImpact = valueImpact).toMap())
     }
 
+    override suspend fun groupSalesWindow(companyId: String, countId: String): GroupSalesWindow {
+        val header = getCount(companyId, countId)
+            ?: throw IllegalStateException("Conteo no encontrado: $countId")
+        val closed = header.status == BreadCountStatus.CLOSED
+        // Un conteo ya cerrado conserva su ventana: recalcularla con "ahora" mostraría ventas
+        // que le tocan al conteo siguiente.
+        val until = if (closed && header.salesWindowUntil > 0) header.salesWindowUntil
+                    else Clock.System.now().toEpochMilliseconds()
+        val from = if (closed && header.salesWindowFrom > 0) {
+            header.salesWindowFrom
+        } else {
+            // Desde el cierre del conteo anterior de la sucursal: un día sin contar se acumula
+            // al siguiente en vez de perderse. El primer conteo arranca al inicio de su día.
+            val previousClose = countsCol(companyId).where { "branchId" equalTo header.branchId }
+                .get().documents.map { it.toCount() }
+                .filter { it.id != countId && it.status == BreadCountStatus.CLOSED }
+                .mapNotNull { it.closedAt }
+                .filter { it < until }
+                .maxOrNull()
+            // +1: la consulta de ventas incluye los dos extremos, y una venta justo en el
+            // cierre anterior ya la repartió aquel conteo.
+            previousClose?.plus(1) ?: startOfDayMillis(header.countDate, header.createdAt)
+        }
+
+        // Aunque la categoría esté inactiva: si se apagó a media jornada, lo que ya se vendió
+        // igual hay que repartirlo.
+        val categories = posCategoryRepository.getCategories(companyId)
+            .filter { it.sellAsGroup && it.appliesToBranch(header.branchId) }
+
+        val unitsByGroup = mutableMapOf<String, Double>()
+        saleRepository.getSalesForBranchInRange(companyId, header.branchId, from, until)
+            .filter { SaleStatus.countsAsRevenue(it.status) }
+            .forEach { sale ->
+                sale.groupUnitsById.forEach { (gid, units) ->
+                    unitsByGroup[gid] = (unitsByGroup[gid] ?: 0.0) + units
+                }
+            }
+
+        return GroupSalesWindow(
+            fromMillis = from,
+            untilMillis = until,
+            unitsByGroup = unitsByGroup,
+            groupNames = categories.associate { it.id to it.groupDisplayName },
+            groupUnitPrices = categories.associate { it.id to it.groupUnitPrice },
+            groupProductIds = categories.associate { it.id to it.productIds.toSet() }
+        )
+    }
+
+    private fun POSCategory.appliesToBranch(branchId: String) =
+        branchIds.isEmpty() || branchId in branchIds
+
+    private fun startOfDayMillis(countDate: String, fallback: Long): Long =
+        runCatching {
+            LocalDate.parse(countDate).atStartOfDayIn(TimeZone.currentSystemDefault())
+                .toEpochMilliseconds()
+        }.getOrDefault(fallback)
+
     override suspend fun closeCount(
         companyId: String,
         countId: String,
@@ -135,37 +206,75 @@ class FirebaseBreadCountRepository(
             ?: throw IllegalStateException("Conteo no encontrado: $countId")
         if (header.status == BreadCountStatus.CLOSED) return header
         val lines = getLines(companyId, countId)
+        val window = groupSalesWindow(companyId, countId)
+        val allocation = allocateGroupSales(window.unitsByGroup, window.groupProductIds, lines)
+        val groupOfProduct = window.groupOfProduct
         val now = Clock.System.now().toEpochMilliseconds()
 
         var totalShortage = 0.0
         var totalSurplus = 0.0
 
+        // En serie a propósito: `applyMovement` lee-modifica-escribe el stock, y la VENTA y la
+        // MERMA de un mismo pan en paralelo se pisarían.
         lines.forEach { line ->
             val diff = line.countedStock - line.expectedStock
             if (diff == 0.0) return@forEach
             val absDiff = abs(diff)
             val unitCost = line.unitCostSnapshot
             if (diff < 0) {
-                totalShortage += absDiff * unitCost
-                val reasonLabel = if (line.reason.isNotBlank())
-                    BreadCountReason.label(line.reason) else BreadCountReason.label(BreadCountReason.DESCONOCIDO)
-                val reasonText = "Conteo $countId · $reasonLabel" +
-                    if (line.reasonNote.isNotBlank()) " · ${line.reasonNote}" else ""
-                finishedStockRepo.applyMovement(companyId, FinishedStockMovement(
-                    productId = line.productId,
-                    productName = line.productName,
-                    branchId = header.branchId,
-                    branchName = header.branchName,
-                    type = FinishedMovementType.MERMA,
-                    quantity = -absDiff,
-                    unitPriceAtMovement = unitCost,
-                    referenceType = FinishedMovementReference.WASTAGE,
-                    referenceId = countId,
-                    reason = reasonText,
-                    createdByUserId = currentUserId,
-                    createdByUserName = currentUserName,
-                    createdAt = now
-                ))
+                val sold = allocation.soldOf(line.productId).coerceAtMost(absDiff)
+                val waste = absDiff - sold
+                if (sold > 0.0) {
+                    val groupId = groupOfProduct[line.productId].orEmpty()
+                    val groupName = window.groupNames[groupId].orEmpty().ifEmpty { "por grupo" }
+                    finishedStockRepo.applyMovement(companyId, FinishedStockMovement(
+                        productId = line.productId,
+                        productName = line.productName,
+                        branchId = header.branchId,
+                        branchName = header.branchName,
+                        type = FinishedMovementType.VENTA,
+                        quantity = -sold,
+                        unitPriceAtMovement = window.groupUnitPrices[groupId] ?: 0.0,
+                        referenceType = FinishedMovementReference.SALE,
+                        referenceId = countId,
+                        reason = "Venta $groupName repartida en conteo $countId",
+                        createdByUserId = currentUserId,
+                        createdByUserName = currentUserName,
+                        createdAt = now
+                    ))
+                }
+                if (waste > 0.0) {
+                    totalShortage += waste * unitCost
+                    val reasonLabel = if (line.reason.isNotBlank())
+                        BreadCountReason.label(line.reason) else BreadCountReason.label(BreadCountReason.DESCONOCIDO)
+                    val reasonText = "Conteo $countId · $reasonLabel" +
+                        if (line.reasonNote.isNotBlank()) " · ${line.reasonNote}" else ""
+                    finishedStockRepo.applyMovement(companyId, FinishedStockMovement(
+                        productId = line.productId,
+                        productName = line.productName,
+                        branchId = header.branchId,
+                        branchName = header.branchName,
+                        type = FinishedMovementType.MERMA,
+                        quantity = -waste,
+                        unitPriceAtMovement = unitCost,
+                        referenceType = FinishedMovementReference.WASTAGE,
+                        referenceId = countId,
+                        reason = reasonText,
+                        createdByUserId = currentUserId,
+                        createdByUserName = currentUserName,
+                        createdAt = now
+                    ))
+                }
+                // El reparto queda escrito en la línea: el reporte de mermas suma solo la
+                // merma real, no el pan que se vendió como grupo.
+                linesCol(companyId, countId).document(line.id).set(
+                    line.copy(
+                        difference = diff,
+                        valueImpact = diff * unitCost,
+                        soldAsGroup = sold,
+                        wasteQuantity = waste
+                    ).toMap()
+                )
             } else {
                 totalSurplus += absDiff * unitCost
                 finishedStockRepo.applyMovement(companyId, FinishedStockMovement(
@@ -192,6 +301,10 @@ class FirebaseBreadCountRepository(
             totalSurplusValue = totalSurplus,
             lineCount = lines.size,
             notes = notes?.trim()?.ifEmpty { null },
+            groupSalesAllocated = allocation.totalAllocated,
+            unexplainedGroupUnits = allocation.totalUnexplained,
+            salesWindowFrom = window.fromMillis,
+            salesWindowUntil = window.untilMillis,
             closedAt = now
         )
         countsCol(companyId).document(countId).set(closed.toMap())
@@ -215,17 +328,19 @@ class FirebaseBreadCountRepository(
         val allLines = counts.map { c ->
             async { linesCol(companyId, c.id).get().documents.map { it.toLine() } }
         }.awaitAll().flatten()
-            .filter { it.difference < 0 }
+            // Merma REAL: lo vendido como grupo de precio también faltó en el conteo, pero no
+            // se perdió. Los conteos viejos no traen el reparto y caen al faltante entero.
+            .filter { it.effectiveWaste > 0.0 }
 
         if (allLines.isEmpty()) return@coroutineScope MermaSummary()
 
-        val totalUnits = allLines.sumOf { -it.difference }
-        val totalValue = allLines.sumOf { -it.valueImpact }
+        val totalUnits = allLines.sumOf { it.effectiveWaste }
+        val totalValue = allLines.sumOf { it.effectiveWaste * it.unitCostSnapshot }
         val byReason = allLines.groupBy { it.reason.ifEmpty { BreadCountReason.DESCONOCIDO } }
             .mapValues { (_, lines) ->
                 MermaReasonStat(
-                    units = lines.sumOf { -it.difference },
-                    valueImpact = lines.sumOf { -it.valueImpact }
+                    units = lines.sumOf { it.effectiveWaste },
+                    valueImpact = lines.sumOf { it.effectiveWaste * it.unitCostSnapshot }
                 )
             }
         MermaSummary(totalUnits = totalUnits, totalValue = totalValue, byReason = byReason)
@@ -245,6 +360,10 @@ class FirebaseBreadCountRepository(
         "totalSurplusValue" to totalSurplusValue,
         "lineCount" to lineCount,
         "notes" to notes,
+        "groupSalesAllocated" to groupSalesAllocated,
+        "unexplainedGroupUnits" to unexplainedGroupUnits,
+        "salesWindowFrom" to salesWindowFrom,
+        "salesWindowUntil" to salesWindowUntil,
         "createdAt" to createdAt,
         "closedAt" to closedAt
     )
@@ -261,6 +380,10 @@ class FirebaseBreadCountRepository(
         totalSurplusValue = get<Double?>("totalSurplusValue") ?: 0.0,
         lineCount = (get<Double?>("lineCount") ?: 0.0).toInt(),
         notes = get<String?>("notes"),
+        groupSalesAllocated = get<Double?>("groupSalesAllocated") ?: 0.0,
+        unexplainedGroupUnits = get<Double?>("unexplainedGroupUnits") ?: 0.0,
+        salesWindowFrom = readMillis("salesWindowFrom"),
+        salesWindowUntil = readMillis("salesWindowUntil"),
         createdAt = readMillis("createdAt"),
         closedAt = readMillisNullable("closedAt")
     )
@@ -275,7 +398,9 @@ class FirebaseBreadCountRepository(
         "reason" to reason,
         "reasonNote" to reasonNote,
         "unitCostSnapshot" to unitCostSnapshot,
-        "valueImpact" to valueImpact
+        "valueImpact" to valueImpact,
+        "soldAsGroup" to soldAsGroup,
+        "wasteQuantity" to wasteQuantity
     )
 
     private fun DocumentSnapshot.toLine() = BreadCountLine(
@@ -288,7 +413,9 @@ class FirebaseBreadCountRepository(
         reason = get<String?>("reason") ?: "",
         reasonNote = get<String?>("reasonNote") ?: "",
         unitCostSnapshot = get<Double?>("unitCostSnapshot") ?: 0.0,
-        valueImpact = get<Double?>("valueImpact") ?: 0.0
+        valueImpact = get<Double?>("valueImpact") ?: 0.0,
+        soldAsGroup = get<Double?>("soldAsGroup") ?: 0.0,
+        wasteQuantity = get<Double?>("wasteQuantity")
     )
 
     private fun DocumentSnapshot.readMillis(field: String): Long =

@@ -24,6 +24,7 @@ import com.bakery.erp.presentation.pos.CashSessionViewModel
 import com.bakery.erp.presentation.reports.financial.FinancialReportViewModel
 import com.bakery.erp.presentation.reports.production.ProductionReportViewModel
 import com.bakery.erp.presentation.reports.sales.SalesReportViewModel
+import com.bakery.erp.presentation.reports.branchsupply.BranchSupplyReportViewModel
 import com.bakery.erp.presentation.pos.DailyCashCloseViewModel
 import com.bakery.erp.presentation.pos.POSViewModel
 import com.bakery.erp.presentation.pos.SaleHistoryViewModel
@@ -33,6 +34,7 @@ import com.bakery.erp.domain.BluetoothPrinterManager
 import com.bakery.erp.domain.DocumentPrinter
 import com.bakery.erp.presentation.pos.admin.POSCategoryAdminViewModel
 import com.bakery.erp.presentation.preparations.PreparationViewModel
+import com.bakery.erp.presentation.plantissues.PlantIssueViewModel
 import com.bakery.erp.presentation.pricing.PriceListViewModel
 import com.bakery.erp.presentation.production.ProductionViewModel
 import com.bakery.erp.presentation.products.ProductViewModel
@@ -53,6 +55,8 @@ data class AppViewModels(
     val user: UserViewModel,
     val purchase: PurchaseViewModel,
     val production: ProductionViewModel,
+    /** Vales de salida de material de planta (ver PlantIssue). */
+    val plantIssue: PlantIssueViewModel,
     val employee: EmployeeViewModel,
     val jobPosition: JobPositionViewModel,
     val preparation: PreparationViewModel,
@@ -67,6 +71,7 @@ data class AppViewModels(
     val saleHistory: SaleHistoryViewModel,
     val cashRegisterAdmin: CashRegisterAdminViewModel,
     val posCategoryAdmin: POSCategoryAdminViewModel,
+    val credit: com.bakery.erp.presentation.credit.CreditViewModel,
     val breadCount: BreadCountViewModel,
     val dailyCashClose: DailyCashCloseViewModel,
     val spotCashCheck: SpotCashCheckViewModel,
@@ -74,6 +79,7 @@ data class AppViewModels(
     val salesReport: SalesReportViewModel,
     val productionReport: ProductionReportViewModel,
     val financialReport: FinancialReportViewModel,
+    val branchSupplyReport: BranchSupplyReportViewModel,
     val customerOrder: CustomerOrderViewModel,
     val externalCustomer: ExternalCustomerViewModel,
     val organizationSettings: OrganizationSettingsViewModel,

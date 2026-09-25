@@ -22,6 +22,8 @@ data class CashSession(
     val totalCashSales: Double = 0.0,
     val totalCardSales: Double = 0.0,
     val totalTransferSales: Double = 0.0,
+    /** Vendido a crédito en el turno. Informativo: no es dinero que esté en la gaveta. */
+    val totalCreditSales: Double = 0.0,
     val totalSales: Double = 0.0,
     val totalMovementsIn: Double = 0.0,
     val totalMovementsOut: Double = 0.0,
@@ -34,8 +36,31 @@ data class CashSession(
     val saleCount: Int = 0,
     val notes: String? = null,
     /** Si la sesión fue incluida en un cierre del día (`DailyCashClose`), su id. Bloquea ediciones. */
-    val dailyCloseId: String? = null
+    val dailyCloseId: String? = null,
+    /**
+     * `true` si la cerró el sistema porque quedó abierta de un día para otro, no una persona.
+     *
+     * El cuadre de una sesión así dice cero diferencia **porque se asumió pago exacto**, no
+     * porque alguien haya contado. Sin este campo, el reporte mostraría una caja perfectamente
+     * cuadrada y nadie sabría que nunca se contó — que es peor que un faltante declarado.
+     */
+    val autoClosed: Boolean = false
 )
+
+/**
+ * Efectivo que DEBERÍA haber en la gaveta ahora mismo.
+ *
+ * `expectedCash` (el campo) solo se llena al cerrar la sesión, así que mientras está abierta
+ * vale 0 y no sirve para nada. Esta es la misma fórmula, calculada sobre los totales
+ * denormalizados que se van actualizando con cada venta y cada movimiento.
+ *
+ * Vive acá y no en cada pantalla porque estaba copiada en cuatro (cierre de caja, cuadre
+ * sorpresa —dos veces— y el diálogo de traslado), y de eso depende ahora también el tope de
+ * lo que se puede pagar desde la caja: cuatro copias de la regla que decide si alcanza el
+ * dinero es una que se va a olvidar de sumar algo.
+ */
+val CashSession.expectedCashNow: Double
+    get() = openingBalance + totalCashSales + totalMovementsIn - totalMovementsOut
 
 object CashSessionStatus {
     const val OPEN   = "OPEN"

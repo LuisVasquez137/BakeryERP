@@ -26,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.bakery.erp.model.expectedCashNow
 import com.bakery.erp.model.CashSession
 import com.bakery.erp.model.User
 import com.bakery.erp.util.fmtMoney
@@ -69,8 +70,7 @@ fun CashTransferDialog(
     val target = state.openSessionsForTransfer.firstOrNull { it.id == selectedTargetId }
     val amount = amountText.toDoubleOrNull() ?: 0.0
     // Efectivo disponible en la caja origen (sesión abierta).
-    val availableCash = currentSession.openingBalance + currentSession.totalCashSales +
-        currentSession.totalMovementsIn - currentSession.totalMovementsOut
+    val availableCash = currentSession.expectedCashNow
     val exceedsAvailable = amount > availableCash
     val canSubmit = target != null && amount > 0 && !exceedsAvailable && !state.isLoading
 

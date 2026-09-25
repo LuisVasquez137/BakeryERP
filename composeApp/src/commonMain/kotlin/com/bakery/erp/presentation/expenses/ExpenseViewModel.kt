@@ -30,6 +30,13 @@ private fun currentPeriod(): String {
     return "${now.year}-${now.monthNumber.toString().padStart(2, '0')}"
 }
 
+/**
+ * Consulta y edición de los gastos ya registrados. **No captura**: anotar un gasto es
+ * `QuickPurchaseFormScreen`, que además puede meter el renglón al inventario y descontarlo de
+ * la gaveta de la que salió. Este ViewModel perdió su camino de alta cuando las dos capturas
+ * se fundieron en una — dejarlo habría sido un segundo lugar desde el cual escribir gastos,
+ * y el que no sabía de caja ni de inventario.
+ */
 class ExpenseViewModel(
     private val repository: ExpenseRepository
 ) : ViewModel() {

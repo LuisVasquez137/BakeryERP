@@ -56,7 +56,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.Expense
 import com.bakery.erp.model.ExpenseCategory
-import com.bakery.erp.model.FixedBudgetItem
+import com.bakery.erp.model.ExpensePaidFrom
 import com.bakery.erp.model.Permission
 import com.bakery.erp.model.formatPeriodLabel
 import com.bakery.erp.model.hasPermission
@@ -68,28 +68,32 @@ import com.bakery.erp.presentation.branches.BranchViewModel
 fun ExpenseListScreen(
     onNavigateBack: () -> Unit,
     onNavigateToDetail: (expenseId: String) -> Unit,
-    onNavigateToForm: () -> Unit,
-    onNavigateToFixedBudget: () -> Unit,
+    /**
+     * Anotar un gasto abre `CashExpenseFormScreen`, no el formulario largo.
+     *
+     * Aquél pedía nombre, categoría, sucursal, período y monto para guardar un número, y no
+     * sabía lo único que de verdad importa a diario: **de qué caja salió la plata**. Sin eso
+     * el gasto no se descuenta al cuadrar y la cajera aparece con un faltante que no es suyo.
+     */
+    onNavigateToQuickPurchase: () -> Unit,
     authViewModel: AuthViewModel,
     viewModel: ExpenseViewModel,
-    branchViewModel: BranchViewModel,
-    fixedBudgetViewModel: FixedBudgetViewModel
+    branchViewModel: BranchViewModel
 ) {
     val state by viewModel.uiState.collectAsState()
     val authState by authViewModel.uiState.collectAsState()
     val branchState by branchViewModel.uiState.collectAsState()
-    val fixedState by fixedBudgetViewModel.uiState.collectAsState()
     val companyId = authState.user?.orgId ?: ""
     val snackbarHostState = remember { SnackbarHostState() }
 
-    val canManageFixed = authState.user?.hasPermission(Permission.MANAGE_FIXED_BUDGET) == true
-    val canAddVariable = authState.user?.hasPermission(Permission.ADD_VARIABLE_EXPENSE) == true
+    // El FAB abre la captura SIN caja: lo que se anota desde acá no sale de ninguna
+    // gaveta. Ver `Permission.ADD_GENERAL_EXPENSE`.
+    val canAddVariable = authState.user?.hasPermission(Permission.ADD_GENERAL_EXPENSE) == true
 
     LaunchedEffect(companyId) {
         if (companyId.isNotEmpty()) {
             viewModel.loadExpenses(companyId)
             branchViewModel.loadBranches(companyId)
-            fixedBudgetViewModel.loadItems(companyId)
         }
     }
     LaunchedEffect(state.error) {
@@ -98,12 +102,7 @@ fun ExpenseListScreen(
 
     // Derived data
     val filteredExpenses = viewModel.filteredExpenses
-    val filteredFixed = fixedState.itemList.filter { item ->
-        item.active && (state.selectedBranchId == null || item.branchId == state.selectedBranchId)
-    }
-    val fixedTotal = filteredFixed.sumOf { it.amount }
     val variableTotal = viewModel.totalAmount
-    val grandTotal = fixedTotal + variableTotal
 
     Scaffold(
         topBar = {
@@ -124,10 +123,10 @@ fun ExpenseListScreen(
         floatingActionButton = {
             if (canAddVariable) {
                 FloatingActionButton(
-                    onClick = onNavigateToForm,
+                    onClick = onNavigateToQuickPurchase,
                     containerColor = MaterialTheme.colorScheme.primary
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = "Nuevo gasto variable", tint = MaterialTheme.colorScheme.onPrimary)
+                    Icon(Icons.Default.Add, contentDescription = "Anotar un gasto", tint = MaterialTheme.colorScheme.onPrimary)
                 }
             }
         },
@@ -183,7 +182,7 @@ fun ExpenseListScreen(
             }
 
             // ── Content ───────────────────────────────────────────────────────
-            if (state.isLoading && state.expenseList.isEmpty() && fixedState.itemList.isEmpty()) {
+            if (state.isLoading && state.expenseList.isEmpty()) {
                 Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
@@ -193,30 +192,14 @@ fun ExpenseListScreen(
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    // ── Sección Costos Fijos ──────────────────────────────────
-                    item(key = "fixed_header") {
-                        ExpenseSectionHeader(
-                            title = "Costos Fijos",
-                            total = fixedTotal,
-                            onManage = if (canManageFixed) onNavigateToFixedBudget else null
-                        )
-                    }
-
-                    if (filteredFixed.isEmpty()) {
-                        item(key = "fixed_empty") {
-                            FixedEmptyRow(canManage = canManageFixed, onManage = onNavigateToFixedBudget)
-                        }
-                    } else {
-                        items(filteredFixed, key = { "f_${it.id}" }) { item ->
-                            FixedBudgetRow(item)
-                        }
-                    }
-
-                    // ── Sección Gastos Variables ──────────────────────────────
+                    // Los costos fijos vivían acá arriba como una sección más, y eran otra
+                    // cosa: un PLAN mensual —lo que se espera pagar de renta y luz— y no
+                    // dinero que ya salió. Sumados en el mismo total, el mes se veía gastado
+                    // desde el día 1. Ahora tienen módulo propio y esta lista es solo lo que
+                    // de verdad se gastó.
                     item(key = "variable_header") {
-                        Spacer(Modifier.height(8.dp))
                         ExpenseSectionHeader(
-                            title = "Gastos Variables — ${formatPeriodLabel(state.selectedPeriod)}",
+                            title = formatPeriodLabel(state.selectedPeriod),
                             total = variableTotal,
                             onManage = null
                         )
@@ -239,36 +222,28 @@ fun ExpenseListScreen(
                 }
             }
 
-            // ── Totales ────────────────────────────────────────────────────────
-            if (filteredFixed.isNotEmpty() || filteredExpenses.isNotEmpty()) {
+            // ── Total ──────────────────────────────────────────────────────────
+            // Un solo número: lo que se gastó en el período mostrado. El desglose
+            // "fijos / variables / total" desapareció con la sección de costos fijos —
+            // sumaba un plan mensual con desembolsos reales.
+            if (filteredExpenses.isNotEmpty()) {
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceVariant,
                     tonalElevation = 4.dp
                 ) {
-                    Column(
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Fijos:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("Q ${fixedTotal.fmt(2)}", style = MaterialTheme.typography.bodySmall)
-                        }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Variables:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("Q ${variableTotal.fmt(2)}", style = MaterialTheme.typography.bodySmall)
-                        }
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Total:", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                            Text(
-                                "Q ${grandTotal.fmt(2)}",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
+                        Text("Total:", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                        Text(
+                            "Q ${variableTotal.fmt(2)}",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
                     }
                 }
             }
@@ -316,59 +291,10 @@ private fun ExpenseSectionHeader(title: String, total: Double, onManage: (() -> 
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 }
 
-// ─── Fixed budget compact row ─────────────────────────────────────────────────
-
-@Composable
-private fun FixedBudgetRow(item: FixedBudgetItem) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 4.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(item.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-            Text(item.category.label.take(20), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
-        }
-        Text(
-            text = "Q ${item.amount.fmt(2)}",
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.error
-        )
-    }
-}
-
-@Composable
-private fun FixedEmptyRow(canManage: Boolean, onManage: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = "Sin costos fijos definidos",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.outline
-        )
-        if (canManage) {
-            OutlinedButton(
-                onClick = onManage,
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-            ) {
-                Text("Definir", style = MaterialTheme.typography.labelSmall)
-            }
-        }
-    }
-}
-
 @Composable
 private fun VariableEmptyRow() {
     Text(
-        text = "Sin gastos variables este mes. Toca + para agregar.",
+        text = "Sin gastos este mes. Toca + para anotar uno.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.outline,
         modifier = Modifier.padding(vertical = 8.dp)
@@ -414,13 +340,21 @@ private fun ExpenseListCard(expense: Expense, onClick: () -> Unit) {
                     overflow = TextOverflow.Ellipsis
                 )
                 CategoryBadge(expense.category)
-                if (expense.branchName.isNotEmpty()) {
-                    Text(
-                        text = expense.branchName,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline
-                    )
+                // De dónde salió la plata va en la fila: es la diferencia entre un gasto
+                // que ya explica el faltante de una caja y uno que no toca ninguna gaveta,
+                // y sin verla hay que abrir el detalle de cada uno para saberlo.
+                val origen = when {
+                    expense.cashRegisterName.isNotEmpty() -> "De ${expense.cashRegisterName}"
+                    expense.paidFrom == ExpensePaidFrom.GENERAL -> "Caja general / dueño"
+                    else -> ""
                 }
+                Text(
+                    text = listOf(expense.branchName, origen)
+                        .filter { it.isNotEmpty() }
+                        .joinToString(" · "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
             }
 
             Spacer(Modifier.width(8.dp))

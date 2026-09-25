@@ -81,3 +81,13 @@ fun Long.fmtClockTime(): String {
     val suffix = if (h24 < 12) "a.m." else "p.m."
     return "$h12:${t.minute.toString().padStart(2, '0')} $suffix"
 }
+
+/** Fecha de un epoch-millis, "24/09/2026". "" si no hay marca. */
+fun Long.fmtDate(): String {
+    if (this <= 0L) return ""
+    val d = Instant.fromEpochMilliseconds(this).toLocalDateTime(TimeZone.currentSystemDefault()).date
+    return "${d.dayOfMonth.toString().padStart(2, '0')}/${d.monthNumber.toString().padStart(2, '0')}/${d.year}"
+}
+
+/** Fecha y hora, "24/09/2026 2:35 p.m." — para un estado de cuenta o un historial. */
+fun Long.fmtDateTime(): String = if (this <= 0L) "" else "${fmtDate()} ${fmtClockTime()}"

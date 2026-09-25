@@ -1,5 +1,6 @@
 package com.bakery.erp.presentation.home
 
+import com.bakery.erp.model.openChargeList
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bakery.erp.domain.AuthRepository
@@ -71,7 +72,9 @@ class HomeViewModel(
     private val fixedAssetRepository: FixedAssetRepository,
     private val dispatchRepository: DispatchRepository,
     private val cashSessionRepository: CashSessionRepository,
-    private val purchaseRepository: PurchaseRepository
+    private val purchaseRepository: PurchaseRepository,
+    /** Aviso de créditos con saldo viejo. */
+    private val creditRepository: com.bakery.erp.domain.CreditRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(HomeUiState())
@@ -417,6 +420,28 @@ class HomeViewModel(
                 actionLabel = "Ver compras",
                 createdAt = now
             )
+        }
+
+        // 10. Créditos con compras sin pagar de hace más de 30 días. Sale de los cargos
+        // abiertos que ya viven en cada cuenta: una sola lectura de la colección, sin abrir
+        // el estado de cuenta de nadie.
+        if (user.hasPermission(Permission.MANAGE_CREDIT_ACCOUNTS)) {
+            val late = runCatching { creditRepository.getAccounts(companyId) }.getOrDefault(emptyList())
+                .map { it to com.bakery.erp.model.creditAgingOf(it.openChargeList, now) }
+                .filter { (_, aging) -> aging.overdue30 > 0.004 }
+                .sortedByDescending { (_, aging) -> aging.overdue30 }
+            if (late.isNotEmpty()) {
+                val owed = late.sumOf { (_, aging) -> aging.overdue30 }
+                alerts += HomeAlert(
+                    id = "credit-overdue-${late.size}",
+                    severity = if (late.any { (_, a) -> a.over90 > 0.004 }) AlertSeverity.CRITICAL else AlertSeverity.WARNING,
+                    target = AlertTarget.CREDIT_OVERDUE,
+                    title = "${late.size} crédito(s) con más de 30 días · Q${owed.fmtMoney()}",
+                    message = late.take(3).joinToString(", ") { (acc, a) -> "${acc.name} (Q${a.overdue30.fmtMoney()})" },
+                    actionLabel = "Ver créditos",
+                    createdAt = now
+                )
+            }
         }
 
         // 9. Lotes de insumos perecederos por caducar

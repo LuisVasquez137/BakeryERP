@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.bakery.erp.model.expectedCashNow
 import com.bakery.erp.model.CashDenominations
 import com.bakery.erp.model.CashSession
 import com.bakery.erp.presentation.auth.AuthViewModel
@@ -55,9 +56,7 @@ fun CashSessionCloseScreen(
     }
 
     val session = state.currentSession
-    val expected = session?.let {
-        it.openingBalance + it.totalCashSales + it.totalMovementsIn - it.totalMovementsOut
-    } ?: 0.0
+    val expected = session?.expectedCashNow ?: 0.0
     val counted = closingCounts.entries.sumOf { (code, qty) ->
         (CashDenominations.byCode(code)?.value ?: 0.0) * qty
     }
@@ -94,6 +93,12 @@ fun CashSessionCloseScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 SessionSummaryCard(session, expectedCash = expected)
+                // El detalle va entre el resumen y el conteo: se revisa qué salió ANTES de
+                // contar, que es cuando todavía se puede ir a buscar el comprobante que falta.
+                CashCloseMovementsCard(
+                    movements = state.movements,
+                    purchasesById = state.movementPurchases
+                )
 
                 Text("Conteo físico del efectivo · por denominaciones",
                     fontWeight = FontWeight.SemiBold)
@@ -196,11 +201,17 @@ private fun SessionSummaryCard(session: CashSession, expectedCash: Double) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("Ventas transferencia"); Text("Q ${session.totalTransferSales.fmtMoney(2)}")
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Depósitos extra"); Text("Q ${session.totalMovementsIn.fmtMoney(2)}")
+            // Fiado: se vendió pero no hay dinero. Se muestra para que nadie lo busque en la gaveta.
+            if (session.totalCreditSales > 0.0) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Ventas a crédito (sin dinero)"); Text("Q ${session.totalCreditSales.fmtMoney(2)}")
+                }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Retiros / pagos"); Text("Q ${session.totalMovementsOut.fmtMoney(2)}")
+                Text("Ingresos extras"); Text("Q ${session.totalMovementsIn.fmtMoney(2)}")
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Gastos y retiros"); Text("Q ${session.totalMovementsOut.fmtMoney(2)}")
             }
             HorizontalDivider(Modifier.padding(vertical = 6.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {

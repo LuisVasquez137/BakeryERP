@@ -60,8 +60,11 @@ companies/{c}/
     movements/{id}                         ← Kardex por insumo
   branchStocks/{branchId}_{ingredientId}   ← colección PLANA (no subcoll.) para query única
   stockLots/{id}                           ← lotes FEFO, solo insumos perecederos
+  plantIssues/{id}                         ← vales de salida de material de planta (por empaque)
   purchases/{id}/lines/{id}                ← lineKind: INGREDIENT|RESALE_PRODUCT|SUPPLY|SERVICE
-                                           kind del header: INVOICE|MARKET_RUN (vuelta: sucursal y lugar por línea)
+                                           header: inventoryAmount/expensedAmount = corte para el reporte financiero
+                                           kind del header: INVOICE|QUICK (compra rápida: sucursal y lugar por
+                                           línea; el valor viejo "MARKET_RUN" se sigue leyendo)
     payments/{id}                          ← abonos; paidAmount denormalizado en el header
   suppliers/{id}
   recipes/{id}                             ← doc plano (stageCount/yieldCount denormalizados)
@@ -229,7 +232,8 @@ De una misma masa (sheca, gusanito) salen productos con distinto relleno (frijol
 ### Ingredientes (sin `currentStock`, con `usage`)
 Stock vive solo en `BranchStock`. Form no tiene campo de stock — solo se genera al registrar compras. `PurchaseFormat` (presentación de compra) en subcolección.
 
-`usage` separa materia prima de suministro de operación (ver "Compras — una factura, cuatro tipos de línea"). El form elige las categorías según el tipo (`INGREDIENT_CATEGORIES` vs `SUPPLY_CATEGORIES`) y limpia la categoría al cambiarlo: dejarla puesta guardaría "Harinas" en un cloro. La lista solo ofrece separar los dos catálogos **si la empresa realmente tiene suministros** — un filtro que siempre muestra lo mismo es ruido. `barcode` es opcional.
+`tracksStock` (solo suministros) decide si además se cuentan existencias — ver "El suministro
+que no se cuenta" en Compras. `usage` separa materia prima de suministro de operación (ver "Compras — una factura, cuatro tipos de línea"). El form elige las categorías según el tipo (`INGREDIENT_CATEGORIES` vs `SUPPLY_CATEGORIES`) y limpia la categoría al cambiarlo: dejarla puesta guardaría "Harinas" en un cloro. La lista solo ofrece separar los dos catálogos **si la empresa realmente tiene suministros** — un filtro que siempre muestra lo mismo es ruido. `barcode` es opcional.
 
 ### Insumos que se cuentan — `unitWeightGrams`
 
@@ -256,7 +260,8 @@ documentos con el mismo número de factura dejaría "¿ya le pagué a Molinos?" 
 |---|---|---|
 | `INGREDIENT` | Insumo `usage=PRODUCTION` | `BranchStock` + Kardex + lote FEFO si es perecedero |
 | `RESALE_PRODUCT` | Producto `isInHouseProduced=false` | `FinishedProductStock` + movimiento |
-| `SUPPLY` | Insumo `usage=SUPPLY` | `BranchStock` + Kardex **y** `Expense` |
+| `SUPPLY` | Insumo `usage=SUPPLY`, `tracksStock=true` | `BranchStock` + Kardex **y** `Expense` |
+| `SUPPLY_NO_STOCK` | Insumo `usage=SUPPLY`, `tracksStock=false` | solo `Expense` |
 | `SERVICE` | ninguno (texto libre) | `Expense` + opcional `AssetHistoryEntry` |
 
 `Purchase.lineKinds` denormaliza los tipos presentes — misma razón que `itemIds`: filtrar
@@ -277,6 +282,42 @@ pero nadie registra el consumo de cloro y ningún costo de venta lo recoge despu
 expensa al comprarlo, no aparece nunca en el estado de resultados. Su inventario existe para
 contestar "¿me queda?", no para valorar nada, así que no hay doble conteo.
 
+**El suministro que no se cuenta: `Ingredient.tracksStock`.** La bolsa y la bandeja
+desechable se compran por fardo y se gastan de a una con cada venta —y ese consumo no lo va a
+registrar nadie. Como suministro normal su `BranchStock` solo sube: a los tres meses dice 8.000
+y en la tienda hay 400, la alerta de mínimo nunca suena, y un número que miente es peor que no
+tener número. Como línea de servicio de texto libre se capturaba de a un diálogo por renglón y
+sin presentación de compra.
+
+`tracksStock` (default `true`, sin migración) lo resuelve **por ítem** y sin catalogo nuevo: el
+ítem sigue siendo un `Ingredient` del catálogo del proveedor —aparece como **fila** en su
+factura, con su presentación, su precio y su historial de precio— y lo único que no hace es
+inventario. `ingredientPurchaseLineKind(ingredient)` es el **único** lugar que traduce insumo →
+tipo de línea, y lo usan los cuatro caminos que arman una línea desde un insumo (las dos filas
+del catálogo, el insumo suelto del proveedor ocasional y el gasto rápido).
+
+- **El switch solo existe para suministros.** La materia prima siempre lleva conteo —de ese
+  stock sale el descuento de producción— y `ingredientPurchaseLineKind` lo fuerza aunque el
+  documento venga mal marcado.
+- **Las guardas de inventario van por `purchaseLineTouchesStock(kind)`, no por `!= SERVICE`.**
+  Una línea `SUPPLY_NO_STOCK` trae `ingredientId` lleno, así que pasaba por todos los filtros
+  que miran ese campo: `applyStockForPurchase`, las DOS funciones de índice de `applyStockDelta`
+  y `reconcileLotsPerBranch` la habrían metido al stock igual.
+- **Al apagar el conteo se descarta la alerta de mínimo**: no hay stock contra el cual
+  dispararla, y guardada quedaría esperando un evento que nunca llega.
+- Sigue siendo un ítem con id, así que el historial del proveedor lo agrupa por `ingredientId`
+  y la búsqueda de la lista de compras lo encuentra — a diferencia del texto libre.
+
+**Bug que esto destapó: las filas del catálogo no ponían `lineKind`.** Todo suministro
+capturado desde la factura entraba como `INGREDIENT`, o sea con stock pero **sin generar su
+`Expense`** — el gasto del mes nunca aparecía. Solo la compra rápida y el insumo suelto lo
+clasificaban bien. Por eso la traducción vive ahora en una función y no repetida en cada fila.
+
+**El gasto rápido no da de alta conceptos.** Tuvo un switch "Lo compro seguido" y se quitó: lo
+que se le compra seguido a un proveedor tiene catálogo y se captura por su factura, donde sale
+como fila. En el renglón rápido solo se muestran cantidad y unidad cuando la línea **ya** venía
+con un concepto (corregir un gasto viejo), para no borrar lo que ya estaba.
+
 **El servicio es el único tipo sin catálogo.** La ferretería vende algo distinto cada vez;
 dar de alta un ítem por reparación llenaría el catálogo de cosas que no se vuelven a
 comprar. `conceptName` + `expenseCategory` + `assetId` opcional. Con activo, escribe también
@@ -284,6 +325,59 @@ su `AssetHistoryEntry` (MAINTENANCE por defecto) — el mantenimiento capturado 
 factura actualiza la próxima fecha del horno sin teclearlo dos veces. El combustible de la
 camioneta cae en el activo del vehículo, que es la razón por la que los vehículos son
 activos fijos.
+
+**Lo que SÍ se repite se le puede pegar un `PurchaseConcept`** (`model/PurchaseConcept.kt`,
+colección plana `companies/{c}/purchaseConcepts`): bolsas, cajas de cartón, el flete del
+lunes. Es un catálogo de nombres con unidad, categoría y último precio — **sin inventario de
+ninguna clase**. No es un `Ingredient` con otra bandera a propósito: un insumo, aunque sea de
+operación, trae `BranchStock`, Kardex, alerta de mínimo y pantalla de ajuste, que es justo lo
+que acá se pidió no tener; y no es un `Product` porque no se vende.
+
+La línea sigue siendo `SERVICE` —no mueve inventario y genera su `Expense`— y lo único que
+agrega es `PurchaseLine.conceptId`. **Ese id es lo único que permite sumar el historial**: sin
+él, "Bolsas #5", "bolsas 5" y "bolsa # 5" son tres cosas a los tres meses y "¿cuántas le
+compré?" no tiene respuesta. `conceptName` se guarda igual como snapshot, así una factura
+vieja sigue diciendo lo que decía aunque el concepto se renombre.
+
+- **`PurchaseLine.quantityReceived` y `conceptUnit` ahora se capturan** en la línea de
+  servicio (antes se guardaba siempre 1 con el monto entero en el costo unitario). La cantidad
+  viene en 1: un flete o una reparación se dejan así y el formulario se comporta como siempre;
+  las 200 bolsas son un campo de más, y sin él el historial dice cuánto se gastó pero nunca
+  cuánto se compró. El monto tecleado sigue siendo el TOTAL del renglón y se guarda dividido,
+  para que `lineTotal` lo devuelva exacto.
+- **Se ofrece, no se exige.** El texto libre sigue siendo lo correcto para lo que no se vuelve
+  a comprar. El switch "Recordar para el historial" nace **encendido en la factura** (lo que
+  trae un proveedor con factura suele ser lo que trae siempre) y **apagado en el gasto anotado
+  desde la caja** (ahí el caso típico es el taxi o la escoba de una sola vez).
+- **Antes de crear se busca por nombre** (`findByName`, sin tildes ni mayúsculas): teclear de
+  nuevo "Bolsas #5" engancha el concepto que ya existe en vez de abrir un segundo id para lo
+  mismo — que es exactamente lo que el catálogo viene a evitar.
+- El catálogo **no se gatea con `usesServicePurchases`**: esa bandera decide si la FACTURA
+  dibuja su sección de servicios, y el gasto anotado desde la caja no pasa por ahí. Gatearlo
+  dejaría al caso más común sin historial sumable.
+- `syncPurchaseConcepts` (los tres caminos de guardado: factura, edición y compra rápida) deja
+  en el concepto a quién se le compró, a cuánto y cuándo — escritura **parcial**
+  (`recordPurchase`), porque quien registra la factura no tiene el concepto completo en la
+  mano y un `set()` le borraría el nombre o la unidad a quien lo esté editando.
+
+**La ficha del proveedor contesta "¿qué le compro y cuándo?"** (`SupplierDetailScreen` +
+`model/SupplierPurchaseHistory.kt`, tests en `SupplierPurchaseHistoryTest`). Existía el dato y
+no existía la pregunta: había que ir a Compras, filtrar por proveedor y abrir factura por
+factura. Dos niveles, y la división es por costo de lectura:
+
+- **Totales y lista de compras salen de los ENCABEZADOS** (`totalAmount`, `itemNames`,
+  `balanceDue` ya denormalizados), así que se cargan al abrir la ficha sin leer una sola
+  subcolección. Cada fila abre su factura.
+- **"Ver qué le compro y cuánto" va detrás de un botón**: las cantidades viven en las líneas y
+  eso es una consulta POR FACTURA. Se limita a `MAX_HISTORY_PURCHASES = 40` — con más que eso
+  la respuesta ya está clara y seguir leyendo solo cuesta.
+- `buildSupplierItemHistory` cuenta **compras, no renglones** (una factura que trae el mismo
+  ítem dos veces es una compra), agrupa por `supplierHistoryKey` —concepto > texto normalizado
+  > producto > insumo— y recalcula el precio unitario del importe, para que capturar con
+  presentación y capturar suelto den el mismo número. El producto manda sobre el insumo para
+  que la línea redirigida de la leche se agrupe con las otras compras de ese renglón.
+- Se filtra en memoria sobre la colección completa, mismo motivo que la lista de Compras:
+  `date` puede ser `Timestamp` en las viejas y número en las nuevas.
 
 `presentation/purchases/PurchaseSideEffects.kt` (lógica pura, `PurchaseSideEffectsTest`)
 proyecta la factura a `Expense`s y `AssetHistoryEntry`s. `syncPurchaseSideEffects` en el
@@ -320,6 +414,90 @@ sale de `Product.purchaseCost` porque no hay `avgUnitCost` que consultar. `POSVi
 convierte existencias del insumo a piezas vendibles — sin eso el aviso de sobreventa marcaría
 en rojo toda venta de huevo, y un aviso que siempre suena deja de avisar.
 
+**Comprar ese producto NO crea un inventario paralelo: la línea se redirige al insumo.**
+`resalePurchaseLine(..., linkedIngredient)` —el único lugar que arma una línea de reventa—
+devuelve una línea `INGREDIENT` (o `SUPPLY`, según el `usage`) cuando el producto está
+respaldado por un insumo, convirtiendo la cantidad con `ingredientUnitsPerSale`: una caja de
+12 cartones de leche entra como 12 lt al `BranchStock` del insumo. Sin esa redirección la
+compra escribía un `FinishedProductStock` que **`buildStoreInventoryRows` ni siquiera dibuja**
+para estos productos y que ninguna venta descuenta: la leche desaparecía en silencio, y si
+además se capturaba el insumo quedaba contada dos veces.
+
+Lo que cambia es el destino, no el papel: `packagesReceived`, `packageCost`, `formatId` y
+`productId` se conservan, así `lineTotal` sigue dando el importe exacto de la factura y la
+presentación sigue actualizando su precio — por eso `formatsWithPaidPrices` y
+`syncResaleFormatPrices` emparejan por **`productId`** y no por tipo de línea, y el bucle que
+actualiza formatos de insumo salta las líneas que traen producto. `matchKey()` también pasó a
+llaverse por producto cuando lo hay: si la fila redirigida compartiera clave con la fila del
+insumo, capturar las dos se reemplazarían en silencio en vez de sumarse. La fila del catálogo
+dice a dónde va ("Entra al inventario de Leche (insumo)") — quien captura la eligió creyendo
+que surtía la tienda.
+
+**Reventa con presentaciones de compra** (`Product.purchaseFormats`, lógica pura en
+`model/ResalePurchaseFormat.kt`, tests en `ResalePurchaseFormatTest`). Antes un producto de
+reventa tenía UN `supplierId` y un `purchaseCost` por unidad: la lata de Coca-Cola no podía
+comprársele a la distribuidora y al mayorista, y la factura de "1 caja" había que teclearla
+como 24 unidades con el costo dividido a mano. Ahora es el mismo modelo que los insumos: la
+relación producto↔proveedor es de muchos a muchos y vive en la `PurchaseFormat`; el catálogo de
+un proveedor se **deduce** (`suppliedBy`). El inventario sigue siendo uno por producto — es la
+misma lata venga de quien venga, y `avgUnitCost` promedia los precios de ambos.
+
+- **Arreglos paralelos en el documento del producto** (`purchaseFormatIds`, `...UnitsPerPackage`,
+  etc., en `data/ProductPurchaseFormatFields.kt`, compartido entre el repo Android y el JS), **no
+  subcolección** como en insumos: `getProducts` lo lee media app (POS incluido) y sería una
+  lectura extra por producto, pan propio incluido.
+- `PurchaseFormat.unit` = presentación de venta del producto; `unitsPerPackage` = cuántas trae.
+  `resalePurchaseLine` es el **único** lugar que arma la línea: `quantityReceived` en unidades
+  (lo que se cuenta en tienda), `packagesReceived` + `packageCost` para que `lineTotal` dé el
+  importe exacto del papel, `unitCost = packageCost / unitsPerPackage`.
+- La fila de captura ofrece las presentaciones del proveedor **más "Por unidad"** (latas
+  sueltas). Al reabrir una compra manda el `formatId` de la línea, no la predeterminada de hoy.
+- `purchaseCost`/`supplierId`/`supplierName` quedan como **caché derivada** de la presentación
+  predeterminada (`withDerivedPurchaseReference`): el POS usa `purchaseCost` como costo de venta.
+- **Producto viejo**: `suppliedBy` cae al `supplierId` único si no hay presentaciones (no
+  desaparece de su proveedor), y el formulario lo convierte en su primera presentación al
+  abrirlo (`purchaseFormatsForEditing`) — guardarlo migra sin script.
+- **Proveedor ocasional**: `LooseResaleLineDialog` — producto + presentación existente (de cualquier proveedor) o "Por unidad" + TOTAL pagado. No crea presentación nueva (misma regla que el insumo suelto). La barra de total ahora también sale con proveedor ocasional (`hasSupplier`): antes solo con proveedor del catálogo, y como es el único botón de guardar esas compras no se podían registrar.
+- En plena captura: "Agregar producto" en la sección de reventa y "Definí la presentación" en
+  una fila sin ninguna → `addResaleSupplierFormat` (escritura parcial vía
+  `ProductRepository.updatePurchaseFormats`). El precio pagado actualiza la presentación al
+  registrar (`formatsWithPaidPrices`), igual que con insumos.
+
+**Reventa que caduca** (`Product.isPerishable`, switch "Caduca" en Datos del producto, solo
+reventa). Igual que el insumo perecedero: en la factura aparece en la sección "Vencimientos" con
+lote y fecha, que se guardan en `PurchaseLine.expiryDate/lotCode` y se ven en el detalle de la
+compra. **No hay libro de lotes de terminado ni aviso en el Home** para productos: el aviso de
+insumos sale de `stockLots`, que consume FEFO en `updateBranchStock`; para productos haría falta
+un libro análogo descontado por venta/merma/despacho, y quedó pendiente. `perishableLines` mira
+también los catálogos completos (antes la línea suelta del proveedor ocasional nunca pedía fecha).
+
+**El vencimiento no se pierde al corregir la cantidad.** Las filas del catálogo rearman la línea
+en cada tecla sin conocer lote ni fecha; `updateDraftLine` los conserva de la línea anterior, y
+solo `updateLineExpiry` (la sección Vencimientos) puede cambiarlos o vaciarlos. Antes, anotar la
+fecha y luego tocar la cantidad la borraba en silencio — también en insumos.
+
+**Cómo lo llama el proveedor: `PurchaseFormat.supplierItemName`, en los tres catálogos.**
+Se intentó primero que en un insumo bastara la propia `description`, pero el diálogo que la
+pide dice "Ej: Saco 50 lb": en la práctica esa `description` es el EMPAQUE en materia prima
+igual que en reventa, así que el nombre del proveedor no tenía dónde vivir y la fila de la
+factura no tenía qué mostrar. Ahora es un campo aparte en los tres, con la misma etiqueta
+("Descripción de la presentación") y el mismo orden — el suministro ya venía bien porque
+`IngredientFormScreen` le pasa el `ResalePurchaseFormatDialog` completo; lo que faltaba era el
+diálogo de materia prima. En reventa se persiste como arreglo paralelo
+(`purchaseFormatSupplierItemNames`) y en insumo como campo de su subcolección.
+
+**Se dibuja en las tres filas del catálogo de la factura** (`InvoiceNameLine`, en cursiva y
+azul, arriba del empaque): `IngredientTableRow` (tablet), `IngredientPurchaseRow` (teléfono) y
+la fila de reventa. Las tres sacan la lista de `supplierItemNamesFor(supplierId)`
+(`model/PurchaseSearch.kt`), que a diferencia de `invoiceNamesFor` **no incluye la
+`description`**: el empaque ya va en su propio renglón de la fila y repetirlo arriba no agrega
+nada. Mostrar y buscar quieren cosas distintas — al buscar conviene que enganche con lo que
+sea, al mostrar conviene no decir dos veces lo mismo.
+
+La captura tiene **una sola búsqueda** arriba de materia prima, suministros y reventa
+(`matchesPurchaseSearch`, `model/PurchaseSearch.kt`, test `PurchaseSearchTest`): por nombre del
+catálogo o por esas descripciones de ESE proveedor, sin tildes y por palabras en cualquier orden.
+
 **Código de barras** opcional en `Ingredient.barcode` y `Product.barcode` (el mismo del
 empaque sirve para comprar y para cobrar). `ui/BarcodeField.kt` es el campo reutilizable y
 `ui/BarcodeScanner.kt` el expect/actual: Android usa
@@ -337,22 +515,33 @@ respaldado por insumo. Filtrar es del llamador, no del diálogo. Igual
 `presentation/assets/AssetHistorySync.kt`, que sacó de `FixedAssetViewModel` los efectos
 sobre el activo y el recálculo de contadores: ahora hay dos caminos que escriben historial.
 
-### La vuelta de compras — un desembolso, muchos lugares, varias sucursales
+### Compra rápida — un desembolso, muchos lugares, varias sucursales
 
 Alguien sale una vez por semana y trae una brocha, trapos, una mesita para el teléfono,
 salsa en sobre, fruta y papas — cada cosa de un lugar distinto y para sucursales distintas.
-El modelo de factura tiene la forma equivocada en tres ejes: el proveedor está en el
-encabezado (pero la papa se compra donde esté más barata ese día), la sucursal está en el
-encabezado (pero una vuelta surte a varias), y casi todo lo demás —número de factura,
-crédito, vencimiento, abonos, IVA— no aplica porque es efectivo y papel de cuaderno.
+O al revés: llega el de las gaseosas a tocar la puerta de la panadería. El modelo de factura
+tiene la forma equivocada en tres ejes: el proveedor está en el encabezado (pero la papa se
+compra donde esté más barata ese día), la sucursal está en el encabezado (pero un desembolso
+surte a varias), y casi todo lo demás —número de factura, crédito, vencimiento, abonos, IVA—
+no aplica porque es efectivo y papel de cuaderno.
 
 Mandarlo todo a Gastos tampoco sirve: la fruta y las papas se consumen produciendo, así que
 ahí saldrían del inventario para siempre y quedarían fuera del costo del producto.
 
-**Es el MISMO documento `Purchase`, con `kind = PurchaseKind.MARKET_RUN`.** No una colección
+**Se llama por lo que se hace —anotar rápido— y no por quién se movió.** El nombre anterior
+("vuelta de compras") solo describía salir a comprar; con el proveedor llegando a la puerta,
+el caso más común quedaba sin lugar obvio y los gastos del día terminaban capturándose a mano
+en Gastos, sin inventario y sin comprobante.
+
+**En Firestore el valor guardado sigue siendo `"MARKET_RUN"`.** `PurchaseKind.QUICK` es el
+valor nuevo y `PurchaseKind.isQuick(kind)` acepta los dos — renombrar el dato guardado
+obligaría a migrar documentos para arreglar una etiqueta que el usuario nunca ve. Toda
+comparación va por `Purchase.isQuick`, nunca por `kind ==`.
+
+**Es el MISMO documento `Purchase`, con `kind = PurchaseKind.QUICK`.** No una colección
 paralela: los cuatro `PurchaseLineKind`, el ingreso a inventario, la generación de gastos, la
-foto y la corrección por diferencia al editar o borrar son exactamente los mismos. Un
-`MarketRun` aparte habría duplicado `applyStockForPurchase`, `applyStockDelta`,
+foto y la corrección por diferencia al editar o borrar son exactamente los mismos. Un modelo
+aparte habría duplicado `applyStockForPurchase`, `applyStockDelta`,
 `syncPurchaseSideEffects` y la cascada de borrado — cuatro caminos que mueven inventario, que
 es justo la duplicación que este módulo lleva evitando.
 
@@ -372,27 +561,421 @@ sucursales de la compra.
 - `expensesForPurchase` pone el gasto en la sucursal de la línea: los trapos del restaurante no
   son gasto de la panadería, y el reporte financiero desglosa por sucursal.
 
-**La precisión se decide fila por fila, sin configurar nada.** `MarketRunDraftLine` se anota
-con descripción + monto; pegarle un insumo del catálogo es opcional y es lo único que decide
-el `lineKind` (`toPurchaseLine`): materia prima → inventario, suministro → inventario + gasto,
-nada → solo gasto. Obligar a elegir catálogo por renglón haría que la vuelta no se registre
-nunca, que es peor que registrarla sin inventario. La fila dice en pantalla si entra al
-inventario o es "solo gasto" — es la diferencia que el usuario eligió y esconderla la vuelve
-invisible hasta que el conteo no cuadra.
+**La precisión se decide fila por fila, sin configurar nada.** `QuickPurchaseDraftLine` se
+anota con descripción + monto; pegarle un insumo o un producto de reventa es opcional y es lo
+único que decide el `lineKind` (`toPurchaseLine`): materia prima → inventario, suministro →
+inventario + gasto, reventa → inventario de tienda, nada → solo gasto. Obligar a elegir
+catálogo por renglón haría que la compra no se registre nunca, que es peor que registrarla sin
+inventario. La fila dice en pantalla si entra al inventario o es "solo gasto" — es la
+diferencia que el usuario eligió y esconderla la vuelve invisible hasta que el conteo no cuadra.
+
+**La reventa se ofrece desde `allResaleProducts`, no desde `supplierResaleProducts`.** Aquél
+solo se llena en `selectSupplier` y una compra rápida no tiene proveedor: mientras se usó ése,
+el picker recibía siempre una lista vacía y las tostadas compradas en el mercado caían como
+gasto suelto sin entrar nunca al inventario de tienda.
+
+**La categoría de gasto es POR FILA** (`QuickPurchaseDraftLine.expenseCategory`), no una sola
+para todo el desembolso: una salida trae gasolina (TRANSPORTE) y trapos (OTROS), y con una
+categoría única el reporte contesta "cuánto" pero nunca "en qué". Solo se pide donde aplica —
+la materia prima y la reventa son inventario y no generan gasto.
 
 **El monto tecleado es el TOTAL de la fila**, no el precio unitario ("las papas me costaron
 Q25", no "Q5 la libra"). Se guarda dividido en `unitCost` para que `lineTotal` —la fórmula
-única del importe— devuelva exactamente lo tecleado.
+única del importe— devuelva exactamente lo tecleado. La **cantidad muestra la unidad base del
+insumo** cuando hay catálogo detrás: sin eso entraba 1 lb de sandía donde se compraron 20.
 
-La vuelta **nace saldada** (`PurchaseStatus.PAID`, sin `dueDate`): es efectivo del momento, no
-genera cuenta por pagar. `saveMarketRun` reutiliza `applyStockForPurchase` y
+Nace **saldada** (`PurchaseStatus.PAID`, sin `dueDate`): es efectivo del momento, no genera
+cuenta por pagar. `saveQuickPurchase` reutiliza `applyStockForPurchase` y
 `syncPurchaseSideEffects` sin camino de escritura propio.
 
-**En la lista** hay pestañas "Facturas" / "Vueltas" (`PurchaseKind`), y solo aparecen cuando ya
-existe alguna vuelta: quien nunca hizo una no debería tener que entender qué es antes de ver
-sus facturas. El punto de entrada a la primera está en el TopAppBar. Se separan porque son dos
-preguntas distintas —"¿a quién le debo?" vs "¿en qué se fue la semana?"— y mezcladas los KPIs
-de cuentas por pagar dejan de significar algo. Lógica pura con tests en `MarketRunLineTest`.
+**Corregir una compra rápida tiene su PROPIA ruta** (`purchases/quick/{purchaseId}`), no
+`PurchaseEdit`: aquel formulario es el de la factura, no sabe de lugar ni de sucursal por
+línea, y reabrir ahí una compra rápida pedía proveedor y escondía justo sus datos.
+`saveQuickPurchase` sirve al alta y a la corrección; el inventario se corrige por diferencia
+con el mismo `applyStockDelta` de la factura, y `paidAmount` sigue al total (si quedara el
+viejo, corregir el monto dejaría un saldo que nadie debe). **El `purchaseId` lo manda la
+pantalla**, no se deduce de `editingPurchase`: el VM es singleton y abrir una corrección y
+salirse sin guardar habría hecho que la siguiente compra nueva sobreescribiera aquélla.
+
+**En la lista** hay pestañas "Facturas" / "Compras rápidas" (`Purchase.isQuick`), **siempre
+las dos**. Se separan porque son dos preguntas distintas —"¿a quién le debo?" vs "¿en qué se
+fue la semana?"— y mezcladas los KPIs de cuentas por pagar dejan de significar algo.
+
+La de compras rápidas es de **consulta y corrección, no de alta**: el FAB sale solo en
+"Facturas". Una compra rápida se anota donde salió el dinero —el acceso de Operaciones, o la
+caja abierta del POS—, porque eso es lo que decide de qué gaveta se descuenta; un alta desde
+Compras no tiene forma de saberlo y nacía siempre como caja general, que es exactamente el
+faltante de caja que nadie podía explicar. La pestaña **no se quitó** porque es el único lugar
+donde se ven completas: las líneas que entran a inventario no generan `Expense`, así que no
+aparecen en Gastos, y un monto mal tecleado en una compra de tostadas no tendría dónde
+corregirse. Lleva una línea que dice dónde se registran, para que la ausencia del FAB no se
+lea como un bug. Una compra rápida se identifica por lo que trae (`Purchase.listTitle`, que
+sale de `itemNames` ya denormalizado) y no como "Sin proveedor", que las hacía ver todas
+iguales. Lógica pura con tests en `QuickPurchaseLineTest`.
+
+### Anotar un gasto: primero QUÉ, después el formulario que corresponde
+
+`QuickPurchaseFormScreen` es la **única** pantalla desde la que se registra que salió dinero.
+La abren el módulo "Anotar gasto" de Operaciones, el FAB de Gastos y la caja abierta del POS;
+lo único que cambia entre las tres es si viene `sessionId`.
+
+Antes eran dos pantallas que hacían casi lo mismo: `CashExpenseFormScreen` sabía de caja pero
+**no tocaba inventario nunca**, y la compra rápida sabía de inventario pero no de caja. El
+usuario tenía que elegir cuál abrir antes de saber qué iba a anotar, y un mismo desembolso con
+una escoba y un galón de desinfectante no cabía en ninguna de las dos. `CashExpenseFormScreen`
+se borró; `ExpenseViewModel` perdió su camino de alta (`saveCashExpense`) por lo mismo —
+dejarlo habría sido un segundo lugar desde donde escribir gastos, y el que menos sabía.
+
+- **Escribe un `Purchase` con `kind = QUICK`, siempre**, aunque no toque inventario. No es
+  ceremonia: es el mismo camino de escritura, corrección por diferencia y borrado que ya
+  estaba probado, y un segundo modelo de "gasto que a veces mueve stock" habría duplicado
+  `applyStockForPurchase`, `applyStockDelta` y `syncPurchaseSideEffects`. Los `Expense` del mes
+  salen de `expensesForPurchase` como con cualquier factura.
+#### El primer paso pregunta la clase de cosa (`CaptureKindStep`)
+
+Se pregunta **antes de mostrar un solo campo**, porque la respuesta cambia qué hay que llenar:
+un taxi son tres datos, y una entrega de gaseosas es una factura con proveedor, catálogo,
+presentaciones e IVA. Mientras fue un solo formulario para todo, el de la factura **no cabía**
+(no había forma de elegir el catálogo del proveedor) y el del taxi pedía cantidad y unidad,
+que para un taxi no existen.
+
+| Opción | A dónde va |
+|---|---|
+| **Un gasto** | El editor de renglones de abajo. Varias cosas en un mismo desembolso, todas gasto. |
+| **Insumos de un proveedor** | `PurchaseFormScreen` con `sessionId` — el formulario de Compras tal cual. |
+| **Productos para revender** | Lo mismo. Se oculta si `usesResalePurchases` está apagado: el catálogo de reventa del proveedor llegaría vacío. |
+
+Las dos de inventario van a la **misma** pantalla porque la factura del proveedor puede traer
+insumos y reventa a la vez y ahí ya están los dos catálogos; se ofrecen por separado igual
+porque el usuario no piensa "voy a capturar una factura", piensa "llegó el de las gaseosas".
+Se ocultan sin `RECEIVE_STOCK` en vez de fallar después, que sería peor: ya habría capturado
+la factura entera.
+
+**Las opciones de `CaptureKindStep` salen juntas o no salen.** Cuáles hay depende de la
+configuración de la empresa (`usesResalePurchases`), que es una lectura de red; las otras dos
+tarjetas se dibujan con datos locales. Mientras la configuración se leía **al final** de la
+cadena `loadFormData` (sucursales → proveedores → insumos → organización), "Productos para
+revender" aparecía sola un par de segundos después, como si el toque anterior la hubiera
+invocado. Ahora esa lectura va en su propia corrutina, en paralelo, y el paso espera a
+`purchaseFlowsLoaded` antes de dibujar las de inventario. Con el ViewModel ya cargado —el caso
+normal, porque es singleton— no llega a verse.
+
+#### `PurchaseFormScreen` en modo "pagada de caja" (`sessionId`)
+
+Es **la misma pantalla de Compras**, no una copia liviana: la factura que trae el repartidor
+tiene proveedor, catálogo, presentaciones e IVA igual que cualquier otra, y una segunda
+implementación se queda atrás en cuanto ésta cambie. Con `sessionId`:
+
+- `purchaseStatus` se fuerza a `PAID` y **el selector de estado desaparece**. Dejar "Por
+  recibir" ahí permitiría descontar el efectivo de una compra que no entró al inventario.
+- **No se ofrece crédito** (`InvoiceHeaderFields(showCredit = false)`): no hay días que teclear
+  sobre algo que ya se pagó, y hacerlo generaría una cuenta por pagar que nadie debe.
+- **La sucursal se fuerza a la de la caja** y deja de ser un paso. Si se pudiera cambiar, el
+  efectivo saldría de una gaveta y la mercadería entraría al inventario de otra sucursal, y las
+  dos quedarían mal sin que nada lo señale.
+- `savePurchase` estampa la atribución y llama `syncPurchaseCashMovement` — el mismo helper de
+  la compra rápida, por eso dejó de llamarse `syncQuickPurchase...`. El efectivo sale de la
+  gaveta **aunque lo comprado sea inventario y no gasto**: lo que se cuadra al cierre es el
+  dinero, no el destino contable.
+- La ruta es `purchases/form?sessionId={sessionId}`. Query param y no segmento, para no chocar
+  con `PurchaseEdit` (`purchases/form/{purchaseId}`).
+
+#### El editor de renglones (rama "Un gasto")
+
+- **Cada cosa se escribe UNA vez: el renglón CRECE en su lugar.** Hubo una versión con dos
+  campos en pantalla y un diálogo detrás para el resto, y el diálogo volvía a pedir qué
+  compraste, cuánto costó y el tipo de gasto. Aunque llegaban prellenados, **leerlo dos veces
+  con las mismas etiquetas se entiende como que hay que escribirlo dos veces** — fue lo primero
+  que se reportó al probarlo. Ahora `QuickPurchaseLineEditor` es una tarjeta editable: qué y
+  cuánto siempre; el tipo de gasto solo si el renglón se vuelve gasto; cantidad y vencimiento
+  solo si entra a inventario; sucursal y lugar detrás de "Otra sucursal o lugar". Lo único que
+  sigue siendo diálogo es **elegir del catálogo**, que es lo único que no se puede teclear.
+- **Este editor NO elige catálogo.** Tuvo chips de "Solo gasto / Insumo / Reventa" y sobraban:
+  la clase de cosa ya se decidió en `CaptureKindStep`, así que volver a ofrecerla es preguntar
+  dos veces lo mismo — fue el segundo reporte al probarlo. Comprar inventario abre el
+  formulario de Compras; acá todo renglón nuevo es gasto.
+- **Lo único que queda del catálogo es conservar lo viejo.** Al corregir una compra rápida
+  anterior, los renglones que sí venían pegados a un insumo o producto se muestran como un
+  hecho (no como una opción) y se conservan. Si el editor los ignorara, guardar convertiría el
+  renglón en gasto puro y `applyStockDelta` le revertiría el inventario **en silencio**.
+- **Siempre hay un renglón vacío en pantalla.** Un formulario que arranca sin nada obliga a
+  tocar "agregar" antes de poder escribir. Los renglones sin nombre o sin monto se descartan al
+  guardar (`filled`) en vez de bloquear el botón: el renglón en blanco del final es parte del
+  formulario, no un error.
+- **Proveedor opcional en el encabezado** (`SupplierField`): texto libre que ofrece pegarse al
+  catálogo si coincide. Al de gaseosas conviene atribuirle la compra —vuelve todas las
+  semanas—; a la ferretería de una sola vez no, porque el catálogo termina lleno de nombres que
+  nadie vuelve a tocar. Mismo criterio que el proveedor ocasional de la factura (`supplierId`
+  vacío con `supplierName` lleno). El lugar por línea sigue siendo el override.
+- El "sin elegir" del selector de sucursal por línea **nombra la sucursal** (`noneLabel`) en vez
+  de decir "La de siempre": el usuario no tiene por qué acordarse de cuál eligió arriba, y una
+  opción que no dice qué hace se lee como un error.
+- **La caja no se elige: sale del contexto.** Con `sessionId` el desembolso se carga a esa
+  gaveta; sin él es caja general. Un desplegable de cajas es una forma de marcar la equivocada
+  sin darse cuenta, y ese error lo paga la cajera de la otra gaveta.
+- El subtítulo de "Compras" pasó a *"Facturas de proveedor"*: las compras rápidas ya no se
+  crean ahí.
+
+#### De qué bolsa salió: `Purchase.paidFrom` / `cashSessionId` / `cashRegisterName`
+
+Vive en el **encabezado de la compra** y no solo en los `Expense` que genera, porque una compra
+rápida puede no generar ninguno: si todo lo que trae es materia prima o reventa es inventario, y
+no hay gasto donde colgar la atribución. El efectivo igual salió de la gaveta y al cuadrar tiene
+que faltar. `expensesForPurchase` copia los tres campos (y `invoicePhotoUrl` → `Expense.photoUrl`)
+a cada gasto que produce.
+
+`syncQuickPurchaseCashMovement` deja el `CashMovement` que descuenta la gaveta:
+
+- **Al corregir escribe la DIFERENCIA, no reescribe el movimiento.** Mismo criterio que
+  `applyStockDelta`: un movimiento reescrito borraría del historial de la caja que el monto
+  cambió, que es justo lo que alguien quiere ver cuando el cuadre no da. Si el total bajó, la
+  diferencia entra como `DEPOSIT` — ese efectivo nunca salió. `CashSessionRepository` no expone
+  borrar ni editar movimientos, a propósito.
+- **La gaveta se resuelve del `sessionId` de la pantalla y, si no viene, del guardado en la
+  compra.** Corregir desde Compras no trae sesión; sin ese fallback la corrección no habría
+  ajustado ninguna caja.
+- **Si esa caja ya cerró, la atribución NO se reescribe** (`drawerLocked`): el movimiento vive
+  dentro de un cierre que alguien firmó, y volver la compra "caja general" dejaría ese faltante
+  sin nada que lo explique. Se corrige la compra, no se toca el efectivo, y se avisa.
+- El aviso viaja en `state.message` y no en `error`: la pantalla navega hacia atrás apenas ve
+  `isSaved`, y `resetForm()` limpia `error` pero no `message`.
+- El concepto del movimiento se arma de las **líneas**, no de `purchase.listTitle()`: los
+  nombres se denormalizan al escribir el encabezado, así que el objeto en memoria los trae
+  vacíos y todos los movimientos habrían quedado como "Compra rápida".
+
+#### No se paga de una gaveta con dinero que no está en ella
+
+`assertCashAvailable` corta el guardado —en la compra rápida y en la factura pagada de caja—
+cuando el monto pasa el efectivo de la sesión. La cajera lleva vendido Q300 y quiere anotar un
+gasto de Q325: ese billete no existe. Dejarlo pasar no "documenta un faltante", **inventa
+uno**: el cuadre pediría devolver dinero que nunca entró y el reclamo cae sobre quien anotó de
+buena fe.
+
+- El tope es `CashSession.expectedCashNow` (fondo + ventas en efectivo + movimientos), extraído
+  al modelo porque la fórmula estaba copiada en cuatro pantallas —cierre, cuadre sorpresa (dos
+  veces) y traslado— y ahora además decide si alcanza el dinero. `expectedCash`, el campo, solo
+  se llena al cerrar: mientras la sesión está abierta vale 0 y no sirve.
+- Se valida contra la sesión **recién leída**, no la que traía la pantalla: entre abrir la
+  captura y guardar pudo entrar una venta o salir un retiro. Mismo criterio que `addPayment`.
+- Al corregir, lo que esa misma compra ya le descontó a esa gaveta **vuelve a contar como
+  disponible**: sin eso, subir de Q50 a Q60 se compararía contra una caja a la que ya se le
+  quitaron los Q50.
+- La UI apaga el botón y dice cuánto hay; el ViewModel revalida y lanza **antes de escribir
+  nada**, así un rechazo no deja compra a medio guardar ni inventario movido.
+
+#### Del faltante de la gaveta al documento que lo explica
+
+`CashMovement.sourcePurchaseId` liga el movimiento con la compra que lo causó. Sin él, el
+renglón de la caja era un texto suelto: la cajera veía "-Q325" y no tenía a dónde ir.
+
+- `CashSessionDetailScreen` ("Movimientos de la caja", desde el menú de la caja abierta en el
+  POS) muestra **"Corregir" y "Eliminar"** en cada gasto, mientras la sesión siga OPEN. Son dos
+  botones y no una fila tocable: una de las dos acciones devuelve efectivo y revierte
+  inventario, y un toque ambiguo deja al usuario adivinando cuál va a pasar.
+- **Quien opera la caja puede corregir y borrar lo de su propia gaveta sin los permisos de
+  Compras** (`canManageOwnDrawerPurchase`): compra rápida + atribuida a una caja + esa caja
+  todavía abierta. Es el error del día —325 en vez de 32.50, o dinero que no salió de ahí— y
+  exigir `EDIT_PURCHASES` obliga a llamar a alguien antes de cerrar, con lo que el desvío
+  termina cuadrándose a mano. La guarda vive en el ViewModel (`saveQuickPurchase` y
+  `deletePurchase`), no en la ruta, porque es la ruta la que no puede saber de qué gaveta se
+  trata. Con la caja cerrada nadie la toca: ese cierre ya lo firmó alguien.
+- **Nada se borra en silencio**: corregir deja un movimiento "Corrección: X" y eliminar uno
+  "Eliminado: X" en el historial de la caja.
+- El formulario rápido **se niega a corregir una factura** (`wrongKind`): se llega ahí desde un
+  movimiento, que no distingue qué clase de compra pagó el efectivo, y `saveQuickPurchase`
+  trataría una INVOICE como alta — creando una compra nueva y dejando la vieja intacta, con el
+  inventario contado dos veces.
+- El botón "Cerrar sesión" que tenía esta pantalla **se quitó**: hace lo mismo que "Cerrar
+  caja" del POS, que es el único lugar desde donde se llega acá.
+- **`deletePurchase` devuelve el efectivo** con el mismo `syncPurchaseCashMovement` que lo
+  descontó, pasando total nuevo 0. Un reverso escrito aparte termina usando otra cantidad y
+  deja la caja cuadrando contra un gasto que ya no existe. Con la caja cerrada no se toca y se
+  avisa.
+
+#### La caja que nadie cerró se cierra sola
+
+`CashSessionRepository.autoCloseStaleSessions(companyId, todayStartMillis)` cierra las sesiones
+OPEN de **días anteriores** con `countedCash = expectedCashNow` — nadie contó, así que se asume
+pago exacto. Una caja abandonada bloquea su registradora (no se puede abrir otra sesión ahí) y
+arrastra las ventas de ayer al cuadre de hoy.
+
+- **`CashSession.autoClosed` marca que la cerró el sistema.** Sin ese campo, el reporte
+  mostraría una caja perfectamente cuadrada y nadie sabría que nunca se contó — peor que un
+  faltante declarado. Las notas de la sesión lo dicen también, en texto.
+- **Solo días anteriores**, nunca la de hoy: un turno puede cruzar la medianoche.
+- Se dispara al entrar al POS (`CashSessionViewModel.load`), **antes** de observar las sesiones
+  abiertas, y nunca lanza: que falle no puede impedir abrir caja. Como no hay servidor que
+  corra por reloj, una caja abandonada sigue abierta hasta que alguien entre al punto de venta
+  — tarde, pero antes de que estorbe. **Un job en Cloud Functions a hora fija queda pendiente.**
+- El filtro por fecha va **en memoria**: `openedAt` puede venir como `Timestamp` en sesiones
+  viejas y como número en las nuevas, y Firestore ordena por tipo antes que por valor. Mismo
+  motivo por el que `getPurchases` no filtra en el servidor.
+- Quien llega a abrir caja ve un snackbar diciendo cuántas se cerraron y que no se contaron.
+
+**Aviso de efectivo insuficiente en `PurchaseTotalsBar`: renglón propio, sin `weight`.** Vivía
+dentro de la columna del botón con `Modifier.weight(1f)`; la barra se mide sin alto fijo, así
+que el texto se estiraba hasta ocupar la pantalla y el formulario de arriba quedaba en cero
+alto — se veía "corrido para arriba y trabado" justo cuando la factura pasaba lo que había en caja.
+
+#### El cierre muestra QUÉ salió (`CashCloseMovementsCard`)
+
+`CashSessionCloseScreen` decía "Gastos y retiros Q 385" sin detalle, y nadie acepta un faltante
+que no sabe de dónde viene. Entre el resumen y el conteo va una tarjeta con un renglón por
+salida (hora · qué · proveedor · quién · monto) y miniatura de 40dp de la foto del comprobante que
+se abre con `ZoomableImageDialog`. Primeros 4 y "Ver las N salidas" — el cierre es para contar,
+no para leer. Entradas que no son ventas, debajo y enteras.
+
+- Renglones de `cashSessionDetailItems` (`model/CashMovementTotals.kt`), mismo recorrido que
+  `cashMovementTotals`: cada corrección se pega a su gasto ("corregido") y lo eliminado (neto 0)
+  no se lista, así la suma de la lista es exactamente el total del resumen. Test en
+  `CashMovementTotalsTest`.
+- El concepto y la foto viven en la compra, no en el movimiento: `CashSessionViewModel` lee las
+  compras de los `sourcePurchaseId` en paralelo (`movementPurchases`). Si una falla, el renglón
+  cae al texto del movimiento.
+
+#### Anotar ingreso (`CashIncomeDialog`)
+
+Existía el camino para pagar un gasto de la gaveta pero no el inverso, y el dinero que entra
+pasa igual de seguido: la caja central manda cambio a media mañana, o alguien repone lo que
+sacó. Sin registrarlo, al cuadrar aparece un **sobrante** que nadie explica — y un sobrante
+inexplicado se investiga igual que un faltante.
+
+- Se abre desde el menú de la caja abierta en el POS. Monto + razón + origen.
+- **El origen son dos platas distintas**, no una etiqueta: lo que baja de la caja central ya
+  era del negocio y solo cambió de bolsillo; lo que puso alguien de su cuenta todavía no. Se
+  guardan con dos tipos que el modelo YA tenía —`FUND_ADDITION` ("De caja general") y `DEPOSIT`
+  ("Otros")— en vez de un campo nuevo, así el cuadre y el cierre del día los suman sin
+  enterarse del cambio.
+- **No es un traslado entre cajas**: eso es `CashTransferDialog`, que escribe los dos
+  movimientos espejo para que el dinero no aparezca duplicado. Acá el otro lado no es una
+  gaveta del sistema.
+- Al guardar se recarga el POS: el efectivo esperado cambió, y de ese número cuelga el tope de
+  lo que se puede pagar de la caja.
+
+#### "Movimientos de caja" no es un resumen de la sesión
+
+Mientras la caja está abierta, la pantalla contesta **una** pregunta: qué entró y qué salió que
+no fue una venta. El fondo inicial y las ventas del turno se sacaron de ahí — eso es el cuadre,
+y mezclarlo dejaba un resumen a medias compitiendo con el cierre. `SessionHeaderCard` **solo se
+dibuja con la sesión CERRADA**, porque ahí la misma pantalla es el comprobante del cierre (es a
+donde navega `CashSessionCloseScreen.onClosed`). El título también cambia: "Movimientos de
+caja" abierta, "Detalle de sesión" cerrada.
+
+#### Totales de la caja: `model/CashMovementTotals.kt` (lógica pura, con tests)
+
+Nada se borra del historial de una gaveta: eliminar o corregir escribe un movimiento que
+compensa. Es correcto para auditar, pero rompe el conteo ingenuo — un gasto de Q100 eliminado
+deja DOS renglones, y sumar negativos por un lado y positivos por el otro diría "gastos Q100,
+ingresos Q100" el día que no se movió nada.
+
+`cashMovementTotals` agrupa **cada ajuste con el movimiento que corrige** (`netCashEffect`) en
+vez de contarlo aparte. El vínculo es `sourcePurchaseId` para los gastos —cuando se escriben, el
+id del movimiento original no está a mano— y `sourceMovementId` para los ingresos, que no tienen
+documento detrás. `isAdjustment()` se reconoce por el prefijo del motivo ("Eliminado:" /
+"Corrección:"), y no por un flag, porque el texto ya tenía que decirlo y un booleano aparte
+podría contradecirlo.
+
+**Un ajuste huérfano sigue contando** (su original ya no está: dato viejo, o borrado a mano).
+Filtrar por `isAdjustment()` lo descartaba y escondía efectivo que de verdad se movió — lo
+atrapó `CashMovementTotalsTest`, no la prueba en dispositivo.
+
+#### Corregir y eliminar un ingreso
+
+`CashSessionViewModel.adjustMovement(...)` **escribe la diferencia, no reescribe el original** —
+igual que la corrección de un gasto y que `applyStockDelta`. `newAmount = 0` lo revierte entero.
+El tipo del ajuste se elige para que el neto dé exactamente el monto nuevo (sube → mismo sentido
+que el original; baja → contrario).
+
+- La fila muestra **"Corregido a Q X"** cuando el neto difiere del monto anotado: el original no
+  se reescribe, así que sin esa línea seguiría mostrando el monto viejo y nadie entendería por
+  qué no cuadra.
+- **Un traslado entre cajas no se toca desde acá**: su espejo vive en la otra gaveta, y
+  compensarlo solo de este lado haría aparecer dinero de la nada en la otra caja. Se deshace con
+  otro traslado. Un ajuste de cuadre sorpresa tampoco: documenta un conteo ya firmado.
+- El gasto se corrige **donde se anotó** (tiene renglones, catálogo y foto); el ingreso es un
+  monto y una razón, así que se corrige en un diálogo sin cambiar de pantalla.
+
+#### Detalles de la lista de movimientos
+
+- **`CashMovementType.listLabel(movement)`** en vez de `label(type)`: "Depósito" no dice nada
+  cuando el dinero volvió porque se eliminó un gasto —quien lee se pregunta quién depositó y
+  por qué—, así que sale "Devuelto — gasto eliminado" / "Ajuste — gasto corregido". El texto se
+  deduce del `reason`, que ya distingue los dos casos.
+- **Un gasto ya revertido no se corrige ni se borra otra vez**: la fila sigue visible (así se ve
+  qué pasó) pero sin botones y marcada "Ya eliminado". Se detecta buscando un movimiento con el
+  mismo `sourcePurchaseId` cuyo motivo empieza con "Eliminado:" — sin campo nuevo. Borrar dos
+  veces devolvería el dinero dos veces.
+- El borrado lo hace `PurchaseViewModel`, que no conoce esta lista: `CashSessionDetailScreen`
+  observa su `isDeleted` y **recarga** (`observeSession`). Sin eso el movimiento de devolución
+  aparecía solo al salir y volver a entrar, y eliminar parecía no haber hecho nada.
+- **`LoadingOverlay` en las tres esperas del flujo**, no solo en la carga: abrir una corrección
+  (leer la compra y sus líneas), guardar un gasto (compra + líneas + inventario + gastos del mes
+  + movimiento de caja) y eliminarlo (revertir todo eso). Son varios segundos cada una contra
+  Firestore, y un botón deshabilitado no alcanza como señal porque la pantalla se ve igual: se
+  lee como que el toque no hizo nada, **y el segundo toque es lo que produce el registro o el
+  borrado doble** que las guardas después tienen que atajar.
+
+#### `POSUiState.isCheckingOut`, separado de `isLoading`
+
+El diálogo "Procesando venta… descontando inventario" colgaba de `isLoading`, que sube también
+en `POSViewModel.load()` — o sea **cada vez que se vuelve al POS**, por ejemplo al terminar de
+anotar un gasto. Anunciaba una venta que no existía. `isCheckingOut` se enciende solo en el
+cobro.
+
+#### Barras inferiores y edge-to-edge
+
+Desde Android 15 la app dibuja de borde a borde y `Scaffold` **no** aplica insets al
+`bottomBar`: el botón de guardar quedaba debajo de los botones del teléfono, sin poder tocarse.
+Toda barra inferior fija lleva `navigationBarsPadding()` — hoy la de `QuickPurchaseFormScreen` y
+`PurchaseTotalsBar`. El resto de la app todavía no lo aplica en ningún lado; conviene revisarlo
+al tocar cada pantalla con barra fija.
+
+#### Dos permisos, porque son dos riesgos distintos
+
+| Permiso | Qué habilita |
+|---|---|
+| `ADD_VARIABLE_EXPENSE` | Anotar desde la caja que se está operando (POS). Sale de su gaveta y le tiene que faltar al cuadrar. |
+| `ADD_GENERAL_EXPENSE` | Anotar de caja general — el acceso de Operaciones y el FAB de Gastos. No le descuenta a nadie. |
+
+La ruta `Screen.CashExpenseForm` elige cuál pedir según venga o no `sessionId`. Con un solo
+permiso, una cajera podía cargar a "caja general" un gasto que sí salió de su gaveta, y ahí el
+faltante del cierre no lo explicaba nada. `ExpenseForm` (editar un gasto viejo) pide
+`ADD_GENERAL_EXPENSE`: es trabajo de administración.
+
+#### Categorías: dos listas curadas, un solo enum
+
+`ExpenseCategory` sigue siendo una sola lista para que el reporte sume por un eje, pero **no se
+ofrece entera en ningún formulario**: `FIXED_EXPENSE_CATEGORIES` (Alquiler, Planilla, Servicios,
+Seguridad, Depreciación…) en Costos Fijos, `OPERATIONAL_EXPENSE_CATEGORIES` (Limpieza, Empaque,
+Herramientas, Cocina/Cafetería, Papelería, Uniformes, Mantenimiento, Transporte, Otros) al
+anotar el gasto del día. Mismo criterio que `INGREDIENT_CATEGORIES` vs `SUPPLY_CATEGORIES`, y
+las operativas están calcadas de `SUPPLY_CATEGORIES` a propósito: quien anota "cloro" y quien da
+de alta el insumo cloro clasifican la misma cosa.
+
+Las entradas viejas **no se borran del enum** —los documentos guardados las traen—, y un
+dropdown que recibe una categoría fuera de su lista la ofrece igual, para poder corregirla en
+vez de mostrar la fila en blanco (mismo criterio que `usableInRecipes(keepIds)`).
+`ExpenseFormScreen` sí ofrece la lista completa: solo edita gastos que ya existen.
+`ExpenseCategoryListsTest` verifica que ninguna categoría quede sin formulario que la ofrezca.
+
+**No hay categoría "restaurante"**: el restaurante o la cafetería entran como **sucursal**, así
+que sus gastos ya se separan solos y lo único que faltaba era el renglón de en qué se fueron —
+para eso está `COCINA`.
+
+### Costos Fijos — módulo del dueño, no sección de Gastos
+
+`FixedBudgetItem` es el compromiso mensual (renta, luz, internet, teléfono): lo revisa el
+dueño, no quien anota el gasto del día. Vivía como una sección arriba de la lista de Gastos y
+**se sumaba al mismo total**, así que el mes se veía gastado desde el día 1 mezclando un plan
+con desembolsos reales.
+
+Ahora es módulo propio en Administración, gateado por `MANAGE_FIXED_BUDGET`, y la lista de
+Gastos muestra un solo total: lo que de verdad se gastó en el período. Por lo mismo
+`Screen.ExpenseList` ya no pide `MANAGE_FIXED_BUDGET` — quien solo administra los fijos no
+necesita entrar ahí.
+
+**Sigue siendo un catálogo que no genera nada**: nunca se convierte en `Expense` ni llega a
+ningún reporte, así que no hay con qué comparar lo planeado contra lo ejecutado. Pendiente.
 
 ### Proveedor ocasional y línea suelta
 
@@ -491,7 +1074,9 @@ Fila de KPIs (Facturas · Comprado · Por pagar · Vencido · Por recibir) calcu
 **Aviso**: `AlertTarget.EXPIRING_INGREDIENT` sale de `expiringBefore(now + 15d)` sobre los lotes con saldo — un saco ya consumido tiene el lote agotado y deja de avisar solo. Antes colgaba del encabezado de la compra y seguía alertando por mercadería que ya no estaba. El detalle del insumo muestra los lotes en orden de consumo, en rojo a 7 días o menos.
 
 ### Proveedores
-CRUD simple (nombre, contacto, teléfono, email, dirección, notas).
+CRUD simple (nombre, contacto, teléfono, email, dirección, notas) **+ historial de compras**:
+totales, qué se le compra ya sumado y las últimas facturas, cada una tocable. Ver "La ficha
+del proveedor contesta..." en el módulo de Compras.
 
 ### Preparaciones + Lotes (`Preparation` / `PreparationBatch`)
 
@@ -648,6 +1233,277 @@ Cancelar es lo correcto para un pedido real — deja el rastro de que existió. 
 
 **Comparación de fechas**: todo "mismo día" usa `Instant.toLocalDateTime(tz).date` (no millis) para tolerar drifts TZ.
 
+### Material de planta — lo que la receta no explica (`PlantIssue`)
+
+**Se llama "Anotar material", no "Sacar material".** Lo que se nombra es el REGISTRO, no
+la extracción: "sacar" describe el acto de llevarse algo y deja a quien deja constancia
+como sujeto de sospecha — justo al revés del incentivo que el módulo necesita. Paralelo
+exacto a "Anotar gasto", que ya vive en la misma sección de Operaciones y nadie lee como
+"gastar plata de la empresa". El título del diálogo es "Material usado en planta" y el
+botón de confirmar dice "Anotar".
+
+`completeLot` solo descuenta lo que el % del panadero justifica (gramos por pieza ×
+piezas). La harina que se le pone a la mesa para bolear, la manteca de las bandejas y el
+espolvoreo se iban en silencio, y el faltante recién aparecía en el conteo físico —
+cuando ya no había forma de saber si fue la mesa, un mal pesado o un robo.
+
+**El empaque completo es el DEFAULT, no la única opción.** "Saqué un saco" es un hecho que
+el panadero verifica sin balanza; "gasté 3.5 lb enharinando" es una estimación que a las
+4am nadie hace bien, y del empaque sale el ritmo de rotación. `formatStockDisplay` ya
+mostraba el stock en presentaciones ("5 × Saco 100 lb"), así que la app ya pensaba en sacos.
+
+Pero **la cantidad suelta es una opción pareja, no una escondida detrás de la otra**: el
+dueño agarra 8 oz de manteca del bote ya abierto, y obligarlo a declarar "1 bote" para
+poder anotarlo lo haría mentirle al inventario por un dato que él mismo quiere correcto.
+Dos chips —"Empaque completo" / "Cantidad suelta"— con el empaque preseleccionado.
+
+- **La unidad de la cantidad suelta sale del insumo** (`Ingredient.looseUnitOptions()`),
+  no de una lista fija: la manteca se agarra en onzas y la harina en libras. Se filtran
+  las que no convierten a la unidad del stock — ofrecer una unidad que después rechaza el
+  vale es peor que no ofrecerla. `looseToBaseUnitOrNull` hace la conversión y devuelve
+  null cuando no hay puente, igual que `packagesToBaseUnitOrNull`. **Sin esa conversión,
+  8 oz de manteca descontaban 8 lb** — 16 veces de más.
+- **`looseQuantity` + `looseUnit` guardan lo tecleado**, no solo el equivalente en unidad
+  base. Mismo criterio que `RecipeComponent.inputQuantity`: el dato canónico es
+  `quantityInBaseUnit`, pero sin el original un vale de "8 oz" se relee como "0.5 lb" y
+  deja de parecerse a lo que la persona anotó. Por eso `kardexNote` incluye SIEMPRE la
+  cantidad — la columna del Kardex muestra la unidad base.
+
+**El descuadre se acepta a sabiendas y está acotado.** El saco sale del sistema el día que
+se abre y en la mesa dura tres, así que el inventario dice 0 mientras hay medio saco
+abierto. Lo que lo hace tolerable: el descuadre es de **un empaque abierto por insumo** —un
+número conocido— y **el hueco entre un vale y el siguiente ES el dato que se quería**
+("¿cada cuánto toman otro saco?"). No hace falta que nadie declare cuándo se terminó, que
+es justo el segundo registro diario que no se iba a hacer. Un modelo de dos baldes (bodega
+→ "en uso", se gasta al declararlo terminado) daría inventario exacto y se puede montar
+encima después sin migrar nada, porque los vales ya quedan registrados.
+
+- **`companies/{c}/plantIssues/{id}`, colección plana.** Documento propio y no solo un
+  `StockMovement` por la misma razón que `Purchase` lo es: el Kardex vive en subcolección
+  por insumo, y contestar "cada cuánto sale un saco de harina suave" leyendo N
+  subcolecciones no escala. Plana, como `branchStocks` y `stockLots`.
+- **El vale NO mueve stock por su cuenta.** `PlantIssueViewModel` escribe el documento y
+  después llama `IngredientRepository.updateBranchStock`, que ya es el único cuello de
+  botella por el que pasan los cuatro caminos que bajan inventario (y que mantiene el
+  libro FEFO). Meterlo dentro del repositorio habría creado el quinto camino, que es
+  exactamente lo que ese método existe para evitar. El documento se escribe **antes** de
+  mover stock, igual que `receivePurchase`.
+- **Tipo de Kardex propio: `CONSUMO`** (`PLANT_ISSUE_MOVEMENT_TYPE`), no `AJUSTE`. El
+  ajuste documenta una CORRECCIÓN (el conteo no cuadraba); esto documenta un CONSUMO real.
+  Mezclarlos haría imposible separar "la harina que se fue en la mesa" del "saldo que
+  estaba mal", que es el reporte entero. `stockMovementTypeLabel` traduce los tipos para
+  el Kardex del insumo, que hasta ahora mostraba el string crudo.
+- **Motivos de lista fija con salida a texto libre** (`PlantIssueReason`): enharinar mesa,
+  engrasar bandejas, espolvorear, prueba de masa, derrame, limpieza, otro. Con motivo
+  escrito a mano, a los tres meses "enharinar mesa", "harina mesa" y "p/ mesa" son tres
+  renglones y no se puede sumar nada. Se guarda el nombre, no el ordinal.
+- **`packagesToBaseUnitOrNull` devuelve null cuando no hay equivalencia** (un empaque
+  contado sobre un insumo guardado en libras sin `unitWeightGrams`), y ahí el vale se
+  rechaza con un mensaje. Mismo criterio que `toGramsOrNull`: antes `toBaseUnit` pasaba el
+  valor tal cual y 30 huevos entraban como 30 libras. Lógica pura en `model/PlantIssue.kt`,
+  con tests en `PlantIssueTest`.
+- **El intervalo se mide entre vales consecutivos del mismo insumo**, no dividiendo el
+  período entre el número de salidas: tres sacos la primera semana y ninguno las otras tres
+  daría "uno cada 7 días" y perdería el dato real, que el consumo se concentró. Con un solo
+  empaque `avgDaysBetween` es **null**, no 0 — 0 se leería como "abren uno diario".
+- **Solo cuentan los EMPAQUES para el intervalo**, no todas las salidas. Agarrar 8 oz del
+  bote ya abierto no abre un empaque nuevo: contarlas acorta el intervalo y hace ver una
+  rotación que no ocurrió. Los totales de cantidad sí las incluyen — ese material salió.
+  `packageIssueCount` separa unas de otras y `rhythmLabel()` resuelve los tres casos (ritmo
+  medible / un solo empaque / solo sueltas) en un lugar, porque los comparten el reporte
+  propio y el de Producción y el tercero es fácil de olvidar en uno de los dos.
+- **La advertencia "puede que ese saco siga abierto" solo sale sobre empaques**
+  (`daysSinceLastIssue(onlyPackages = true)`): sobre las onzas que alguien agarró del bote
+  no aplica, y una alerta que suena cuando no corresponde deja de avisar.
+- **La guarda contra anotar dos veces el mismo saco es el aviso, no una validación**: el
+  diálogo dice "Última salida: hace 2 días · 1 × Saco de 100 lb · Mario · Enharinar mesa"
+  antes de confirmar. Cuesta cero toques y es lo único que existe entre el vale correcto y
+  el duplicado.
+- **Deshacer devuelve el stock y borra el documento, pero NO limpia el Kardex**: escribe el
+  reverso como `AJUSTE` con "Salida anulada: …". Mismo criterio que la corrección de un
+  gasto de caja y que `applyStockDelta` — un movimiento borrado deja el saldo cuadrando
+  contra una historia que ya no dice qué pasó. El diálogo lo avisa antes.
+
+**Dónde se anota**: botón "Anotar material" en el TopAppBar de `ProductionLotDetailScreen`
+—la pantalla que el panadero ya tiene abierta con las manos en la masa, con planta, lote y
+turno prellenados— **y** el módulo "Sacar material" en Operaciones del Home, para la
+limpieza de fin de turno o la harina puesta antes de que exista el lote. Exigir lote
+dejaría esos casos sin registrar. El `lotId` es opcional por eso mismo.
+
+**Permiso propio `ISSUE_PLANT_MATERIAL`**, no reuso de `EDIT_INGREDIENTS` ni de
+`RECEIVE_STOCK`: el punto entero es que el panadero anote su saco sin poder además editar
+el catálogo ni ajustar stock a mano.
+
+**Reportes**: `PlantIssueReportScreen` (`production/plant-issues`) es a la vez el reporte y
+el historial —quien mira "un saco cada 2.5 días" es quien quiere ver los vales que dan ese
+número, y es el único lugar desde donde se corrige uno mal anotado. Se abre con
+`ISSUE_PLANT_MATERIAL` **o** `VIEW_INVENTORY_REPORT` (que existía en `Permission.kt` sin
+pantalla): el dueño quiere el reporte y no saca material. El reporte de Producción lleva
+además una sección "Material de planta", porque comparar un turno con otro es información
+de producción: dos turnos que hornean lo mismo y gastan el doble de harina de mesa es un
+hallazgo, y ahí es donde se ve.
+
+**No genera `Expense`**: ese dinero ya se gastó al comprar el insumo. Baja el valor del
+inventario, que es lo correcto. Tampoco entra al costo del producto — el módulo de costeo
+todavía no existe, y cuando llegue este consumo es costo indirecto de planta, no de una
+pieza.
+
+### Cuando el lote ya va andando: pan perdido y pan de más (`ProductionAdjustment.kt`)
+
+Dos cosas que pasan a media producción y que el sistema no sabía recibir:
+
+- **Se quemaron 40 panes de capa de 100.** No fue todo, ni todos los tipos, así que el
+  panadero no podía repetir la receta completa — y **no sabía escalarla al 40%**. Ése era
+  el bloqueo real: `buildScaledRecipeViewForGroup` ya escala cualquier receta a cualquier
+  cantidad, pero no había forma de pedírselo con el lote abierto (las líneas son de solo
+  lectura para el panadero y el único camino era editar el pedido de la sucursal).
+- **Llega un encargo de 100 pirujos a media mañana.** Si la masa no se hizo, se suma a la
+  amasada; si ya se hizo, es una tanda aparte. En los dos casos hay que saber la receta de
+  ese incremento.
+
+**El modelo colapsaba dos números en `producedQuantity`**: *cuánto se amasó* (base de la
+receta escalada y del descuento de `completeLot`) y *cuánto salió bueno* (lo que se
+entrega). Mientras todo sale bien son el mismo número; estos dos casos lo rompen desde
+lados opuestos — el quemado descontaba insumos de menos (la harina de las 40 quemadas
+aparecía después como faltante en el conteo físico), y el encargo horneaba pan que no
+entraba a ningún inventario.
+
+`ProductionLotLine.wasteQuantity` y `.extraQuantity` los separan, y tres funciones puras
+los vuelven a juntar según para qué:
+
+| Función | Qué cuenta | Para qué |
+|---|---|---|
+| `kneadedQuantity()` | bueno + perdido + de más | Consumo de insumos en `completeLot` |
+| `quantityToKnead()` | bueno + de más | La lista del panadero y la receta escalada |
+| `plantIngestQuantity()` | excedente del mínimo + de más | Ingreso al stock terminado de la planta |
+
+**La asimetría entre merma y extra es deliberada**: lo que se hace de más todavía no se
+amasó, así que entra a la lista; lo quemado ya se amasó una vez, y sumarlo mostraría "140"
+— una amasada que nunca se hace de un solo golpe, y el panadero pesaría de más. La
+reposición de lo perdido se calcula aparte, en el momento de declararla.
+
+**El extra entra al stock de la planta por el mismo camino que `plantRetainedQuantity`**
+(el excedente del mínimo de amasada): dos razones, un solo movimiento de Kardex.
+`applyMovement` lee-modifica-escribe el stock, así que dos llamadas seguidas sobre el
+mismo documento se pisan — por eso `plantIngestQuantity()` las suma en vez de emitir dos.
+
+**El consumo de `completeLot` usa `kneadedQuantity(fallbackToPlanned = false)`.** Ahí el
+conteo ya es obligatorio, así que un `producedQuantity` en cero significa "no se produjo",
+no "todavía no se contó": con el fallback puesto se descontarían insumos de pan que nunca
+se hizo.
+
+#### `ProductionAdjustmentSheet` — "¿Qué pasó?"
+
+Ícono de aviso en el encabezado de cada `MasaProductionCard` (no en el TopAppBar: lo que se
+quema es una masa concreta, y la receta que hay que mostrar es la de esa receta). Se ofrece
+desde que el lote está **OPEN**, no solo IN_PROGRESS — el encargo puede llegar antes de que
+el panadero toque "Iniciar", y ahí sumarlo a la amasada es lo más barato.
+
+**Pregunta la clase de cosa antes de mostrar un campo**, igual que `CaptureKindStep` de la
+compra rápida: "Se perdió pan" pide motivo de merma y no toca los pedidos; "Hay que hacer
+más" pide motivo de demanda y sí suma pan. Un formulario único obliga a leer las dos
+etiquetas para saber cuál aplica, y a las 4am eso se resuelve llenando la equivocada.
+
+**Lo que la hace útil no es el registro, es la receta.** Apenas se teclea una cantidad
+aparece abajo `ScaledRecipePanel` escalado exactamente a esas unidades —"para reponer 40
+panes de capa: harina 4.5 lb…"—, construido con líneas sintéticas que reusan
+`buildScaledRecipeViewForGroup`. Un segundo cálculo paralelo dejaría esta receta mintiendo
+apenas se corrija algo en la principal, mismo criterio que `buildProductionOrderPrintData`.
+**La esponja se pone en cero** en esas líneas: la ya declarada se consumió en la amasada
+anterior, y descontar su aporte daría una receta corta justo en lo que la esponja aporta.
+La hoja lo avisa cuando la masa lleva esponja — ajustarla automáticamente exigiría tocar el
+flujo de tres diálogos de `confirmSpongeForGroup`, y quedó pendiente a propósito.
+
+**Las cantidades se SUMAN a lo ya declarado, no lo reemplazan**: si a las 5am se quemó una
+bandeja y a las 7am otra, son dos declaraciones del mismo turno. La fila muestra "ya
+anotado: N" para que quien declara la segunda sepa si la primera está incluida.
+
+**Se persiste de inmediato**, sin esperar a "Iniciar" ni a "Completar" — mismo criterio que
+`confirmSpongeForGroup`: el pan quemado es un hecho ya ocurrido, y si el panadero sale de la
+pantalla ese consumo quedaría sin registrar.
+
+**Declarar pan de más invalida el conteo confirmado** de esa línea (`producedCountConfirmed
+= false`): cambió cuánto pan va a haber. La merma no lo invalida — lo bueno que se contó
+sigue siendo lo bueno.
+
+**El doble conteo es el modo de fallo obvio** y por eso la hoja lo dice con todas las
+letras: *"Al final, en el conteo, contá solo el pan BUENO: lo perdido ya queda contado
+aquí."* Un panadero que reste lo quemado del conteo **y** lo declare acá descontaría esa
+masa dos veces. La diferencia entre reponer y no reponer la lleva el conteo final, no un
+campo aparte: si repuso cuenta 100, si no cuenta 60, y el consumo cuadra en los dos casos.
+
+**Permiso**: `MANAGE_PRODUCTION_LOTS`, el mismo que ya necesita para iniciar y completar.
+Quien ve el pan quemado es quien lo anota, en el momento — pedir autorización a esa hora
+significa que no se anota.
+
+#### Dos recetas válidas a la vez: el selector del panel
+
+Al declarar pan de más, el panel de la masa pasa a mostrar el total del día (300). Eso es
+correcto si todavía no se amasó nada, y **le miente a quien ya amasó los 200**: pesaría de
+más. Pero la receta del incremento solo existía dentro de la hoja mientras se tecleaba —
+al cerrarla no había forma de volver a verla.
+
+El sistema **no puede elegir cuál mostrar**: no existe un estado "ya amasé esta masa", y
+deducirlo del cronómetro o de la esponja sería adivinar. Así que las dos vistas conviven y
+lo decide el panadero con un toque: `RecipeScopeSelector` ("Todo el día" / "Solo lo
+extra"), que aparece en `headerExtra` del `ScaledRecipePanel` **solo cuando hay producción
+extra declarada** — sin extra sería una opción que no hace nada.
+
+Las etiquetas dicen qué cubre cada una y no "total"/"parcial": lo que hay que decidir es
+si ya se amasó o no, y "parcial" no contesta esa pregunta. El texto de ayuda lo dice
+directo ("Usala si ya amasaste lo que pedían").
+
+`buildExtraOnlyRecipeForGroup` arma la vista del incremento con líneas sintéticas de
+`extraQuantity` y **suma los rellenos que exigen los productos extra de otras masas**: sin
+eso, pedir 100 Pan de Capa de más mostraría la hojaldre pero no las 100 bolitas de Suave
+que llevan adentro. La esponja va en cero, por lo mismo que en la hoja.
+
+El selector arranca en "Todo el día" y se reinicia al cambiar de masa
+(`remember(selectedGroupKey)`): arrancar en una vista parcial es el error caro —
+alguien que no amasó nada pesaría solo el incremento.
+
+#### Un pan de DOS masas (Pan de Capa)
+
+El Pan de Capa es masa de Capa por fuera con una bolita de Suave adentro (ver
+[DoughFilling]): son dos amasadas distintas para un solo producto. Es el caso que más
+fácil queda mal, porque solo la masa propia sale de `calculateLineConsumption` — el
+relleno, los adornos de preparación y los adornos comprados se calculan **en tres
+recorridos aparte** dentro de `completeLot`.
+
+**Los cuatro tienen que usar `kneadedQuantity`, no `producedQuantity`.** El pan que se
+quemó ya estaba formado y relleno, así que su bolita de Suave y su concha se gastaron
+igual. Corregir solo la receta principal dejaba la mitad del consumo sin descontar y el
+faltante volvía a aparecer en el conteo físico — con la agravante de que el producto que
+se arruinó se hace de dos masas y solo una estaba saliendo bien de la cuenta.
+
+**La hoja muestra las DOS recetas.** `buildFillingRecipesForQuantities` escala cada
+relleno a las mismas unidades y la hoja las pinta debajo de la principal, con un aviso
+("este pan lleva dos masas — hay que amasar las dos") **antes** de la primera tabla: sin
+él, el panadero lee la de arriba como *la* receta y no busca la segunda. Se agregan por
+receta, así que dos productos del grupo con bolita de la misma masa dan una sola amasada.
+Reusa `buildScaledRecipeViewForGroup` pasando los gramos como `extraDoughGrams` sobre una
+lista vacía de líneas — exactamente el camino por el que ya se calcula la tarjeta de una
+masa que nadie pidió y que existe solo por el relleno de otro producto.
+
+En la lista principal el extra ya se propaga solo: `extraDoughGramsForRecipe` usa
+`effectiveQuantity`, que ahora es `quantityToKnead()`. Agregar 100 Pan de Capa hace crecer
+la tarjeta de Suave por las 100 bolitas, sin código nuevo.
+
+#### Merma de horno en el reporte
+
+`ProductionSummary.wasteTotal` / `.extraTotal` / `.wasteByProduct` y una sección "Pan
+perdido en el horno" en el reporte de Producción, junto a "planeado vs producido" porque es
+lo que explica la diferencia entre la masa que se gastó y el pan que salió. Es un dato que
+**no existía**: había merma en tránsito (despacho) y merma de tienda
+(`FinishedStockMovement`), pero lo que se quema en el horno no se registraba en ningún lado,
+así que su costo aparecía como un faltante de insumos sin explicación.
+
+`ProductionWasteSummary.wastePct` divide entre **lo amasado**, no entre lo bueno: la
+pregunta es "de cada 100 que metí al horno, cuántas perdí", y dividir entre lo bueno da más
+de 100% justo cuando se pierde más de la mitad, que es cuando más importa leerlo.
+
+Lógica pura en `model/ProductionAdjustment.kt`, con tests en `ProductionAdjustmentTest`.
+
 ### Mínimo de amasada por receta
 
 `Recipe.minBatchFlourGrams` (0 = sin mínimo). Es límite **de la máquina, no del producto**: por debajo de cierta harina el gancho no alcanza la masa.
@@ -800,7 +1656,7 @@ volver atrás. Y el pan cancelado —que ya estaba horneado— desaparecía del 
   movimiento falla a media aplicación, un reintento choca con la guarda de estado en vez de
   sumar el pan dos veces.
 - **La pestaña "Canceladas" solo aparece cuando el día tiene alguna** — mismo criterio que
-  Facturas/Vueltas en Compras. Con ella el `TabRow` fijo pasa a `ScrollableTabRow`: seis
+  Facturas/Compras rápidas en Compras. Con ella el `TabRow` fijo pasa a `ScrollableTabRow`: seis
   pestañas repartidas a lo fijo dejan "Pendiente conteo" ilegible en teléfono.
 - El botón de restaurar vive en el **detalle** y no en la lista: mueve inventario, y quien lo
   toca tiene que estar viendo qué pan y cuánto. Los dos diálogos dicen el número de unidades y
@@ -837,9 +1693,141 @@ Plano `companies/{c}/finishedStocks/{branchId}_{productId}` con `currentStock` +
 
 **Tipos**: RECEPCION (auto), VENTA, MERMA, AJUSTE, TRANSFERENCIA.
 
+**La lista no sale solo de los documentos de stock** (`model/StoreInventory.kt::buildStoreInventoryRows`,
+tests en `StoreInventoryTest`). Un `FinishedProductStock` nace con el primer movimiento, así que
+un producto de reventa recién dado de alta no aparecía en ninguna sucursal —ni en 0— y no había
+cómo saber si la factura había ingresado. Ahora cada producto de reventa activo sale en cada
+sucursal (0 = "sin movimientos todavía"), con filtro Pan propio / Reventa. El producto
+respaldado por insumo (huevo por docena) muestra el `BranchStock` del insumo ÷
+`ingredientUnitsPerSale` y **no ofrece Ajustar**: un ajuste acá escribiría un terminado paralelo
+que la venta no descuenta. `FinishedStockUiState.stocks` lleva además registros sintéticos en 0
+para la reventa, porque el formulario de ajuste elige producto de esa lista (conteo inicial de
+lo que ya estaba en el estante). `functions/tools/inspect-resale-stock.js` es un diagnóstico de
+solo lectura de compras de reventa vs. `finishedStocks`.
+
 Form `FinishedStockAdjustScreen` con 4 opciones (Merma, Ajuste menor/mayor, Venta directa), valida no negativo, razón obligatoria, preview "Nuevo stock: X".
 
 KPIs ocultan valor de inventario sin `VIEW_DISPATCH_VALUE`. Permiso: `MANAGE_FINISHED_STOCK`.
+
+### POS: venta por grupo de precio ("Pan de Q0.50")
+
+La mayor parte del pan cuesta Q0.50 (francés, sheca, pirujo…). Con cola en el mostrador, que la
+cajera elija el tipo de cada pan es lento **y además da un dato malo**: con prisa toca lo primero
+que ve. Una `POSCategory` con `sellAsGroup = true` se cobra como un solo botón: se teclea cuántos
+panes, no cuáles, a `groupUnitPrice`. `groupLabel` es el nombre en ticket/carrito/reportes
+(`groupDisplayName`) porque el `name` es el del chip y puede ser corto ("0.50").
+
+**La venta NO descuenta ningún producto; lo reparte el conteo de cierre (`BreadCount`).** La
+línea va con `productId = null` + `quickGroupId` (campos que ya existían del diseño viejo) y el
+encabezado de la venta denormaliza `groupIds`/`groupUnits` en arreglos paralelos, para que el
+conteo lea solo encabezados. Al cerrar, `allocateGroupSales` (`model/GroupSaleAllocation.kt`,
+tests en `GroupSaleAllocationTest`) reparte lo vendido de cada grupo **en proporción al faltante**
+de cada pan (mayor residuo, nunca pasa el faltante), escribe un `VENTA` por producto y solo el
+resto como `MERMA`. El reparto por tipo sale del conteo físico, que es un hecho, en vez de lo que
+tocó la cajera — por eso es más exacto que obligar a elegir.
+
+- **Depende de que la tienda cuente todos los días.** Confirmado con el dueño. La ventana de ventas
+  va del `closedAt` del conteo cerrado anterior de la sucursal hasta el cierre de éste
+  (`groupSalesWindow`): un día sin contar se acumula al siguiente, no se pierde.
+- **Antes de esto, todo faltante del conteo era merma** (`difference < 0`). Ahora la merma real es
+  `BreadCountLine.effectiveWaste` (`wasteQuantity`, null en conteos viejos → cae al faltante
+  entero), y `aggregateMermasForMonth` y la razón obligatoria del formulario usan eso: la
+  encargada no tiene que justificar 150 francés que se vendieron.
+- **Vendido de más que faltante** (`unexplainedGroupUnits`): entró pan sin registrar o el conteo
+  está mal. Se avisa y no se inventa movimiento.
+- VENTA y MERMA del mismo pan van **en serie**: `applyMovement` lee-modifica-escribe.
+- **Solo entran productos cuyo `salePrice` = `groupUnitPrice`**: el precio del grupo nunca
+  contradice el catálogo.
+- Los panes de un grupo **no salen sueltos en "Todos"** del POS (invitaría a buscar el tipo, que es
+  justo lo que se evita), y el POS arranca con el grupo seleccionado. En el resumen diario de
+  ventas entran con clave `groupSaleKey` (`grp_<id>`) para que el reporte no los pierda.
+
+**"Todos" va ordenado por lo más vendido** (unidades de los últimos 30 días de `salesDaily`,
+en caché por sucursal y día en `POSViewModel`) y cada grupo de precio sale ahí como una ficha
+más (`GroupTile`), que pregunta cuántos.
+
+### POS: un cobro, varias ventas (cuenta del restaurante en el carrito) + "Último cobro"
+
+Una cuenta de ComandaYa pendiente se puede **cobrar ahora** (lo de siempre: el dinero entra a
+esta gaveta) o **agregar al carrito** para cobrarla junto con el pan: un solo pago y un solo
+vuelto. Al confirmar, primero se recibe la cuenta (`collectPendingSale` con `CheckoutPayment`)
+—si otra caja ya la recibió, se corta antes de mover inventario— y después se crea la venta de
+panadería. Todas las ventas del cobro llevan el mismo `checkoutId`, `checkoutTotal`,
+`tenderedAmount`, `changeAmount` y billetes, porque lo que se reclama es el cobro.
+
+- Cobrada desde el carrito, la cuenta toma el **método del cobro** (se vacía el
+  `paymentBreakdown` de ComandaYa): el cliente pagó en esta caja.
+- Solo se ofrece sumar al carrito una cuenta **toda en efectivo**: si en el restaurante ya se
+  pasó tarjeta, cobrarla otra vez le cobraría dos veces al cliente.
+- Si otra caja recibe una cuenta que está en este carrito, el listener la saca y avisa.
+
+**"Último cobro"** (ícono de reloj en la barra del POS): cuánto se cobró, cuánto dieron,
+cuánto vuelto y **con qué billetes**, con flechas a los 10 anteriores. Los billetes salen de los
+chips que la cajera toca en `PaymentDialog` (`billValues`/`billCounts`); si teclea el monto van
+vacíos, a propósito: no se inventa con qué pagaron. Los cobros de este aparato viven en memoria;
+si la app se reinició se rearman de las ventas de la sesión (`checkoutsFromSales`, test en
+`CheckoutRecordTest`), sin el detalle de productos.
+
+**Un producto está en una sola categoría** entre las que comparten sucursal
+(`productCategoryConflicts`; vacío = todas). El formulario esconde los ya usados, con buscador y
+un "Mover aquí" explícito que lo quita de la otra al guardar. `saveCategory` revalida contra lo
+guardado: un producto en dos grupos dejaría sin saber a cuál repartirle la venta.
+
+### Créditos — cuentas por cobrar y adelantos (reemplaza el cuaderno)
+
+`CreditAccount` (`companies/{c}/creditAccounts`) es QUIÉN debe: persona, institución (el
+colegio) o colaborador. La deuda es de la cuenta; una institución tiene **personas
+autorizadas** (arreglos paralelos en el doc) y cada cargo anota cuál se llevó la mercadería.
+Solo el administrador agrega personas: si llega alguien que no está en la lista no se le fía.
+**Sin límite de crédito** (decisión del dueño).
+
+`CreditMovement` (`companies/{c}/creditMovements`, plana con `accountId`) es el estado de
+cuenta. `amount` con signo: + deuda (SALE, ADVANCE, ADJUSTMENT positivo), − pago (PAYMENT,
+PAYROLL_DEDUCTION, ADJUSTMENT negativo). `CreditAccount.balance` es **caché**: todo lo que
+escribe o borra un movimiento lo recalcula sumando la colección (`recalculateBalance`),
+mismo criterio que `paidAmount` de compras. Nada se edita: los errores se corrigen con un
+ajuste, así el estado de cuenta entregado sigue diciendo lo mismo. El saldo que traían del
+cuaderno se carga como ajuste "Saldo anterior (cuaderno)".
+
+- **Colaboradores no se capturan**: `CreditViewModel.load` crea la cuenta de cada colaborador
+  activo con id fijo `emp_<employeeId>` (`ensureEmployeeAccount`).
+- **Vender fiado** (`SalePaymentMethod.CREDIT`, permiso `SELL_ON_CREDIT`): el POS pide cuenta y,
+  si es institución, quién se lo lleva. La venta mueve inventario igual; en la sesión suma a
+  `totalCreditSales` y NO a `expectedCashNow`. El cargo se escribe después de la venta con
+  `saleId`. No se ofrece con una cuenta del restaurante en el carrito.
+- **Cobrar crédito en caja** (`COLLECT_CREDIT_PAYMENT`): abono PAYMENT + si es efectivo un
+  `CashMovement` DEPOSIT ligado por `sourceCreditMovementId`; queda en "Último cobro".
+- **Adelanto desde la gaveta** (`GIVE_EMPLOYEE_ADVANCE`): ADVANCE en la cuenta del colaborador +
+  WITHDRAWAL de la caja, validado contra el efectivo recién leído. Los movimientos de caja con
+  `sourceCreditMovementId` no se corrigen desde "Movimientos de caja" (`canAct`): se corrigen en
+  la cuenta. Los adelantos ya NO se anotan en el historial del colaborador (la opción se quitó;
+  los viejos se siguen viendo).
+- **Planilla**: el campo "Créditos y adelantos" (`PayrollRecord.advances`) se propone con el
+  saldo de la cuenta en planillas nuevas. Al quedar **PAID** escribe un PAYROLL_DEDUCTION con id
+  fijo `payroll_<payrollId>` (`syncPayrollCreditDeduction`): corregirla reescribe el mismo
+  renglón, volverla a borrador o borrarla lo quita. `savePayroll` ahora devuelve el registro.
+- Administración (`MANAGE_CREDIT_ACCOUNTS`, módulo "Créditos" en Ventas): cuentas, pagos por
+  transferencia, ajustes y adelantos de caja general. La ficha del colaborador tiene la pestaña
+  "Créditos" con el mismo `CreditAccountPanel`.
+- **Personas autorizadas**: se editan (mismo id) y se eliminan. Eliminarlas es seguro: cada cargo
+  guarda `personName` como snapshot.
+- **Antigüedad (FIFO)**: `openCharges` aplica cada pago / ajuste negativo al cargo MÁS VIEJO
+  (un pago de más queda a favor y se come los cargos siguientes). `recalculateBalance` guarda los
+  cargos abiertos en la cuenta (`openChargeDates/Amounts`), así el reporte
+  (`CreditAgingReportScreen`, tramos 0–30/31–60/61–90/+90 vía `creditAgingOf`) y el aviso del
+  Inicio (`AlertTarget.CREDIT_OVERDUE`, CRITICAL con saldo de +90) leen una sola colección.
+  Cuentas con saldo anteriores al cálculo se rehacen una vez al cargar (`recalculate`).
+- **Impresión**: `util/CreditDocuments.kt` arma estado de cuenta y reporte (HTML hoja + ESC/POS
+  58/80) desde las mismas funciones que la pantalla. `DocumentPrintButton` (en
+  `ProductionOrderPrintButton.kt`) es el botón genérico de imprimir; la orden de producción lo usa.
+- **Descuento de colaborador al pagar en efectivo**: el % es **del producto**
+  (`Product.employeeDiscountPercent`, pestaña Precios — mayormente empacados y reventa) y la
+  persona solo tiene **derecho sí/no** (`CreditAccount.cashDiscountEligible`, en su cuenta; una
+  versión anterior guardaba `cashDiscountPercent` por persona y se lee como "con derecho"). En el
+  cobro con Efectivo aparece "¿Es un colaborador? Descuento de Q X" solo si algún producto del
+  carrito lleva %. `POSViewModel.employeeDiscountAmount` → `employeeCashDiscount` suma línea por
+  línea (medio centavo sube); el pan de grupo y el restaurante no descuentan. Va a
+  `Sale.discount` + `discountAccountId/Label`. Lo fiado, con tarjeta o transferencia: sin descuento.
 
 ### Empleados
 CRUD perfil + documentos + historial + nómina. Modo kiosko (reloj de turno biométrico en tablet). Historial de asistencia con mes/año navegable.
@@ -1089,10 +2077,10 @@ Persistir en cada keystroke saturaría Firestore. `editableLotLines` en memoria 
 | Catálogo | `VIEW_PRODUCTS`, `EDIT_PRODUCTS`, `VIEW_RECIPES`, `EDIT_RECIPES`, `MANAGE_PRICE_LISTS` |
 | Insumos | `VIEW_INGREDIENTS`, `EDIT_INGREDIENTS`, `VIEW_SUPPLIERS`, `EDIT_SUPPLIERS` |
 | Compras | `RECEIVE_STOCK`, `MANAGE_PURCHASE_PAYMENTS`, `EDIT_PURCHASES`, `DELETE_PURCHASES` |
-| Producción | `VIEW_PRODUCTION`, `SEND_PRODUCTION_ORDER`, `MANAGE_PRODUCTION_LOTS`, `MANAGE_PRODUCTION_SHIFTS` |
+| Producción | `VIEW_PRODUCTION`, `SEND_PRODUCTION_ORDER`, `MANAGE_PRODUCTION_LOTS`, `MANAGE_PRODUCTION_SHIFTS`, `ISSUE_PLANT_MATERIAL` |
 | Preparaciones | `VIEW_PREPARATIONS`, `EDIT_PREPARATIONS`, `MANAGE_PREPARATION_BATCHES` |
 | Distribución | `DISPATCH_PACK`, `MANAGE_DELIVERY_RUNS`, `DRIVE_DELIVERY`, `RECEIVE_DISPATCH`, `MANAGE_FINISHED_STOCK`, `VIEW_DISPATCH_VALUE` |
-| Gastos | `VIEW_EXPENSES`, `ADD_VARIABLE_EXPENSE`, `MANAGE_FIXED_BUDGET` |
+| Gastos | `VIEW_EXPENSES`, `ADD_VARIABLE_EXPENSE`, `ADD_GENERAL_EXPENSE`, `MANAGE_FIXED_BUDGET` |
 | Administración | `VIEW_ALL_BRANCHES`, `MANAGE_BRANCHES`, `MANAGE_USERS`, `MANAGE_EMPLOYEES` |
 | Activos Fijos | `VIEW_ASSETS`, `EDIT_ASSETS`, `MANAGE_ASSETS`, `ADD_ASSET_HISTORY` |
 
@@ -1113,7 +2101,8 @@ Firestore (y especialmente JS) no tiene group-by. Patrón: cada repo expone `agg
 - `SaleRepository.aggregateSalesInRange(companyId, branchIds?, from, until): SalesSummary`
 - `ProductionRepository.aggregateProductionInRange(companyId, branchIds?, from, until): ProductionSummary` + `getLotsForBranchInRange(...)`
 - `DispatchRepository.aggregateDispatchInRange(companyId, from, until): DispatchSummary` — `inTransitLoss = packedQty − receivedQty` cuando hay SHORT/DAMAGED
-- `ExpenseRepository.getExpensesForPeriod(period)` + `aggregateExpensesForPeriod(...): ExpenseSummary` (period = "YYYY-MM")
+- `ExpenseRepository.getExpensesForPeriod(period)` + `aggregateExpensesForPeriod(...): ExpenseSummary` (period = "YYYY-MM"); corta `fromPurchases` vs `standalone`
+- `PurchaseRepository.aggregatePurchasesInRange(companyId, from, until): PurchaseSummary` — filtra en memoria (mismo motivo que `getPurchases`: `date` puede ser `Timestamp` o `Long`)
 - `PayrollRepository.getPayrollForPeriod(from, until)` + `aggregatePayrollForPeriod(...): PayrollSummary` — itera empleados (no `collectionGroup`) para evitar requerir índice nuevo. APPROVED+PAID solamente.
 - `FinishedStockRepository.aggregateMovementsInRange(branchId, from, until): StockMovementSummary`
 - `BreadCountRepository.aggregateMermasForMonth(branchId, yearMonth): MermaSummary`
@@ -1121,7 +2110,47 @@ Firestore (y especialmente JS) no tiene group-by. Patrón: cada repo expone `agg
 ### Reportes (`presentation/reports/`)
 - **SalesReport**: día/semana/mes + sucursal. KPIs (ingresos, tickets, ticket promedio, unidades), barras por día, horizontales por método de pago, top productos, cajeros, histograma horario.
 - **ProductionReport**: día/semana/mes + planta. KPIs (lotes completados, unidades, % eficiencia, merma en tránsito), paired bars planeado vs producido, por turno, por producto (badge de variación %), discrepancias por sucursal destino.
-- **FinancialReport**: mensual. KPIs (ingresos, egresos, utilidad operativa, margen %). P&L card. Ingresos = `SalesSummary.totalRevenue`. Egresos = `ExpenseSummary.total + PayrollSummary.totalEmployerCost`. Utilidad = ingresos − egresos − planilla − mermas. Por sucursal y mermas por razón.
+- **FinancialReport**: mensual. KPIs (ingresos, egresos, utilidad operativa, margen %, comprado, salió de caja). P&L card. Ingresos = `SalesSummary.totalRevenue`. Egresos = `ExpenseSummary.total + PayrollSummary.totalEmployerCost`. Utilidad = ingresos − egresos − planilla − mermas. Compras y flujo de caja en secciones aparte (ver abajo). Por sucursal y mermas por razón.
+
+**Las compras entran como FLUJO DE CAJA, no como egreso del P&L.** El reporte no las conocía:
+egresos eran gastos + planilla, así que la harina y el azúcar —la mayor salida de efectivo de
+una panadería— no aparecían en ningún lado. Restarlas de la utilidad habría sido peor: son un
+activo hasta que se venden, y un mes en el que se llena la bodega saldría en pérdida y el
+siguiente en ganancia inventada. Por eso viven en dos secciones propias ("Compras del mes" y
+"Salida de dinero del mes") y la utilidad operativa queda igual, con una nota que dice cuánto
+se compró de inventario y por qué no está ahí.
+
+**El doble conteo es el modo de fallo real, y se evita con dos cortes:**
+- `Purchase.inventoryAmount` / `expensedAmount` denormalizan qué parte del total entró a
+  inventario (INGREDIENT + RESALE_PRODUCT) y qué parte ya se gastó (SUPPLY + SERVICE, que
+  además generaron su propio `Expense`). Van en el encabezado y no se calculan leyendo las
+  líneas porque el reporte recorre un mes entero — mismo criterio que `totalAmount`.
+- `ExpenseSummary.fromPurchases` / `.standalone` separan los gastos que nacieron de una compra
+  de los capturados aparte. El flujo de caja resta `purchases.paidTotal + expenses.standalone`,
+  así que el cloro no se resta dos veces.
+
+`Purchase.amountSplit()` deduce el reparto del encabezado cuando los campos faltan: **sin
+`lineKinds` es materia prima por definición** (era lo único que el módulo registraba), un solo
+grupo de tipos va entero a su lado, y una compra MIXTA anterior al campo cae en
+`unclassified` — que la pantalla muestra como "Sin desglosar" en vez de repartirlo a ojo.
+Adivinar ahí sería mentir justo en el número que la sección existe para dar.
+`functions/tools/backfill-purchases.js` los rellena desde las líneas y resuelve ese caso.
+
+**`paidTotal` es lo abonado de las compras FECHADAS en el mes**, no el efectivo exacto que
+salió: un abono de hoy a una factura de agosto cuenta en agosto. Se acepta a sabiendas —
+lo contrario obliga a abrir la subcolección de abonos de cada compra— y la pantalla lo dice
+en vez de dar a entender que es un flujo de caja exacto. Una compra `PENDING_RECEIPT` no
+cuenta: no entró a la bodega ni generó gasto todavía.
+
+Lógica pura en `domain/report/PurchaseAggregation.kt`, con tests en `PurchaseAggregationTest`.
+
+- **Pedido vs. recibido** (`presentation/reports/branchsupply/`, permiso `VIEW_BRANCH_SUPPLY_REPORT`): por sucursal y producto, agrupado por masa — pedido → asignado por turno → empacado → recibido → vendido. Una sucursal a la vez (`BranchFilterRow(allowAll = false)`): sumar varias mezcla el faltante de una con el sobrante de otra. Permiso propio y no `VIEW_PRODUCTION_REPORT` porque ése es de la planta; la encargada de sucursal ve solo lo suyo.
+  - **No hay colección nueva**: la nota de despacho es el puente, porque es lo único que sabe cuánto de un pedido le tocó a cada turno. `buildBranchSupplyReport` (`model/BranchSupplyReport.kt`, tests en `BranchSupplyReportTest`) es lógica pura; `loadBranchSupplyData` hace las lecturas (notas por `getNotesForOrder` + `getNote`, no la colección entera).
+  - Enviado solo cuenta notas fuera de DRAFT; recibido y diferencia solo las ya contadas (DELIVERED*). Lo que salió y no se contó se muestra "sin contar" en vez de un 0 que se lea como faltante. Canceladas van aparte.
+  - "Los turnos no suman lo pedido" se marca cuando el pedido ya tiene todas sus notas y no cuadran. Si falta la nota del segundo turno (su lote no arrancó; `expectedShiftsForOrder` = 2 para un pedido sin turno a planta de 2 turnos activos) la diferencia es "sin lote todavía", no un reparto roto.
+  - **Una pestaña por planta productora** (`PlantSupply`, un `buildBranchSupplyReport` por planta): cada una despacha con sus propios turnos y juntas mezclaban columnas de turnos ajenos y alargaban la lista. KPIs y tabla siguen a la pestaña elegida; sin pestañas si la sucursal le pidió a una sola.
+  - Vendido sale de `SalesSummary.unitsByProduct` (nuevo: `topProducts` se corta en 20). Los especiales no tienen ventas.
+  - La misma tabla (`BranchSupplyTable`) sale como sección **"Seguimiento"** en el detalle del pedido (`ProductionViewModel.loadOrderSupply`), en cuanto existen notas.
 
 Helpers compartidos en `presentation/reports/shared/ReportComponents.kt`: `ReportPeriodSelector`, `PeriodNavigator`, `BranchFilterRow`, `KpiTile`, `ReportSection`, `VerticalBars`, `PairedBars`, `HorizontalBars`, `EmptyDataNote`.
 

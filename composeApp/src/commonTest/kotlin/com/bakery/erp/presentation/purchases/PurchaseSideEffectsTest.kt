@@ -2,6 +2,7 @@ package com.bakery.erp.presentation.purchases
 
 import com.bakery.erp.model.AssetEventType
 import com.bakery.erp.model.ExpenseCategory
+import com.bakery.erp.model.ExpensePaidFrom
 import com.bakery.erp.model.Purchase
 import com.bakery.erp.model.PurchaseLine
 import com.bakery.erp.model.PurchaseLineKind
@@ -108,6 +109,37 @@ class PurchaseSideEffectsTest {
         val sinCategoria = supplyLine().copy(expenseCategory = "")
         val expenses = expensesForPurchase("c1", purchase(), listOf(sinCategoria))
         assertEquals(ExpenseCategory.OTROS, expenses.single().category)
+    }
+
+    @Test
+    fun `el gasto hereda de que bolsa salio la plata`() {
+        val deCaja = purchase().copy(
+            paidFrom = ExpensePaidFrom.CASH_DRAWER,
+            cashSessionId = "sess1",
+            cashRegisterName = "Caja 2"
+        )
+        val gasto = expensesForPurchase("c1", deCaja, listOf(supplyLine())).single()
+        // Sin esto el gasto del mes se vería como si lo hubiera puesto el dueño, y la gaveta
+        // aparecería al cuadrar con un faltante que nada explica.
+        assertEquals(ExpensePaidFrom.CASH_DRAWER, gasto.paidFrom)
+        assertEquals("sess1", gasto.cashSessionId)
+        assertEquals("Caja 2", gasto.cashRegisterName)
+    }
+
+    @Test
+    fun `el comprobante de la compra queda pegado al gasto`() {
+        val conFoto = purchase().copy(invoicePhotoUrl = "https://x/recibo.jpg")
+        assertEquals(
+            "https://x/recibo.jpg",
+            expensesForPurchase("c1", conFoto, listOf(supplyLine())).single().photoUrl
+        )
+    }
+
+    @Test
+    fun `una compra sin atribucion declarada no inventa que fue caja general`() {
+        val gasto = expensesForPurchase("c1", purchase(), listOf(supplyLine())).single()
+        assertEquals("", gasto.paidFrom)
+        assertEquals("", gasto.cashSessionId)
     }
 
     @Test

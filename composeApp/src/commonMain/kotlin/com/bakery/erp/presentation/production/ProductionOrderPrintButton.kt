@@ -51,31 +51,57 @@ internal fun ProductionOrderPrintButton(
     /** Se evalúa al tocar el botón, para imprimir siempre el estado más reciente. */
     printData: () -> ProductionOrderPrintData?
 ) {
+    DocumentPrintButton(
+        documentPrinter = documentPrinter,
+        bluetoothPrinterManager = bluetoothPrinterManager,
+        snackbarHostState = snackbarHostState,
+        contentDescription = "Imprimir orden de producción",
+        emptyMessage = "No hay productos que imprimir en esta orden.",
+        buildDocument = { printData()?.takeIf { it.groups.isNotEmpty() }?.toPrintableDocument() }
+    )
+}
+
+/**
+ * Botón de imprimir de cualquier documento: térmica Bluetooth si hay una configurada, o el
+ * diálogo del sistema (hoja/PDF). La primera vez en Android pregunta dónde; después imprime
+ * de un toque. Lo usan la orden de producción, el estado de cuenta y el reporte de créditos.
+ */
+@Composable
+internal fun DocumentPrintButton(
+    documentPrinter: DocumentPrinter,
+    bluetoothPrinterManager: BluetoothPrinterManager,
+    snackbarHostState: SnackbarHostState,
+    contentDescription: String,
+    emptyMessage: String = "No hay nada que imprimir.",
+    tint: Color = Color.White,
+    /** Se evalúa al tocar el botón, para imprimir siempre el estado más reciente. */
+    buildDocument: () -> com.bakery.erp.domain.PrintableDocument?
+) {
     val scope = rememberCoroutineScope()
     var isPrinting by remember { mutableStateOf(false) }
     var showChoice by remember { mutableStateOf(false) }
     var showPicker by remember { mutableStateOf(false) }
 
     fun doPrint() {
-        val data = printData()
-        if (data == null || data.groups.isEmpty()) {
-            scope.launch { snackbarHostState.showSnackbar("No hay productos que imprimir en esta orden.") }
+        val document = buildDocument()
+        if (document == null) {
+            scope.launch { snackbarHostState.showSnackbar(emptyMessage) }
             return
         }
         isPrinting = true
         scope.launch {
-            val result = documentPrinter.print(data.toPrintableDocument())
+            val result = documentPrinter.print(document)
             isPrinting = false
             result
                 .onFailure { e ->
-                    snackbarHostState.showSnackbar(e.message ?: "No se pudo imprimir la orden.")
+                    snackbarHostState.showSnackbar(e.message ?: "No se pudo imprimir.")
                 }
                 .onSuccess {
                     // En web el propio diálogo del navegador es el acuse; el snackbar
                     // solo aporta donde hay una térmica que pudo ser la equivocada.
                     val printer = bluetoothPrinterManager.getSavedConfig() ?: return@onSuccess
                     val action = snackbarHostState.showSnackbar(
-                        message = "Orden enviada a ${printer.deviceName}",
+                        message = "Enviado a ${printer.deviceName}",
                         actionLabel = "Cambiar"
                     )
                     if (action == SnackbarResult.ActionPerformed) {
@@ -103,13 +129,13 @@ internal fun ProductionOrderPrintButton(
             CircularProgressIndicator(
                 modifier = Modifier.size(20.dp),
                 strokeWidth = 2.dp,
-                color = Color.White
+                color = tint
             )
         } else {
             Icon(
                 Icons.Default.Print,
-                contentDescription = "Imprimir orden de producción",
-                tint = Color.White
+                contentDescription = contentDescription,
+                tint = tint
             )
         }
     }

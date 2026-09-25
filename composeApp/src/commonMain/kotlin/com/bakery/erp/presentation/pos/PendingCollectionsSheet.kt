@@ -22,6 +22,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -61,7 +62,14 @@ fun PendingCollectionsSheet(
     pending: List<Sale>,
     isCollecting: Boolean,
     onCollect: (Sale) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** Ids de las cuentas que ya están en el carrito. */
+    inCartIds: Set<String> = emptySet(),
+    /**
+     * Pone la cuenta en el carrito para cobrarla junto con lo que el cliente lleve de
+     * panadería: un solo pago y un solo vuelto.
+     */
+    onAddToCart: (Sale) -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var confirming by remember { mutableStateOf<Sale?>(null) }
@@ -90,7 +98,11 @@ fun PendingCollectionsSheet(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(pending, key = { it.id }) { sale ->
-                    PendingRow(sale = sale, onClick = { confirming = sale })
+                    PendingRow(
+                        sale = sale,
+                        inCart = sale.id in inCartIds,
+                        onClick = { confirming = sale }
+                    )
                 }
             }
 
@@ -116,9 +128,13 @@ fun PendingCollectionsSheet(
     }
 
     confirming?.let { sale ->
+        // Solo una cuenta en efectivo se puede sumar al carrito: si en el restaurante ya se
+        // pasó una tarjeta, cobrarla otra vez en el mostrador le cobraría dos veces al cliente.
+        val cashOnly = sale.effectivePaymentBreakdown.keys.all { it == SalePaymentMethod.CASH }
+        val alreadyInCart = sale.id in inCartIds
         AlertDialog(
             onDismissRequest = { if (!isCollecting) confirming = null },
-            title = { Text("¿Recibiste el dinero?") },
+            title = { Text("¿Qué hacés con esta cuenta?") },
             text = {
                 Column {
                     Text(
@@ -153,29 +169,49 @@ fun PendingCollectionsSheet(
                     )
                     Spacer(Modifier.size(10.dp))
                     Text(
-                        "Esto no le cobra otra vez al cliente: registra que el dinero entró a " +
-                            "esta caja y suma al cuadre de este turno.",
+                        "Cobrar ahora registra que el dinero de esta cuenta entró a esta caja. " +
+                            "Si el cliente va a llevar pan, agregala al carrito y se cobra todo " +
+                            "junto, con un solo vuelto.",
                         style = MaterialTheme.typography.labelSmall,
                         color = BrandColors.MutedSlate
                     )
+                    if (!cashOnly) {
+                        Spacer(Modifier.size(6.dp))
+                        Text(
+                            "Se pagó con tarjeta o transferencia en el restaurante: solo se " +
+                                "puede recibir, no sumar al carrito.",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = BrandColors.AccentDeep
+                        )
+                    }
                 }
             },
             confirmButton = {
-                Button(
-                    onClick = { onCollect(sale); confirming = null },
-                    enabled = !isCollecting,
-                    colors = ButtonDefaults.buttonColors(containerColor = BrandColors.Primary)
-                ) {
-                    if (isCollecting) {
-                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.size(8.dp))
+                Column(horizontalAlignment = Alignment.End) {
+                    Button(
+                        onClick = { onCollect(sale); confirming = null },
+                        enabled = !isCollecting && !alreadyInCart,
+                        colors = ButtonDefaults.buttonColors(containerColor = BrandColors.Primary)
+                    ) {
+                        if (isCollecting) {
+                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.size(8.dp))
+                        }
+                        Text("Cobrar ahora")
                     }
-                    Text("Sí, recibí el dinero")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirming = null }, enabled = !isCollecting) {
-                    Text("Cancelar")
+                    if (cashOnly) {
+                        Spacer(Modifier.size(4.dp))
+                        OutlinedButton(
+                            onClick = { onAddToCart(sale); confirming = null },
+                            enabled = !isCollecting && !alreadyInCart
+                        ) {
+                            Text(if (alreadyInCart) "Ya está en el carrito" else "Agregar al carrito")
+                        }
+                    }
+                    TextButton(onClick = { confirming = null }, enabled = !isCollecting) {
+                        Text("Cancelar")
+                    }
                 }
             }
         )
@@ -183,7 +219,7 @@ fun PendingCollectionsSheet(
 }
 
 @Composable
-private fun PendingRow(sale: Sale, onClick: () -> Unit) {
+private fun PendingRow(sale: Sale, inCart: Boolean, onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         shape = RoundedCornerShape(12.dp),
@@ -234,6 +270,7 @@ private fun PendingRow(sale: Sale, onClick: () -> Unit) {
                 )
                 Spacer(Modifier.size(6.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (inCart) BrandChip(text = "En el carrito", tone = ChipTone.ATTENTION)
                     sale.effectivePaymentBreakdown.keys.forEach { method ->
                         BrandChip(
                             text = SalePaymentMethod.label(method),

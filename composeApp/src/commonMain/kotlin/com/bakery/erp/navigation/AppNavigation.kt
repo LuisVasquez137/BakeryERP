@@ -1,5 +1,8 @@
 package com.bakery.erp.navigation
 
+import com.bakery.erp.presentation.credit.CreditAccountDetailScreen
+import com.bakery.erp.presentation.credit.CreditAccountFormScreen
+import com.bakery.erp.presentation.credit.CreditAccountListScreen
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -52,6 +55,7 @@ import com.bakery.erp.presentation.auth.ResellerSetupScreen
 import com.bakery.erp.presentation.reports.financial.FinancialReportScreen
 import com.bakery.erp.presentation.reports.production.ProductionReportScreen
 import com.bakery.erp.presentation.reports.sales.SalesReportScreen
+import com.bakery.erp.presentation.reports.branchsupply.BranchSupplyReportScreen
 import com.bakery.erp.presentation.customerOrders.CustomerOrderDetailScreen
 import com.bakery.erp.presentation.customerOrders.CustomerOrderFormScreen
 import com.bakery.erp.presentation.customerOrders.CustomerOrderListScreen
@@ -130,6 +134,7 @@ import com.bakery.erp.presentation.expenses.FixedBudgetFormScreen
 import com.bakery.erp.presentation.expenses.FixedBudgetListScreen
 import com.bakery.erp.presentation.expenses.FixedBudgetViewModel
 import com.bakery.erp.presentation.production.ProductionLotCompleteScreen
+import com.bakery.erp.presentation.plantissues.PlantIssueReportScreen
 import com.bakery.erp.presentation.production.ProductionLotDetailScreen
 import com.bakery.erp.presentation.production.ProductionLotFormScreen
 import com.bakery.erp.presentation.production.ProductionShiftSplitScreen
@@ -151,7 +156,7 @@ import com.bakery.erp.presentation.production.ProductionShiftFormScreen
 import com.bakery.erp.presentation.production.ProductionShiftListScreen
 import com.bakery.erp.presentation.production.ProductionViewModel
 import com.bakery.erp.presentation.purchases.PurchaseDetailScreen
-import com.bakery.erp.presentation.purchases.MarketRunFormScreen
+import com.bakery.erp.presentation.purchases.QuickPurchaseFormScreen
 import com.bakery.erp.presentation.purchases.PurchaseFormScreen
 import com.bakery.erp.presentation.purchases.PurchaseListScreen
 import com.bakery.erp.presentation.purchases.PurchaseViewModel
@@ -227,9 +232,35 @@ sealed class Screen(val route: String) {
         fun route(itemId: String? = null) =
             if (itemId != null) "fixedBudget/form?itemId=$itemId" else "fixedBudget/form"
     }
+    /**
+     * Anotar un gasto o una compra rápida. Es el ÚNICO destino de captura: lo abren el acceso
+     * de Operaciones, el FAB de Gastos y la caja abierta del POS.
+     *
+     * La ruta conserva el nombre `expenses/quick` a propósito, aunque la pantalla que renderiza
+     * viva en `presentation/purchases`: es la puerta de "anotar un gasto" desde el punto de
+     * vista del usuario, y el hecho de que por debajo escriba un `Purchase` cuando el renglón
+     * entra a inventario es un detalle de implementación.
+     */
+    object CashExpenseForm : Screen("expenses/quick?sessionId={sessionId}") {
+        /** Sin caja = gasto general. Con caja = se descuenta de esa gaveta al cuadrarla. */
+        fun route(sessionId: String? = null) =
+            if (sessionId.isNullOrEmpty()) "expenses/quick?sessionId="
+            else "expenses/quick?sessionId=$sessionId"
+    }
     object PurchaseList : Screen("purchases")
-    object PurchaseForm : Screen("purchases/form")
-    object MarketRunForm : Screen("purchases/marketrun")
+    /**
+     * Alta de una factura de compra. Con `sessionId` es la misma captura pero **pagada de esa
+     * gaveta**: el proveedor que llegó a la puerta y se le pagó del cajón. Va como query param
+     * y no como segmento para no chocar con `PurchaseEdit` (`purchases/form/{purchaseId}`).
+     */
+    object PurchaseForm : Screen("purchases/form?sessionId={sessionId}") {
+        fun route(sessionId: String? = null) =
+            if (sessionId.isNullOrEmpty()) "purchases/form?sessionId="
+            else "purchases/form?sessionId=$sessionId"
+    }
+    object QuickPurchaseEdit : Screen("purchases/quick/{purchaseId}") {
+        fun route(purchaseId: String) = "purchases/quick/$purchaseId"
+    }
     object PurchaseEdit : Screen("purchases/form/{purchaseId}") {
         fun route(purchaseId: String) = "purchases/form/$purchaseId"
     }
@@ -287,6 +318,11 @@ sealed class Screen(val route: String) {
                    else "production/lots/form?${params.joinToString("&")}"
         }
     }
+    /**
+     * Consumo de planta: material que salió de bodega sin pasar por una receta
+     * (ver `PlantIssue`). Es a la vez el reporte y el historial de vales.
+     */
+    object PlantIssueReport : Screen("production/plant-issues")
     object ProductionLotDetail : Screen("production/lots/detail/{lotId}") {
         fun route(lotId: String) = "production/lots/detail/$lotId"
     }
@@ -378,6 +414,16 @@ sealed class Screen(val route: String) {
         fun route(saleId: String) = "sales/$saleId"
     }
     object POSCategoryAdminList : Screen("admin/posCategories")
+    // Créditos
+    object CreditAccountList : Screen("credit/accounts")
+    object CreditAgingReport : Screen("credit/aging")
+    object CreditAccountForm : Screen("credit/accounts/form?id={id}") {
+        fun route(id: String? = null) =
+            if (id != null) "credit/accounts/form?id=$id" else "credit/accounts/form"
+    }
+    object CreditAccountDetail : Screen("credit/accounts/{accountId}") {
+        fun route(accountId: String) = "credit/accounts/$accountId"
+    }
     object POSCategoryForm : Screen("admin/posCategories/form?id={id}") {
         fun route(id: String? = null) =
             if (id != null) "admin/posCategories/form?id=$id" else "admin/posCategories/form"
@@ -428,6 +474,7 @@ sealed class Screen(val route: String) {
     object SalesReport      : Screen("reports/sales")
     object ProductionReport : Screen("reports/production")
     object FinancialReport  : Screen("reports/financial")
+    object BranchSupplyReport : Screen("reports/branch-supply")
 
     // Pedidos de clientes
     object CustomerOrderList : Screen("customerOrders")
@@ -480,6 +527,7 @@ fun AppNavigation(
     val userViewModel = vms.user
     val purchaseViewModel = vms.purchase
     val productionViewModel = vms.production
+    val plantIssueViewModel = vms.plantIssue
     val employeeViewModel = vms.employee
     val jobPositionViewModel = vms.jobPosition
     val preparationViewModel = vms.preparation
@@ -494,6 +542,7 @@ fun AppNavigation(
     val saleHistoryViewModel = vms.saleHistory
     val cashRegisterAdminViewModel = vms.cashRegisterAdmin
     val posCategoryAdminViewModel = vms.posCategoryAdmin
+    val creditViewModel = vms.credit
     val breadCountViewModel = vms.breadCount
     val dailyCashCloseViewModel = vms.dailyCashClose
     val spotCashCheckViewModel = vms.spotCashCheck
@@ -502,6 +551,7 @@ fun AppNavigation(
     val salesReportViewModel = vms.salesReport
     val productionReportViewModel = vms.productionReport
     val financialReportViewModel = vms.financialReport
+    val branchSupplyReportViewModel = vms.branchSupplyReport
     val customerOrderViewModel = vms.customerOrder
     val externalCustomerViewModel = vms.externalCustomer
     val organizationSettingsViewModel = vms.organizationSettings
@@ -702,6 +752,9 @@ fun AppNavigation(
                 onNavigateToRecipes = { navController.navigate(Screen.RecipeList.route) },
                 onNavigateToBranches = { navController.navigate(Screen.BranchList.route) },
                 onNavigateToExpenses = { navController.navigate(Screen.ExpenseList.route) },
+                onNavigateToFixedBudget = { navController.navigate(Screen.FixedBudgetList.route) },
+                onNavigateToQuickPurchase = { navController.navigate(Screen.CashExpenseForm.route()) },
+                onNavigateToPlantIssues = { navController.navigate(Screen.PlantIssueReport.route) },
                 onNavigateToUsers = { navController.navigate(Screen.UserList.route) },
                 onNavigateToPurchases = { navController.navigate(Screen.PurchaseList.route) },
                 onNavigateToProductionOrders = { navController.navigate(Screen.ProductionOrderList.route) },
@@ -721,12 +774,14 @@ fun AppNavigation(
                 onNavigateToSalesHistory = { navController.navigate(Screen.SaleHistoryList.route) },
                 onNavigateToCashRegisterAdmin = { navController.navigate(Screen.CashRegisterAdminList.route) },
                 onNavigateToQuickGroupAdmin = { navController.navigate(Screen.POSCategoryAdminList.route) },
+                onNavigateToCredit = { navController.navigate(Screen.CreditAccountList.route) },
                 onNavigateToBreadCount = { navController.navigate(Screen.BreadCountList.route) },
                 onNavigateToDailyCashClose = { navController.navigate(Screen.DailyCashCloseList.route) },
                 onNavigateToSpotCashCheck = { navController.navigate(Screen.SpotCashCheckList.route) },
                 onNavigateToSalesReport = { navController.navigate(Screen.SalesReport.route) },
                 onNavigateToProductionReport = { navController.navigate(Screen.ProductionReport.route) },
                 onNavigateToFinancialReport = { navController.navigate(Screen.FinancialReport.route) },
+                onNavigateToBranchSupplyReport = { navController.navigate(Screen.BranchSupplyReport.route) },
                 onNavigateToCustomerOrders = { navController.navigate(Screen.CustomerOrderList.route) },
                 onNavigateToOrganizationSettings = { navController.navigate(Screen.OrganizationSettings.route) },
                 onNavigateToResellerApproval = { navController.navigate(Screen.ResellerApproval.route) },
@@ -1181,10 +1236,13 @@ fun AppNavigation(
                     sessionId = sessionId,
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToClose = { sid -> navController.navigate(Screen.CashSessionClose.route(sid)) },
+                    onNavigateToCashExpense = { sid -> navController.navigate(Screen.CashExpenseForm.route(sid)) },
+                    onNavigateToSessionDetail = { sid -> navController.navigate(Screen.CashSessionDetail.route(sid)) },
                     authViewModel = viewModel,
                     viewModel = posViewModel,
                     cashSessionViewModel = cashSessionViewModel,
-                    bluetoothPrinterManager = bluetoothPrinterManager
+                    bluetoothPrinterManager = bluetoothPrinterManager,
+                    creditViewModel = creditViewModel
                 )
             }
         }
@@ -1216,9 +1274,13 @@ fun AppNavigation(
                 CashSessionDetailScreen(
                     sessionId = sessionId,
                     onNavigateBack = { navController.popBackStack() },
-                    onNavigateToClose = { sid -> navController.navigate(Screen.CashSessionClose.route(sid)) },
                     authViewModel = viewModel,
-                    viewModel = cashSessionViewModel
+                    viewModel = cashSessionViewModel,
+                    purchaseViewModel = purchaseViewModel,
+                    // Corregir reabre la MISMA captura que usó quien lo anotó. El permiso
+                    // amplio de Compras no hace falta para lo que salió de la propia gaveta
+                    // mientras siga abierta: la guarda está en `saveQuickPurchase`.
+                    onNavigateToPurchase = { id -> navController.navigate(Screen.QuickPurchaseEdit.route(id)) }
                 )
             }
         }
@@ -1297,6 +1359,63 @@ fun AppNavigation(
                     onNavigateBack = { navController.popBackStack() },
                     authViewModel = viewModel,
                     viewModel = posCategoryAdminViewModel
+                )
+            }
+        }
+
+        // ── Créditos ─────────────────────────────────────────────────────────
+        composable(Screen.CreditAccountList.route) {
+            RequirePermission(state.user, Permission.MANAGE_CREDIT_ACCOUNTS, onBack = { navController.popBackStack() }) {
+                CreditAccountListScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToDetail = { id -> navController.navigate(Screen.CreditAccountDetail.route(id)) },
+                    onNavigateToForm = { navController.navigate(Screen.CreditAccountForm.route()) },
+                    onNavigateToAging = { navController.navigate(Screen.CreditAgingReport.route) },
+                    authViewModel = viewModel,
+                    viewModel = creditViewModel
+                )
+            }
+        }
+        composable(Screen.CreditAgingReport.route) {
+            RequirePermission(state.user, Permission.MANAGE_CREDIT_ACCOUNTS, onBack = { navController.popBackStack() }) {
+                com.bakery.erp.presentation.credit.CreditAgingReportScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToDetail = { id -> navController.navigate(Screen.CreditAccountDetail.route(id)) },
+                    authViewModel = viewModel,
+                    viewModel = creditViewModel,
+                    documentPrinter = documentPrinter,
+                    bluetoothPrinterManager = bluetoothPrinterManager
+                )
+            }
+        }
+        composable(
+            route = Screen.CreditAccountForm.route,
+            arguments = listOf(navArgument("id") { type = NavType.StringType; nullable = true; defaultValue = null })
+        ) { backStackEntry ->
+            val id = backStackEntry.stringArg("id")
+            RequirePermission(state.user, Permission.MANAGE_CREDIT_ACCOUNTS, onBack = { navController.popBackStack() }) {
+                CreditAccountFormScreen(
+                    accountId = id,
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = creditViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.CreditAccountDetail.route,
+            arguments = listOf(navArgument("accountId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val accountId = backStackEntry.stringArg("accountId") ?: return@composable
+            RequirePermission(state.user, Permission.MANAGE_CREDIT_ACCOUNTS, onBack = { navController.popBackStack() }) {
+                CreditAccountDetailScreen(
+                    accountId = accountId,
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToEdit = { id -> navController.navigate(Screen.CreditAccountForm.route(id)) },
+                    authViewModel = viewModel,
+                    viewModel = creditViewModel,
+                    documentPrinter = documentPrinter,
+                    bluetoothPrinterManager = bluetoothPrinterManager
                 )
             }
         }
@@ -1387,6 +1506,7 @@ fun AppNavigation(
                 supplierId = supplierId,
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToEdit = { id -> navController.navigate(Screen.SupplierForm.route(id)) },
+                onNavigateToPurchase = { id -> navController.navigate(Screen.PurchaseDetail.route(id)) },
                 authViewModel = viewModel,
                 viewModel = supplierViewModel
             )
@@ -1451,16 +1571,48 @@ fun AppNavigation(
 
         // ── Gastos ───────────────────────────────────────────────────────────
         composable(Screen.ExpenseList.route) {
-            RequirePermission(state.user, Permission.VIEW_EXPENSES, Permission.ADD_VARIABLE_EXPENSE, Permission.MANAGE_FIXED_BUDGET, onBack = { navController.popBackStack() }) {
+            // Ya no pide `MANAGE_FIXED_BUDGET`: los costos fijos salieron de esta pantalla y
+            // tienen su propia ruta, así que quien solo los administra no necesita entrar acá.
+            RequirePermission(state.user, Permission.VIEW_EXPENSES, Permission.ADD_VARIABLE_EXPENSE, onBack = { navController.popBackStack() }) {
                 ExpenseListScreen(
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToDetail = { id -> navController.navigate(Screen.ExpenseDetail.route(id)) },
-                    onNavigateToForm = { navController.navigate(Screen.ExpenseForm.route()) },
-                    onNavigateToFixedBudget = { navController.navigate(Screen.FixedBudgetList.route) },
+                    onNavigateToQuickPurchase = { navController.navigate(Screen.CashExpenseForm.route()) },
                     authViewModel = viewModel,
                     viewModel = expenseViewModel,
-                    branchViewModel = branchViewModel,
-                    fixedBudgetViewModel = fixedBudgetViewModel
+                    branchViewModel = branchViewModel
+                )
+            }
+        }
+        // Anotar un gasto: UNA pantalla para los tres accesos (Operaciones, Gastos y la caja
+        // abierta del POS). Lo único que cambia entre ellos es si viene `sessionId`, que es
+        // lo que decide si el efectivo sale de una gaveta o de la caja general.
+        //
+        // El permiso depende justo de eso. Sin caja el desembolso no le falta a nadie al
+        // cuadrar, así que anotarlo es una decisión de administración (`ADD_GENERAL_EXPENSE`);
+        // con caja lo anota quien la está operando (`ADD_VARIABLE_EXPENSE`). Un solo permiso
+        // para ambos dejaba a una cajera pudiendo cargar a "caja general" un gasto que sí
+        // salió de su gaveta, y ahí el faltante del cierre no lo explica nada.
+        composable(
+            route = Screen.CashExpenseForm.route,
+            arguments = listOf(
+                navArgument("sessionId") { type = NavType.StringType; defaultValue = "" }
+            )
+        ) { backStackEntry ->
+            val sessionArg = backStackEntry.stringArg("sessionId")?.ifEmpty { null }
+            val needed = if (sessionArg == null) Permission.ADD_GENERAL_EXPENSE
+                         else Permission.ADD_VARIABLE_EXPENSE
+            RequirePermission(state.user, needed, onBack = { navController.popBackStack() }) {
+                QuickPurchaseFormScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = purchaseViewModel,
+                    sessionId = sessionArg,
+                    // Comprarle a un proveedor es la MISMA captura que una factura; lo único
+                    // distinto es de qué bolsa salió el dinero, y eso viaja en el sessionId.
+                    onNavigateToSupplierPurchase = {
+                        navController.navigate(Screen.PurchaseForm.route(sessionArg))
+                    }
                 )
             }
         }
@@ -1482,7 +1634,10 @@ fun AppNavigation(
             arguments = listOf(navArgument("expenseId") { type = NavType.StringType; nullable = true; defaultValue = null })
         ) { backStackEntry ->
             val expenseId = backStackEntry.stringArg("expenseId")
-            RequirePermission(state.user, Permission.ADD_VARIABLE_EXPENSE, onBack = { navController.popBackStack() }) {
+            // Corregir un gasto ya registrado es trabajo de administración, no de caja: los
+            // que nacen de una compra ni siquiera se editan acá, así que lo único que queda
+            // son los capturados a mano antes de que la captura se unificara.
+            RequirePermission(state.user, Permission.ADD_GENERAL_EXPENSE, onBack = { navController.popBackStack() }) {
                 ExpenseFormScreen(
                     expenseId = expenseId,
                     onNavigateBack = { navController.popBackStack() },
@@ -1526,21 +1681,38 @@ fun AppNavigation(
             RequirePermission(state.user, Permission.RECEIVE_STOCK, onBack = { navController.popBackStack() }) {
                 PurchaseListScreen(
                     onNavigateBack = { navController.popBackStack() },
-                    onNavigateToForm = { navController.navigate(Screen.PurchaseForm.route) },
-                    onNavigateToMarketRun = { navController.navigate(Screen.MarketRunForm.route) },
+                    onNavigateToForm = { navController.navigate(Screen.PurchaseForm.route()) },
                     onNavigateToDetail = { id -> navController.navigate(Screen.PurchaseDetail.route(id)) },
-                    onNavigateToEdit = { id -> navController.navigate(Screen.PurchaseEdit.route(id)) },
+                    onNavigateToEdit = { id, quick ->
+                        navController.navigate(
+                            if (quick) Screen.QuickPurchaseEdit.route(id)
+                            else Screen.PurchaseEdit.route(id)
+                        )
+                    },
                     authViewModel = viewModel,
                     viewModel = purchaseViewModel
                 )
             }
         }
-        composable(Screen.MarketRunForm.route) {
-            RequirePermission(state.user, Permission.RECEIVE_STOCK, onBack = { navController.popBackStack() }) {
-                MarketRunFormScreen(
+        // Corregir una compra rápida tiene su propia ruta y NO cae en `PurchaseEdit`: aquel
+        // formulario es el de la factura y no sabe nada de lugar ni de sucursal por línea,
+        // así que reabrir ahí una compra rápida pedía proveedor y escondía sus datos.
+        composable(
+            route = Screen.QuickPurchaseEdit.route,
+            arguments = listOf(navArgument("purchaseId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val editId = backStackEntry.stringArg("purchaseId") ?: return@composable
+            // `ADD_VARIABLE_EXPENSE` alcanza porque el ViewModel revalida: quien no tenga
+            // `EDIT_PURCHASES` solo puede guardar la corrección de una compra rápida atribuida
+            // a una gaveta que siga abierta. Sin esto, la cajera que teclea 325 en vez de
+            // 32.50 tiene que llamar a alguien antes de cerrar, y el desvío termina
+            // cuadrándose a mano.
+            RequirePermission(state.user, Permission.EDIT_PURCHASES, Permission.ADD_VARIABLE_EXPENSE, onBack = { navController.popBackStack() }) {
+                QuickPurchaseFormScreen(
                     onNavigateBack = { navController.popBackStack() },
                     authViewModel = viewModel,
-                    viewModel = purchaseViewModel
+                    viewModel = purchaseViewModel,
+                    purchaseId = editId
                 )
             }
         }
@@ -1559,13 +1731,21 @@ fun AppNavigation(
                 )
             }
         }
-        composable(Screen.PurchaseForm.route) {
+        composable(
+            route = Screen.PurchaseForm.route,
+            arguments = listOf(
+                navArgument("sessionId") { type = NavType.StringType; defaultValue = "" }
+            )
+        ) { backStackEntry ->
             RequirePermission(state.user, Permission.RECEIVE_STOCK, onBack = { navController.popBackStack() }) {
                 PurchaseFormScreen(
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToSuppliers = { navController.navigate(Screen.SupplierList.route) },
                     authViewModel = viewModel,
-                    viewModel = purchaseViewModel
+                    viewModel = purchaseViewModel,
+                    // Con caja, la factura se paga de esa gaveta y nace saldada. Sin ella es
+                    // la captura de siempre, con crédito y vencimiento.
+                    sessionId = backStackEntry.stringArg("sessionId")?.ifEmpty { null }
                 )
             }
         }
@@ -1578,7 +1758,12 @@ fun AppNavigation(
                 PurchaseDetailScreen(
                     purchaseId = purchaseId,
                     onNavigateBack = { navController.popBackStack() },
-                    onNavigateToEdit = { id -> navController.navigate(Screen.PurchaseEdit.route(id)) },
+                    onNavigateToEdit = { id, quick ->
+                        navController.navigate(
+                            if (quick) Screen.QuickPurchaseEdit.route(id)
+                            else Screen.PurchaseEdit.route(id)
+                        )
+                    },
                     authViewModel = viewModel,
                     viewModel = purchaseViewModel
                 )
@@ -1730,7 +1915,24 @@ fun AppNavigation(
                     viewModel = productionViewModel,
                     productViewModel = productViewModel,
                     documentPrinter = documentPrinter,
-                    bluetoothPrinterManager = bluetoothPrinterManager
+                    bluetoothPrinterManager = bluetoothPrinterManager,
+                    plantIssueViewModel = plantIssueViewModel
+                )
+            }
+        }
+        composable(Screen.PlantIssueReport.route) {
+            // Con VIEW_INVENTORY_REPORT alcanza para MIRAR: el reporte de a cada
+            // cuánto sacan un saco es del dueño, que no necesariamente saca material.
+            RequirePermission(
+                state.user,
+                Permission.ISSUE_PLANT_MATERIAL,
+                Permission.VIEW_INVENTORY_REPORT,
+                onBack = { navController.popBackStack() }
+            ) {
+                PlantIssueReportScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = plantIssueViewModel
                 )
             }
         }
@@ -1785,7 +1987,8 @@ fun AppNavigation(
                         navController.navigate(Screen.PayrollForm.route(empId, payrollId))
                     },
                     authViewModel = viewModel,
-                    viewModel = employeeViewModel
+                    viewModel = employeeViewModel,
+                    creditViewModel = creditViewModel
                 )
             }
         }
@@ -2081,6 +2284,17 @@ fun AppNavigation(
                     user = state.user,
                     onNavigateBack = { navController.popBackStack() },
                     viewModel = financialReportViewModel
+                )
+            }
+        }
+        composable(Screen.BranchSupplyReport.route) {
+            RequirePermission(state.user, Permission.VIEW_BRANCH_SUPPLY_REPORT,
+                onBack = { navController.popBackStack() }) {
+                BranchSupplyReportScreen(
+                    user = state.user,
+                    onNavigateBack = { navController.popBackStack() },
+                    viewModel = branchSupplyReportViewModel,
+                    productionViewModel = productionViewModel
                 )
             }
         }

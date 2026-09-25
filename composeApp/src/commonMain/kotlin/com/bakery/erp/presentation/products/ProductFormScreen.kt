@@ -1,5 +1,6 @@
 package com.bakery.erp.presentation.products
 
+import com.bakery.erp.util.fmtTrim
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -91,6 +92,9 @@ import com.bakery.erp.model.ProductCharacteristics
 import com.bakery.erp.model.ProductDecoration
 import com.bakery.erp.model.Recipe
 import com.bakery.erp.model.Supplier
+import com.bakery.erp.model.PurchaseFormat
+import com.bakery.erp.model.purchaseFormatsForEditing
+import com.bakery.erp.model.withDerivedPurchaseReference
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.presentation.ingredients.IngredientViewModel
 import com.bakery.erp.presentation.pricing.PriceListViewModel
@@ -154,6 +158,11 @@ fun ProductFormScreen(
     var doughFillings by remember(existingProduct?.id) {
         mutableStateOf(existingProduct?.doughFillings ?: emptyList())
     }
+    // Presentaciones de compra (reventa). Un producto viejo —un proveedor y un costo— llega
+    // convertido en su primera presentación, así guardarlo migra el dato sin script.
+    var purchaseFormats by remember(existingProduct?.id) {
+        mutableStateOf(existingProduct?.purchaseFormatsForEditing { newResaleFormatId() } ?: emptyList())
+    }
     // Receta que ya genera este producto (si alguna) — se excluye del picker de
     // "relleno de otra masa": no tiene sentido que un producto lleve de relleno
     // masa de su propia receta.
@@ -181,6 +190,7 @@ fun ProductFormScreen(
     var rawWeightUnitExpanded by remember { mutableStateOf(false) }
 
     var shelfLife by rememberSaveable { mutableStateOf(existingProduct?.shelfLife?.toString() ?: "") }
+    var isPerishable by rememberSaveable { mutableStateOf(existingProduct?.isPerishable ?: false) }
     var storageType by rememberSaveable { mutableStateOf(existingProduct?.storageType ?: "") }
     var unitsPerTray by rememberSaveable {
         mutableStateOf(existingProduct?.unitsPerTray?.takeIf { it > 0 }?.toString() ?: "")
@@ -192,10 +202,10 @@ fun ProductFormScreen(
     var isInHouseProduced by rememberSaveable {
         mutableStateOf(existingProduct?.isInHouseProduced ?: true)
     }
-    // Reventa: proveedor + costo de compra de referencia.
-    var supplierId by rememberSaveable { mutableStateOf(existingProduct?.supplierId ?: "") }
-    var supplierName by rememberSaveable { mutableStateOf(existingProduct?.supplierName ?: "") }
     var barcode by rememberSaveable { mutableStateOf(existingProduct?.barcode ?: "") }
+    var employeeDiscount by rememberSaveable {
+        mutableStateOf(existingProduct?.employeeDiscountPercent?.takeIf { it > 0 }?.fmtTrim(2) ?: "")
+    }
     // Producto que vende del inventario de un insumo (el huevo: entra a las recetas y
     // además se vende por docena). Vacío = producto normal, con su stock de terminado.
     var linkedIngredientId by rememberSaveable { mutableStateOf(existingProduct?.linkedIngredientId ?: "") }
@@ -203,10 +213,6 @@ fun ProductFormScreen(
     var ingredientUnitsPerSale by rememberSaveable {
         mutableStateOf(existingProduct?.ingredientUnitsPerSale?.takeIf { it > 0.0 }?.toString() ?: "")
     }
-    var purchaseCost by rememberSaveable {
-        mutableStateOf(existingProduct?.purchaseCost?.takeIf { it > 0 }?.toString() ?: "")
-    }
-    var supplierExpanded by remember { mutableStateOf(false) }
     // Al crear (productId==null) se pide el tipo antes de mostrar el form.
     var typeChosen by rememberSaveable { mutableStateOf(productId != null) }
     var selectedImageBytes by remember { mutableStateOf<ByteArray?>(null) }
@@ -283,11 +289,14 @@ fun ProductFormScreen(
             active = active,
             imageUrl = existingProduct?.imageUrl,
             salePrice = salePrice.toDoubleOrNull() ?: 0.0,
+            employeeDiscountPercent = (employeeDiscount.toDoubleOrNull() ?: 0.0).coerceIn(0.0, 100.0),
             unit = unit.trim(),
             weightPerUnit = weightPerUnit.toDoubleOrNull(),
             rawWeightGrams = if (isInHouseProduced) rawGrams else null,
             rawWeightUnit = if (isInHouseProduced && rawGrams != null) rawWeightUnit else null,
             shelfLife = shelfLife.toIntOrNull(),
+            // Solo reventa: el pan propio no se compra, así que no hay factura donde pedir lote.
+            isPerishable = !isInHouseProduced && isPerishable,
             storageType = storageType.trim().ifEmpty { null },
             unitsPerTray = if (isInHouseProduced) unitsPerTray.toIntOrNull()?.takeIf { it > 0 } ?: 0 else 0,
             notes = notes.trim().ifEmpty { null },
@@ -317,9 +326,13 @@ fun ProductFormScreen(
                 doughFillings.filter { it.recipeId.isNotEmpty() && it.rawWeightGrams > 0.0 }
             else emptyList(),
             isInHouseProduced = isInHouseProduced,
-            supplierId = if (!isInHouseProduced) supplierId.ifBlank { null } else null,
-            supplierName = if (!isInHouseProduced) supplierName.ifBlank { null } else null,
-            purchaseCost = if (!isInHouseProduced) purchaseCost.toDoubleOrNull() else null,
+            // Proveedor y costo de referencia se derivan de la presentación predeterminada
+            // (`withDerivedPurchaseReference`, abajo). El dato viejo ya llegó convertido en
+            // presentación al abrir, así que si el usuario las quitó todas, no queda nada.
+            purchaseFormats = if (!isInHouseProduced) purchaseFormats else emptyList(),
+            supplierId = null,
+            supplierName = null,
+            purchaseCost = null,
             barcode = barcode.trim(),
             // El vínculo con un insumo solo tiene sentido en reventa: lo que producimos
             // nosotros ya tiene su propio inventario de terminado.
@@ -328,7 +341,7 @@ fun ProductFormScreen(
             ingredientUnitsPerSale = if (!isInHouseProduced && linkedIngredientId.isNotEmpty())
                 ingredientUnitsPerSale.replace(',', '.').toDoubleOrNull()?.takeIf { it > 0.0 } ?: 1.0
             else 1.0
-        )
+        ).withDerivedPurchaseReference()
     }
 
     fun onSave() {
@@ -459,6 +472,7 @@ fun ProductFormScreen(
                                 unit = unit, onUnitChange = { unit = it },
                                 weightPerUnit = weightPerUnit, onWeightPerUnitChange = { weightPerUnit = it },
                                 shelfLife = shelfLife, onShelfLifeChange = { shelfLife = it },
+                                isPerishable = isPerishable, onIsPerishableChange = { isPerishable = it },
                                 unitsPerTray = unitsPerTray, onUnitsPerTrayChange = { unitsPerTray = it },
                                 rawWeightInput = rawWeightInput, onRawWeightInputChange = { rawWeightInput = it },
                                 rawWeightUnit = rawWeightUnit, onRawWeightUnitChange = { rawWeightUnit = it },
@@ -466,12 +480,9 @@ fun ProductFormScreen(
                                 onRawWeightUnitExpandedChange = { rawWeightUnitExpanded = it },
                                 storageType = storageType, onStorageTypeChange = { storageType = it },
                                 notes = notes, onNotesChange = { notes = it },
-                                purchaseCost = purchaseCost, onPurchaseCostChange = { purchaseCost = it },
+                                purchaseFormats = purchaseFormats,
+                                onPurchaseFormatsChange = { purchaseFormats = it },
                                 suppliers = supplierState.supplierList.filter { it.active },
-                                supplierId = supplierId, supplierName = supplierName,
-                                onSupplierChange = { id, nm -> supplierId = id; supplierName = nm },
-                                supplierExpanded = supplierExpanded,
-                                onSupplierExpandedChange = { supplierExpanded = it },
                                 barcode = barcode, onBarcodeChange = { barcode = it },
                                 // Solo materia prima: vincular una venta a un suministro de
                                 // limpieza no significa nada.
@@ -489,16 +500,30 @@ fun ProductFormScreen(
                                     onIsInHouseChange = { isInHouseProduced = it }
                                 )
                             }
-                            "Precios" -> PricesTabContent(
-                                lists = activeLists,
-                                retailDefaultId = retailDefaultId,
-                                salePrice = salePrice,
-                                priceInputs = priceInputs,
-                                listsWithExistingOverride = listsWithExistingOverride,
-                                onPriceChange = { listId, value ->
-                                    priceInputs = priceInputs + (listId to value)
-                                }
-                            )
+                            "Precios" -> {
+                                PricesTabContent(
+                                    lists = activeLists,
+                                    retailDefaultId = retailDefaultId,
+                                    salePrice = salePrice,
+                                    priceInputs = priceInputs,
+                                    listsWithExistingOverride = listsWithExistingOverride,
+                                    onPriceChange = { listId, value ->
+                                        priceInputs = priceInputs + (listId to value)
+                                    }
+                                )
+                                SectionDivider()
+                                OutlinedTextField(
+                                    value = employeeDiscount,
+                                    onValueChange = { employeeDiscount = it.filter { c -> c.isDigit() || c == '.' } },
+                                    label = { Text("Descuento a colaboradores (%)") },
+                                    suffix = { Text("%") },
+                                    singleLine = true,
+                                    supportingText = {
+                                        Text("Se aplica cuando un colaborador con derecho lo compra y paga en efectivo. Vacío = sin descuento.")
+                                    },
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+                                )
+                            }
                             "Adornos" -> {
                                 DecorationsTabContent(
                                     decorations = decorations,
@@ -661,65 +686,6 @@ private fun ProductTypeOption(
     }
 }
 
-// ── Bloque: Proveedor (reventa) ──────────────────────────────────────────────
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SupplierBlock(
-    suppliers: List<Supplier>,
-    supplierName: String,
-    onSupplierChange: (id: String, name: String) -> Unit,
-    supplierExpanded: Boolean,
-    onSupplierExpandedChange: (Boolean) -> Unit
-) {
-    SectionHeader("Proveedor")
-    Text(
-        "¿A quién le compras este producto? Opcional, pero ayuda a reponerlo más rápido.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-
-    ExposedDropdownMenuBox(
-        expanded = supplierExpanded,
-        onExpandedChange = onSupplierExpandedChange,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        OutlinedTextField(
-            value = supplierName,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text("Proveedor") },
-            placeholder = { Text("Selecciona un proveedor") },
-            trailingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-        )
-        ExposedDropdownMenu(
-            expanded = supplierExpanded,
-            onDismissRequest = { onSupplierExpandedChange(false) }
-        ) {
-            if (suppliers.isEmpty()) {
-                DropdownMenuItem(
-                    text = { Text("No hay proveedores registrados") },
-                    onClick = { onSupplierExpandedChange(false) },
-                    enabled = false
-                )
-            }
-            suppliers.forEach { s ->
-                DropdownMenuItem(
-                    text = { Text(s.company) },
-                    onClick = {
-                        onSupplierChange(s.id, s.company)
-                        onSupplierExpandedChange(false)
-                    },
-                    contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
-                )
-            }
-        }
-    }
-}
-
 // ── Tab: General ────────────────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -739,17 +705,16 @@ private fun GeneralTabContent(
     unit: String, onUnitChange: (String) -> Unit,
     weightPerUnit: String, onWeightPerUnitChange: (String) -> Unit,
     shelfLife: String, onShelfLifeChange: (String) -> Unit,
+    isPerishable: Boolean, onIsPerishableChange: (Boolean) -> Unit,
     unitsPerTray: String, onUnitsPerTrayChange: (String) -> Unit,
     rawWeightInput: String, onRawWeightInputChange: (String) -> Unit,
     rawWeightUnit: String, onRawWeightUnitChange: (String) -> Unit,
     rawWeightUnitExpanded: Boolean, onRawWeightUnitExpandedChange: (Boolean) -> Unit,
     storageType: String, onStorageTypeChange: (String) -> Unit,
     notes: String, onNotesChange: (String) -> Unit,
-    purchaseCost: String, onPurchaseCostChange: (String) -> Unit,
+    purchaseFormats: List<PurchaseFormat>,
+    onPurchaseFormatsChange: (List<PurchaseFormat>) -> Unit,
     suppliers: List<Supplier>,
-    supplierId: String, supplierName: String,
-    onSupplierChange: (id: String, name: String) -> Unit,
-    supplierExpanded: Boolean, onSupplierExpandedChange: (Boolean) -> Unit,
     barcode: String, onBarcodeChange: (String) -> Unit,
     ingredients: List<Ingredient>,
     linkedIngredientId: String, linkedIngredientName: String,
@@ -773,11 +738,16 @@ private fun GeneralTabContent(
             ImageBlock(existingImageUrl, selectedImageBytes, onImageSelected)
             SectionDivider()
             ResaleCommercialBlock(
-                purchaseCost, onPurchaseCostChange,
                 salePrice, onSalePriceChange, salePriceError,
                 unit, onUnitChange
             )
             SectionDivider()
+            // De dónde sale el stock VA ANTES que las presentaciones, y no al revés: si el
+            // producto vende del pozo de un insumo, la presentación de compra ya está en el
+            // insumo y acá no hace falta ninguna. Al orden anterior se llenaba primero la
+            // presentación y recién después se descubría el vínculo — o sea que se capturaba
+            // dos veces lo mismo para que después la compra se redirigiera al insumo igual
+            // (ver `resalePurchaseLine`).
             ResaleStockSourceBlock(
                 barcode = barcode, onBarcodeChange = onBarcodeChange,
                 ingredients = ingredients,
@@ -788,12 +758,32 @@ private fun GeneralTabContent(
                 onUnitsPerSaleChange = onIngredientUnitsPerSaleChange
             )
             SectionDivider()
-            SupplierBlock(
-                suppliers, supplierName, onSupplierChange,
-                supplierExpanded, onSupplierExpandedChange
-            )
+            if (linkedIngredientId.isEmpty()) {
+                SectionHeader("Presentaciones de compra")
+                ResalePurchaseFormatsSection(
+                    formats = purchaseFormats,
+                    saleUnit = unit.trim(),
+                    salePrice = salePrice,
+                    suppliers = suppliers,
+                    onFormatsChange = onPurchaseFormatsChange
+                )
+            } else {
+                SectionHeader("Presentaciones de compra")
+                Text(
+                    "No hace falta definirlas acá: este producto se compra como insumo, así que " +
+                        "la factura se captura en la sección de materia prima con las " +
+                        "presentaciones de «${linkedIngredientName.ifEmpty { "el insumo" }}». " +
+                        "Aunque lo captures desde reventa, la compra entra al inventario del " +
+                        "insumo igual.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             SectionDivider()
-            ResaleDataBlock(shelfLife, onShelfLifeChange, storageType, onStorageTypeChange)
+            ResaleDataBlock(
+                shelfLife, onShelfLifeChange, storageType, onStorageTypeChange,
+                isPerishable, onIsPerishableChange
+            )
             SectionDivider()
             NotesBlock(notes, onNotesChange)
         }
@@ -1019,25 +1009,15 @@ private fun CommercialBlock(
     )
 }
 
-// ── Bloque comercial para reventa: costo + precio + margen ───────────────────
+// ── Bloque comercial para reventa: precio + presentación de venta ─────────────
+// El costo ya no se teclea acá: sale de las presentaciones de compra, que es donde se ve
+// el margen (ver `ResalePurchaseFormatsSection`).
 @Composable
 private fun ResaleCommercialBlock(
-    purchaseCost: String, onPurchaseCostChange: (String) -> Unit,
     salePrice: String, onSalePriceChange: (String) -> Unit, salePriceError: Boolean,
     unit: String, onUnitChange: (String) -> Unit
 ) {
-    SectionHeader("Costo y precio")
-
-    OutlinedTextField(
-        value = purchaseCost,
-        onValueChange = onPurchaseCostChange,
-        label = { Text("Costo (a como te lo dejan)") },
-        modifier = Modifier.fillMaxWidth(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-        singleLine = true,
-        prefix = { Text("Q ") },
-        supportingText = { Text("Lo que te cuesta comprarlo. Se usa para prellenar tus compras.") }
-    )
+    SectionHeader("Precio de venta")
 
     OutlinedTextField(
         value = salePrice,
@@ -1054,28 +1034,14 @@ private fun ResaleCommercialBlock(
         }
     )
 
-    // Margen calculado en vivo — feedback inmediato de la ganancia.
-    val cost = purchaseCost.toDoubleOrNull()
-    val price = salePrice.toDoubleOrNull()
-    if (cost != null && cost > 0 && price != null && price > 0) {
-        val margin = price - cost
-        val marginPct = margin / price * 100
-        val positive = margin >= 0
-        Text(
-            text = "Margen: Q ${margin.fmt(2)} (${marginPct.fmt(1)}%)",
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = if (positive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-        )
-    }
-
     OutlinedTextField(
         value = unit,
         onValueChange = onUnitChange,
-        label = { Text("Presentación") },
-        placeholder = { Text("unidad, bolsa, caja, libra…") },
+        label = { Text("Se vende por") },
+        placeholder = { Text("unidad, lata, bolsa…") },
         modifier = Modifier.fillMaxWidth(),
-        singleLine = true
+        singleLine = true,
+        supportingText = { Text("Es la unidad en que se cuenta el inventario y en que se arman las presentaciones") }
     )
 }
 
@@ -1083,9 +1049,27 @@ private fun ResaleCommercialBlock(
 @Composable
 private fun ResaleDataBlock(
     shelfLife: String, onShelfLifeChange: (String) -> Unit,
-    storageType: String, onStorageTypeChange: (String) -> Unit
+    storageType: String, onStorageTypeChange: (String) -> Unit,
+    isPerishable: Boolean, onIsPerishableChange: (Boolean) -> Unit
 ) {
     SectionHeader("Datos del Producto")
+
+    // Mismo switch y mismo texto que en insumos: son la misma decisión.
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Caduca", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                "Al comprarlo se pedirá el lote y la fecha de vencimiento",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(checked = isPerishable, onCheckedChange = onIsPerishableChange)
+    }
 
     OutlinedTextField(
         value = shelfLife,

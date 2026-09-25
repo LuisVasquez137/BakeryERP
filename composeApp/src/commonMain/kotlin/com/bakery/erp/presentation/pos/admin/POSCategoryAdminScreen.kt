@@ -144,7 +144,7 @@ private fun EmptyCategoriesPlaceholder() {
         Text("Sin categorías POS", style = MaterialTheme.typography.titleMedium,
              color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(
-            "Crea categorías cortas (máx 4 letras, ej. \"Peq.\", \"Esp.\") para agrupar productos en el POS",
+            "Crea categorías (ej. \"Pan dulce\", \"Bebidas\") para agrupar productos en el POS",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline
         )
     }

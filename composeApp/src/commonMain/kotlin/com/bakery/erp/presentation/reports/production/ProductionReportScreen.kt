@@ -20,7 +20,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.DiscrepancyType
+import com.bakery.erp.model.ProductionWasteReason
 import com.bakery.erp.model.User
+import com.bakery.erp.model.rhythmLabel
 import com.bakery.erp.presentation.reports.shared.BranchFilterRow
 import com.bakery.erp.presentation.reports.shared.EmptyDataNote
 import com.bakery.erp.presentation.reports.shared.KpiTile
@@ -216,6 +218,102 @@ fun ProductionReportScreen(
                         }
                     }
                     item {
+                        // Merma de horno: pan que se amasó y se perdió. Va junto a
+                        // "planeado vs producido" porque es lo que explica la diferencia
+                        // entre la masa que se gastó y el pan que salió — sin esta
+                        // sección, el reporte muestra eficiencia sin decir a dónde se fue.
+                        ReportSection(
+                            title = "Pan perdido en el horno",
+                            subtitle = "Se quemó, se cayó o salió mal. Esta masa se descontó " +
+                                "del inventario aunque el pan no se haya entregado."
+                        ) {
+                            if (p.wasteByProduct.isEmpty()) {
+                                EmptyDataNote()
+                            } else {
+                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    p.wasteByProduct.take(12).forEach { w ->
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    w.productName,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = ReportSlate
+                                                )
+                                                Text(
+                                                    buildString {
+                                                        append(w.recipeName.ifBlank { "Sin masa" })
+                                                        val top = w.byReason.maxByOrNull { it.value }?.key
+                                                        if (top != null) {
+                                                            append(" · ")
+                                                            append(ProductionWasteReason.label(top))
+                                                        }
+                                                    },
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = Color(0xFF607585)
+                                                )
+                                            }
+                                            Text(
+                                                // El porcentaje va sobre lo amasado, no sobre lo
+                                                // bueno: la pregunta es "de cada 100 que metí al
+                                                // horno, cuántas perdí".
+                                                "${w.wasteUnits.toInt()} u · ${w.wastePct.fmt(1)}%",
+                                                color = BrandColors.AccentDeep,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(12.dp))
+
+                        // Material de planta: lo que se gastó fuera de la receta. Va antes
+                        // de las discrepancias porque explica parte del faltante que después
+                        // aparece al contar — la harina de la mesa no la descuenta el lote.
+                        ReportSection(
+                            title = "Material de planta",
+                            subtitle = "Salidas de bodega que la receta no explica: harina " +
+                                "para la mesa, manteca para las bandejas, limpieza."
+                        ) {
+                            if (state.plantIssueSummaries.isEmpty()) {
+                                EmptyDataNote()
+                            } else {
+                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    state.plantIssueSummaries.take(10).forEach { sm ->
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    sm.ingredientName,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = ReportSlate
+                                                )
+                                                Text(
+                                                    "${sm.rhythmLabel()} · ${sm.issueCount} registros",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = Color(0xFF607585)
+                                                )
+                                            }
+                                            Text(
+                                                if (sm.packages > 0.0) "${sm.packages.toInt()} empaques"
+                                                else "${sm.quantityInBaseUnit.fmt(1)} ${sm.baseUnit}",
+                                                color = BrandColors.AccentDeep,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(12.dp))
+
                         ReportSection(title = "Discrepancias en despacho") {
                             if (d.byDestinationBranch.isEmpty()) {
                                 EmptyDataNote()

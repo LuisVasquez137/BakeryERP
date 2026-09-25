@@ -27,6 +27,16 @@ data class BreadCount(
     val totalSurplusValue: Double = 0.0,
     val lineCount: Int = 0,
     val notes: String? = null,
+    /**
+     * Unidades de venta por grupo de precio ("Pan Q0.50") que este conteo repartió como VENTA
+     * entre los panes del grupo. Ver `allocateGroupSales`.
+     */
+    val groupSalesAllocated: Double = 0.0,
+    /** Vendido como grupo que el conteo no explica (se cobró más pan del que falta). */
+    val unexplainedGroupUnits: Double = 0.0,
+    /** Ventana de ventas de grupo que cubrió el cierre. 0 en conteos viejos. */
+    val salesWindowFrom: Long = 0L,
+    val salesWindowUntil: Long = 0L,
     val createdAt: Long = 0L,
     val closedAt: Long? = null
 )
