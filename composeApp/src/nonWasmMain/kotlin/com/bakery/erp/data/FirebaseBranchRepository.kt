@@ -110,6 +110,10 @@ class FirebaseBranchRepository(
         "receivesOnlyInTrip" to receivesOnlyInTrip,
         "latitude" to latitude,
         "longitude" to longitude,
+        // Nombres en español: los lee la Cloud Function de FEL (felEmisor.js) tal cual.
+        "felProfileId" to felProfileId,
+        "felCodigoEstablecimiento" to felEstablishmentCode,
+        "invoiceByDefault" to invoiceByDefault,
         "active" to active,
         "createdAt" to if (createdAt == 0L) Clock.System.now().toEpochMilliseconds() else createdAt,
         "updatedAt" to Clock.System.now().toEpochMilliseconds()
@@ -149,6 +153,9 @@ class FirebaseBranchRepository(
         }.getOrNull() ?: 0,
         latitude = runCatching { get<Double?>("latitude") }.getOrNull(),
         longitude = runCatching { get<Double?>("longitude") }.getOrNull(),
+        felProfileId = runCatching { get<String?>("felProfileId") }.getOrNull() ?: "",
+        felEstablishmentCode = runCatching { get<String?>("felCodigoEstablecimiento") }.getOrNull() ?: "",
+        invoiceByDefault = runCatching { get<Boolean?>("invoiceByDefault") }.getOrNull() ?: false,
         active = get<Boolean?>("active") ?: true,
         createdAt = readTimestampAsMillis("createdAt"),
         updatedAt = readTimestampAsMillis("updatedAt")

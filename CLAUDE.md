@@ -1867,7 +1867,29 @@ facturar y descuente el crédito del paquete compartido de DTEs).
   anuló. No hay ambiente de pruebas para este NIT: certificar es una factura real. En
   PowerShell la contraseña va con `$env:DIGIFACT_PASSWORD = '...'` (comillas simples por el `$`).
 
-**Pendiente**: Fase 2 (perfiles y sucursales en la app), Fase 3 (cobro, ticket con QR,
+**Fase 2 (hecha, sin probar en dispositivo): configuración en la app** — módulo
+"Facturación" en Administración, **solo OWNER** (`RequireOwner` en la ruta y `role == OWNER` en
+el Home; la función exige lo mismo). `FelSetupScreen` lista los NIT con sus sucursales y las que
+no facturan; `FelProfileFormScreen` edita datos del RTU, tipo de contribuyente (PEQ → FPEQ,
+GEN → FACT + régimen ISR), credenciales y sucursales (código de establecimiento + "Facturar por
+defecto").
+- `model/FelProfile.kt`: `isValidGuatemalaNit` (módulo 11, atrapa el error de dedo antes que
+  Digifact) y `felAssignmentProblems` (código vacío, no numérico o **repetido** entre sucursales
+  del mismo NIT — "01" y "1" son el mismo). Tests en `FelProfileTest`.
+- `FirebaseFelRepository` (nonWasmMain) lee `felProfiles` de Firestore y **guarda solo por
+  `felGuardarPerfil`** (GitLive `firebase-functions`, primera Cloud Function que llama la app):
+  las credenciales no pasan nunca por Firestore del cliente. La contraseña del formulario vive en
+  `remember`, no `rememberSaveable`, para no terminar en el Bundle del sistema.
+- `felGuardarPerfil` **prueba las credenciales antes de guardarlas**: antes las guardaba y
+  después probaba, y una contraseña mal tecleada reemplazaba a la que sí facturaba.
+- Orden del guardado: perfil primero, sucursales después (`FelViewModel.save`). Si Digifact
+  rechaza, las sucursales no se tocan.
+- `Branch.felProfileId` / `felEstablishmentCode` (en Firestore `felCodigoEstablecimiento`, el
+  nombre que lee `felEmisor.js`) / `invoiceByDefault`. Van en `toMap()` y `BranchFormScreen.build()`
+  los arrastra: `updateBranch` hace `set()` y guardar la ficha borraría el NIT. La asignación se
+  escribe parcial (`assignBranches`), y desmarcar una sucursal la deja sin NIT.
+
+**Pendiente**: desplegar las funciones (sin eso guardar un NIT falla), Fase 3 (cobro, ticket con QR,
 anulación), Fase 4 (puente con ComandaYa y crédito compartido; y arreglar que
 `ingestExternalSale` hace `set` sin merge y reabre una venta ya recibida en caja).
 

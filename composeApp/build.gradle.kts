@@ -60,6 +60,9 @@ kotlin {
                 implementation(libs.firebase.auth)
                 implementation(libs.firebase.firestore)
                 implementation(libs.firebase.storage)
+                // Facturación electrónica: la app llama Cloud Functions (felGuardarPerfil…)
+                // porque las credenciales de Digifact nunca pasan por Firestore del cliente.
+                implementation(libs.firebase.functions)
             }
         }
         // nativeMobileMain: actual de initializePlatform para Android e iOS (NO JS)

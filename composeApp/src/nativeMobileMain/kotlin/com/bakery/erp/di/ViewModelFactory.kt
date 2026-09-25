@@ -43,6 +43,7 @@ actual fun createAppViewModels(): AppViewModels {
         customerOrder = koin.get(),
         externalCustomer = koin.get(),
         organizationSettings = koin.get(),
+        fel = koin.get(),
         resellerSetup = koin.get(),
         reseller = koin.get(),
         notification = koin.get(),

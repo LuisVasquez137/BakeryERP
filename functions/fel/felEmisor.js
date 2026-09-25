@@ -1,7 +1,7 @@
 // functions/fel/felEmisor.js
 //
 // Qué NIT emite la factura de una venta. No todas las sucursales facturan al mismo NIT
-// (Bombero, Democracia y Pacaja van al 593221-6; Calvario y Salida tienen otro), así que la
+// (Bombero, Democracia y Pacaja van al 59325216; Calvario y Salida tienen otro), así que la
 // identidad fiscal vive en "perfiles fiscales" y cada sucursal apunta al suyo:
 //
 //   companies/{c}/felProfiles/{pid}   → un NIT emisor con sus datos SAT (sin secretos)

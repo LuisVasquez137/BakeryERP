@@ -205,6 +205,9 @@ actual fun createAppViewModels(): AppViewModels {
             externalCustomerRepo, priceListRepo, branchRepo, productionRepo
         ),
         organizationSettings = OrganizationSettingsViewModel(authRepo, saleRepo),
+        fel = com.bakery.erp.presentation.fel.FelViewModel(
+            com.bakery.erp.data.FirebaseFelRepository(firestore), branchRepo
+        ),
         resellerSetup = ResellerSetupViewModel(authRepo, branchRepo),
         reseller = ResellerViewModel(
             externalCustomerRepo, customerOrderRepo, productRepoJs, priceListRepo, branchRepo

@@ -31,8 +31,8 @@ const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 
 const { resolverEmisor, limpiarNit, FEL_PROFILES } = require("./felEmisor");
-const { clienteParaPerfil, guardarCredenciales } = require("./felCredenciales");
-const { serieYNumero } = require("./digifactClient");
+const { clienteParaPerfil, guardarCredenciales, URLS } = require("./felCredenciales");
+const { DigifactClient, serieYNumero } = require("./digifactClient");
 const {
   buildFacturaNuc, prorateDiscount, referenciaInterna, fechaEmisionParaAnular, idReceptorParaXml,
 } = require("./nucXmlBuilder");
@@ -397,14 +397,19 @@ exports.felGuardarPerfil = onCall({ region: REGION, timeoutSeconds: 60 }, async 
 
   if (credenciales?.usuario && credenciales?.password) {
     const ambiente = credenciales.ambiente === "PRODUCCION" ? "PRODUCCION" : "TEST";
-    await guardarCredenciales({
-      companyId, profileId: ref.id, nit, usuario: credenciales.usuario, password: credenciales.password, ambiente,
-    });
+    // Se prueban ANTES de guardarlas: una contraseña mal tecleada no puede reemplazar a la que
+    // ya factura, o la sucursal se queda sin poder emitir hasta que alguien lo note en caja.
     try {
-      await (await clienteParaPerfil(companyId, ref.id)).getToken(true);
+      await new DigifactClient({
+        baseUrl: URLS[ambiente], taxId: nit, user: String(credenciales.usuario).trim(),
+        password: String(credenciales.password), ambiente,
+      }).getToken(true);
     } catch (e) {
       throw new HttpsError("failed-precondition", `Digifact no aceptó las credenciales: ${e.message}`);
     }
+    await guardarCredenciales({
+      companyId, profileId: ref.id, nit, usuario: credenciales.usuario, password: credenciales.password, ambiente,
+    });
     datos.tieneCredenciales = true;
     datos.ambienteApi = ambiente;
   }

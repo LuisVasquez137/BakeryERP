@@ -83,6 +83,8 @@ data class AppViewModels(
     val customerOrder: CustomerOrderViewModel,
     val externalCustomer: ExternalCustomerViewModel,
     val organizationSettings: OrganizationSettingsViewModel,
+    /** Facturación electrónica: NITs emisores y sucursales que facturan. */
+    val fel: com.bakery.erp.presentation.fel.FelViewModel,
     val resellerSetup: ResellerSetupViewModel,
     val reseller: ResellerViewModel,
     val notification: NotificationViewModel,

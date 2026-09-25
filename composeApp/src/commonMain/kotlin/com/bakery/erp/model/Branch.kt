@@ -84,6 +84,17 @@ data class Branch(
      *  desde BranchFormScreen si la captura automática quedó mal. */
     val latitude: Double? = null,
     val longitude: Double? = null,
+    /**
+     * NIT con el que factura esta sucursal ([FelProfile.id]). Vacío = no factura. Lo escribe
+     * solo la pantalla de Facturación electrónica (escritura parcial), pero va también en
+     * `toMap()` porque `updateBranch` hace `set()`: sin eso, guardar la ficha de la sucursal
+     * le borraría el NIT.
+     */
+    val felProfileId: String = "",
+    /** Código de establecimiento que la SAT le dio a esta sucursal dentro de su NIT. */
+    val felEstablishmentCode: String = "",
+    /** El cobro sale con "Facturar" ya marcado. Facturar sigue siendo opcional por venta. */
+    val invoiceByDefault: Boolean = false,
     val active: Boolean = true,
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L

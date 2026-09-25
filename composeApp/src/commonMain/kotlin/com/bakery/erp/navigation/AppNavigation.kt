@@ -63,6 +63,8 @@ import com.bakery.erp.presentation.customerOrders.ExternalCustomerFormScreen
 import com.bakery.erp.presentation.customerOrders.ExternalCustomerListScreen
 import com.bakery.erp.presentation.customerOrders.ResellerApprovalScreen
 import com.bakery.erp.presentation.organization.OrganizationSettingsScreen
+import com.bakery.erp.presentation.fel.FelProfileFormScreen
+import com.bakery.erp.presentation.fel.FelSetupScreen
 import com.bakery.erp.presentation.reseller.ResellerHomeScreen
 import com.bakery.erp.presentation.splash.SplashScreen
 import com.bakery.erp.presentation.reseller.ResellerOrderDetailScreen
@@ -493,6 +495,11 @@ sealed class Screen(val route: String) {
             else "externalCustomers/form?customerId=$customerId"
     }
     object OrganizationSettings : Screen("organization/settings")
+    object FelSetup : Screen("fel/setup")
+    object FelProfileForm : Screen("fel/profile?profileId={profileId}") {
+        fun route(profileId: String?) =
+            if (profileId.isNullOrEmpty()) "fel/profile" else "fel/profile?profileId=$profileId"
+    }
     /** Pantalla post-signup donde el revendedor configura sucursal, modalidad y hora. */
     object ResellerSetup : Screen("auth/reseller_setup")
     /** Pantalla donde la encargada aprueba revendedores pendientes y asigna planta+turno. */
@@ -555,6 +562,7 @@ fun AppNavigation(
     val customerOrderViewModel = vms.customerOrder
     val externalCustomerViewModel = vms.externalCustomer
     val organizationSettingsViewModel = vms.organizationSettings
+    val felViewModel = vms.fel
     val bluetoothPrinterManager = vms.bluetoothPrinterManager
     val documentPrinter = vms.documentPrinter
 
@@ -784,6 +792,7 @@ fun AppNavigation(
                 onNavigateToBranchSupplyReport = { navController.navigate(Screen.BranchSupplyReport.route) },
                 onNavigateToCustomerOrders = { navController.navigate(Screen.CustomerOrderList.route) },
                 onNavigateToOrganizationSettings = { navController.navigate(Screen.OrganizationSettings.route) },
+                onNavigateToFelSetup = { navController.navigate(Screen.FelSetup.route) },
                 onNavigateToResellerApproval = { navController.navigate(Screen.ResellerApproval.route) },
                 onNavigateToNotificationTarget = ::navigateToNotificationTarget,
                 viewModel = viewModel,
@@ -2397,6 +2406,34 @@ fun AppNavigation(
                 )
             }
         }
+        // Solo el dueño: el NIT y las credenciales de Digifact son del negocio, no de la
+        // operación diaria. La Cloud Function exige lo mismo al guardar.
+        composable(Screen.FelSetup.route) {
+            RequireOwner(state.user, onBack = { navController.popBackStack() }) {
+                FelSetupScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onOpenProfile = { id -> navController.navigate(Screen.FelProfileForm.route(id)) },
+                    authViewModel = viewModel,
+                    viewModel = felViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.FelProfileForm.route,
+            arguments = listOf(navArgument("profileId") {
+                type = NavType.StringType; nullable = true; defaultValue = null
+            })
+        ) { backStackEntry ->
+            val profileId = backStackEntry.savedStateHandle.get<String>("profileId")
+            RequireOwner(state.user, onBack = { navController.popBackStack() }) {
+                FelProfileFormScreen(
+                    profileId = profileId,
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = felViewModel
+                )
+            }
+        }
         composable(
             route = Screen.ExternalCustomerForm.route,
             arguments = listOf(navArgument("customerId") {
@@ -2434,6 +2471,21 @@ private fun RequirePermission(
             CircularProgressIndicator()
         }
         permissions.any { user.hasPermission(it) } -> content()
+        else -> NoAccessView(onBack)
+    }
+}
+
+@Composable
+private fun RequireOwner(
+    user: User?,
+    onBack: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    when {
+        user == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+        user.role == com.bakery.erp.model.UserRole.OWNER -> content()
         else -> NoAccessView(onBack)
     }
 }

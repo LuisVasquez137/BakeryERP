@@ -161,6 +161,10 @@ fun BranchFormScreen(
         dispatchBranchOrder = existing?.dispatchBranchOrder ?: emptyList(),
         closedWeekdays = closedWeekdays.toList(),
         receivesOnlyInTrip = receivesOnlyInTrip,
+        // La facturación se asigna desde su propio módulo; mismo motivo que los órdenes.
+        felProfileId = existing?.felProfileId ?: "",
+        felEstablishmentCode = existing?.felEstablishmentCode ?: "",
+        invoiceByDefault = existing?.invoiceByDefault ?: false,
         active = active
     )
 
