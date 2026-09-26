@@ -40,3 +40,22 @@ class FelInvoiceTest {
         assertFalse(FelInvoiceStatus.isInFlight(""))
     }
 }
+
+class FelInvoiceLaterTest {
+    private val sale = Sale(id = "s1", total = 10.0, status = SaleStatus.COMPLETED, salesChannel = SalesChannel.BAKERY)
+
+    @Test
+    fun `pan cobrado sin factura en sucursal con NIT se puede facturar`() {
+        assertTrue(felCanInvoiceLater(sale, branchHasNit = true))
+    }
+
+    @Test
+    fun `no se factura desde el historial lo que ya tiene factura, el restaurante ni una sucursal sin NIT`() {
+        assertFalse(felCanInvoiceLater(sale, branchHasNit = false))
+        assertFalse(felCanInvoiceLater(sale.copy(invoiceStatus = FelInvoiceStatus.CERTIFICADO), true))
+        assertFalse(felCanInvoiceLater(sale.copy(invoiceStatus = FelInvoiceStatus.PENDIENTE), true))
+        assertFalse(felCanInvoiceLater(sale.copy(salesChannel = SalesChannel.RESTAURANT), true))
+        assertFalse(felCanInvoiceLater(sale.copy(status = SaleStatus.VOIDED), true))
+        assertFalse(felCanInvoiceLater(sale.copy(total = 0.0), true))
+    }
+}

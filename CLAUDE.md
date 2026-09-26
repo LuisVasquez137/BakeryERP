@@ -1948,7 +1948,18 @@ venta**: no devuelve dinero ni inventario, y el diálogo lo dice. BakeOS todaví
 - Anular y reemitir son dos llamadas separadas: si la anulación sale y la nueva falla, lo
   anulado ya es un hecho ante la SAT; la venta queda para "Facturar de nuevo".
 
-**Pendiente**: reimprimir la factura desde el historial, Fase 4 (puente con ComandaYa y crédito compartido; y arreglar que
+**Desde el historial de ventas** (`SaleDetailScreen`):
+- **Reimprimir** (ícono de impresora): cualquier venta; si está facturada sale la
+  representación gráfica completa con QR, leída del DTE guardado (`FelRepository.getInvoice`)
+  sin volver a llamar a Digifact. El ticket lo arma `saleReceiptData` (`pos/SaleReceipt.kt`),
+  que el cobro del POS también usa: el reimpreso dice lo mismo que el original. La primera vez
+  en el aparato abre el selector de térmica, igual que el cobro.
+- **"Facturar esta venta"**: para el pan que salió sin factura (el cliente la pidió después, o
+  se olvidó marcarla). `felCanInvoiceLater` decide: sin factura previa, COMPLETED, canal
+  BAKERY, sucursal con NIT. **La cuenta del restaurante no**: la factura ComandaYa. Pide
+  `OPERATE_POS`, el mismo permiso que facturar al cobrar. Se emite con la fecha de hoy.
+
+**Pendiente**: fase 4 (ComandaYa), Fase 4 (puente con ComandaYa y crédito compartido; y arreglar que
 `ingestExternalSale` hace `set` sin merge y reabre una venta ya recibida en caja).
 
 ### Empleados

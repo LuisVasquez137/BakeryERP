@@ -1315,7 +1315,8 @@ fun AppNavigation(
                     saleId = saleId,
                     onNavigateBack = { navController.popBackStack() },
                     authViewModel = viewModel,
-                    viewModel = saleHistoryViewModel
+                    viewModel = saleHistoryViewModel,
+                    bluetoothPrinterManager = bluetoothPrinterManager
                 )
             }
         }

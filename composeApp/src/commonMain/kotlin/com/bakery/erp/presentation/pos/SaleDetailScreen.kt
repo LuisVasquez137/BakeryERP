@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Print
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -27,7 +28,9 @@ fun SaleDetailScreen(
     saleId: String,
     onNavigateBack: () -> Unit,
     authViewModel: AuthViewModel,
-    viewModel: SaleHistoryViewModel
+    viewModel: SaleHistoryViewModel,
+    /** Para elegir la térmica la primera vez, igual que en el cobro. */
+    bluetoothPrinterManager: com.bakery.erp.domain.BluetoothPrinterManager? = null
 ) {
     val state by viewModel.uiState.collectAsState()
     val authState by authViewModel.uiState.collectAsState()
@@ -50,6 +53,21 @@ fun SaleDetailScreen(
     val canFixInvoice = authState.user?.hasPermission(Permission.VOID_SALE) == true
     var voidOpen by remember { mutableStateOf(false) }
     var reissueOpen by remember { mutableStateOf(false) }
+    var invoiceLaterOpen by remember { mutableStateOf(false) }
+    var btPickerOpen by remember { mutableStateOf(false) }
+    val currentSale = state.selectedSale
+    val branchHasNit = state.branches.firstOrNull { it.id == currentSale?.branchId }?.felProfileId?.isNotBlank() == true
+    // Facturar después es el mismo acto que facturar al cobrar: pide el permiso de cobrar.
+    val canInvoiceLater = currentSale != null &&
+        authState.user?.hasPermission(Permission.OPERATE_POS) == true &&
+        com.bakery.erp.model.felCanInvoiceLater(currentSale, branchHasNit)
+    fun print() {
+        val s = state.selectedSale ?: return
+        val manager = bluetoothPrinterManager
+        // Primera vez en este aparato: elegir la térmica, y al configurarla se imprime.
+        if (manager != null && manager.isPlatformSupported && manager.getSavedConfig() == null) btPickerOpen = true
+        else viewModel.printSale(companyId, s)
+    }
 
     val sale = state.selectedSale
     val lines = state.selectedSaleLines
@@ -63,10 +81,27 @@ fun SaleDetailScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Volver")
                     }
                 },
+                actions = {
+                    if (viewModel.canPrint && state.selectedSale != null) {
+                        IconButton(onClick = { print() }, enabled = !state.isPrinting) {
+                            if (state.isPrinting) CircularProgressIndicator(
+                                Modifier.size(20.dp), strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                            else Icon(
+                                Icons.Default.Print,
+                                // Con factura sale la representación gráfica completa, QR incluido.
+                                if (state.selectedSale?.invoiceStatus == com.bakery.erp.model.FelInvoiceStatus.CERTIFICADO)
+                                    "Reimprimir factura" else "Reimprimir ticket"
+                            )
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     titleContentColor = MaterialTheme.colorScheme.onPrimary,
-                    navigationIconContentColor = MaterialTheme.colorScheme.onPrimary
+                    navigationIconContentColor = MaterialTheme.colorScheme.onPrimary,
+                    actionIconContentColor = MaterialTheme.colorScheme.onPrimary
                 )
             )
         },
@@ -84,6 +119,13 @@ fun SaleDetailScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 item { SaleHeaderCard(sale, canSeeValue) }
+                if (canInvoiceLater) item {
+                    Button(
+                        onClick = { invoiceLaterOpen = true },
+                        enabled = !state.isInvoiceBusy,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Facturar esta venta") }
+                }
                 if (canFixInvoice) {
                     when (sale.invoiceStatus) {
                         com.bakery.erp.model.FelInvoiceStatus.CERTIFICADO -> item {
@@ -128,6 +170,29 @@ fun SaleDetailScreen(
                 voidOpen = false
                 viewModel.voidInvoice(companyId, sale, reason, reissueTo)
             }
+        )
+    }
+    if (invoiceLaterOpen && sale != null) {
+        ReissueInvoiceDialog(
+            sale = sale,
+            lookupNit = lookup,
+            onDismiss = { invoiceLaterOpen = false },
+            onConfirm = { to ->
+                invoiceLaterOpen = false
+                viewModel.reissueInvoice(companyId, sale, to)
+            },
+            title = "Facturar esta venta",
+            message = "Se emite la factura de esta venta con la fecha de hoy. El cobro no cambia."
+        )
+    }
+    if (btPickerOpen && bluetoothPrinterManager != null) {
+        BluetoothPrinterPickerDialog(
+            manager = bluetoothPrinterManager,
+            onConfigured = {
+                btPickerOpen = false
+                state.selectedSale?.let { viewModel.printSale(companyId, it) }
+            },
+            onDismiss = { btPickerOpen = false }
         )
     }
     if (reissueOpen && sale != null) {

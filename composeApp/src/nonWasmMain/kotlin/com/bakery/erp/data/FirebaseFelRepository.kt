@@ -118,6 +118,27 @@ class FirebaseFelRepository(
         functions.httpsCallable("felAnularDte").invoke(VoidRequest(companyId, dteId, reason.trim()))
     }
 
+    override suspend fun getInvoice(companyId: String, dteId: String): FelCertifyResult? {
+        if (dteId.isBlank()) return null
+        val d = firestore.collection("companies/$companyId/dtes").document(dteId).get()
+        if (!d.exists) return null
+        fun str(f: String) = runCatching { d.get<String?>(f) }.getOrNull().orEmpty()
+        // Los números los escribe el servidor: enteros en Android, Double en JS.
+        fun num(f: String) = runCatching { d.get<Double?>(f) }.getOrNull()
+            ?: runCatching { d.get<Long?>(f)?.toDouble() }.getOrNull() ?: 0.0
+        return FelCertifyResult(
+            dteId = d.id, status = str("estado"), message = str("ultimoError"),
+            serie = str("serie"), numero = str("numero"), uuid = str("uuid"), docType = str("docType"),
+            certifiedAt = num("fechaCertificacion").toLong(), total = num("granTotal"), vat = num("totalIVA"),
+            receptorId = str("receptorId").ifBlank { "CF" },
+            receptorName = str("receptorNombre").ifBlank { "CONSUMIDOR FINAL" },
+            emisorNit = str("emisorNit"), emisorName = str("emisorNombre"),
+            emisorTradeName = str("emisorNombreComercial"), emisorAddress = str("emisorDireccion"),
+            phrases = runCatching { d.get<List<String>?>("frases") }.getOrNull().orEmpty(),
+            environment = str("ambiente")
+        )
+    }
+
     override suspend fun lookupNit(companyId: String, branchId: String, nit: String): String? {
         val result = functions.httpsCallable("felConsultarNit")
             .invoke(NitLookupRequest(companyId, branchId, cleanNit(nit)))

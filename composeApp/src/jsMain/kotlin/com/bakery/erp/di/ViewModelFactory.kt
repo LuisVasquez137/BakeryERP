@@ -180,7 +180,7 @@ actual fun createAppViewModels(): AppViewModels {
             JsReceiptPrinter(), authRepo, creditRepo, felRepo
         ),
         cashSession = CashSessionViewModel(cashSessionRepo, cashRegisterRepo, branchRepo, dailyCloseRepo, purchaseRepo),
-        saleHistory = SaleHistoryViewModel(saleRepo, cashSessionRepo, branchRepo, felRepo),
+        saleHistory = SaleHistoryViewModel(saleRepo, cashSessionRepo, branchRepo, felRepo, JsReceiptPrinter(), authRepo),
         cashRegisterAdmin = CashRegisterAdminViewModel(cashRegisterRepo, branchRepo, cashSessionRepo),
         posCategoryAdmin = POSCategoryAdminViewModel(posCategoryRepo, productRepoJs, branchRepo),
         credit = com.bakery.erp.presentation.credit.CreditViewModel(creditRepo, employeeRepo),

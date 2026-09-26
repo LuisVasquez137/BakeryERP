@@ -988,7 +988,7 @@ class POSViewModel(
                 s.copy(
                     invoiceProgress = progress,
                     lastReceiptData = if (certified != null) s.lastReceiptData?.copy(
-                        invoice = com.bakery.erp.model.receiptInvoiceFrom(certified, formatTimestamp(certified.certifiedAt))
+                        invoice = com.bakery.erp.model.receiptInvoiceFrom(certified, formatReceiptTimestamp(certified.certifiedAt))
                     ) else s.lastReceiptData
                 )
             }
@@ -998,58 +998,15 @@ class POSViewModel(
     fun clearLastSaleSummary() { _uiState.update { it.copy(lastSaleSummary = null) } }
     fun clearError() { _uiState.update { it.copy(error = null) } }
 
-    private fun buildReceiptData(sale: Sale, lines: List<CartLine>, branch: Branch): ReceiptData {
-        val createdMillis = if (sale.createdAt > 0L) sale.createdAt
-                            else Clock.System.now().toEpochMilliseconds()
-        // Cabecera: nombre comercial (org) en grande, abajo "Sucursal: X" + dirección si hay.
-        val header = organizationName.ifEmpty { branch.name.ifEmpty { "Punto de Venta" } }
-        val subHeader = buildString {
-            if (organizationName.isNotEmpty() && branch.name.isNotEmpty()) {
-                append("Sucursal: ").append(branch.name)
-            }
-            if (branch.location.isNotEmpty()) {
-                if (isNotEmpty()) append(" · ")
-                append(branch.location)
-            }
-        }
-        return ReceiptData(
-            companyName = header,
-            branchName = subHeader,
-            saleId = sale.id.takeLast(8).ifEmpty { "—" },
-            dateLabel = formatTimestamp(createdMillis),
-            cashierName = sale.cashierName,
-            registerName = sale.registerName,
-            lines = lines.map { l ->
-                ReceiptLine(
-                    name = l.productName,
-                    quantity = l.quantity,
-                    unitPrice = l.unitPrice,
-                    subtotal = l.subtotal
-                )
-            },
-            subtotal = sale.subtotal,
-            discount = sale.discount,
-            total = sale.total,
-            paymentMethodLabel = if (sale.paymentMethod == SalePaymentMethod.CREDIT)
-                "Crédito · ${sale.creditAccountName}" +
-                    (if (sale.creditPersonName.isNotBlank() && sale.creditPersonName != sale.creditAccountName)
-                        " (llevó ${sale.creditPersonName})" else "")
-            else SalePaymentMethod.label(sale.paymentMethod),
-            tenderedAmount = sale.tenderedAmount,
-            changeAmount = sale.changeAmount
+    private fun buildReceiptData(sale: Sale, lines: List<CartLine>, branch: Branch): ReceiptData =
+        saleReceiptData(
+            sale = sale,
+            lines = lines.map { l -> ReceiptLine(l.productName, l.quantity, l.unitPrice, l.subtotal) },
+            branchName = branch.name,
+            branchLocation = branch.location,
+            organizationName = organizationName
         )
-    }
 
-    @Suppress("DEPRECATION")
-    private fun formatTimestamp(millis: Long): String {
-        val instant = Instant.fromEpochMilliseconds(millis)
-        val local = instant.toLocalDateTime(TimeZone.currentSystemDefault())
-        val day = local.dayOfMonth.toString().padStart(2, '0')
-        val month = local.monthNumber.toString().padStart(2, '0')
-        val hour = local.hour.toString().padStart(2, '0')
-        val minute = local.minute.toString().padStart(2, '0')
-        return "$day/$month/${local.year} $hour:$minute"
-    }
 
     // ── Helpers ───────────────────────────────────────────────────────────
 

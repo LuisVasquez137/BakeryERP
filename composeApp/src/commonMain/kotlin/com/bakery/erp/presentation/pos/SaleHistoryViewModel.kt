@@ -39,7 +39,8 @@ data class SaleHistoryUiState(
     /** Anulando o volviendo a facturar: tapa la pantalla, Digifact puede tardar. */
     val isInvoiceBusy: Boolean = false,
     /** Resultado para el snackbar ("Factura anulada", "Nueva factura serie…"). */
-    val notice: String? = null
+    val notice: String? = null,
+    val isPrinting: Boolean = false
 )
 
 class SaleHistoryViewModel(
@@ -47,8 +48,15 @@ class SaleHistoryViewModel(
     private val cashSessionRepository: CashSessionRepository,
     private val branchRepository: BranchRepository,
     /** Anular y volver a facturar desde el detalle de la venta. */
-    private val felRepository: com.bakery.erp.domain.FelRepository
+    private val felRepository: com.bakery.erp.domain.FelRepository,
+    /** Reimpresión del ticket desde el detalle. */
+    private val receiptPrinter: com.bakery.erp.domain.ReceiptPrinter,
+    /** Solo para el nombre comercial del encabezado del ticket, igual que en el POS. */
+    private val authRepository: com.bakery.erp.domain.AuthRepository
 ) : ViewModel() {
+
+    val canPrint: Boolean get() = receiptPrinter.isAvailable
+    private var organizationName: String? = null
 
     private val _uiState = MutableStateFlow(SaleHistoryUiState())
     val uiState: StateFlow<SaleHistoryUiState> = _uiState.asStateFlow()
@@ -169,16 +177,54 @@ class SaleHistoryViewModel(
         }
     }
 
-    /** Factura otra vez una venta cuya factura se anuló o fue rechazada. */
+    /**
+     * Factura una venta desde el historial. Sin factura previa es la primera emisión (el cliente
+     * la pidió después de cobrar); con una anulada o rechazada es volver a facturar.
+     */
     fun reissueInvoice(companyId: String, sale: Sale, to: com.bakery.erp.model.FelInvoiceRequest) {
         if (_uiState.value.isInvoiceBusy) return
+        val reissue = sale.invoiceStatus.isNotBlank()
         viewModelScope.launch {
             _uiState.update { it.copy(isInvoiceBusy = true, error = null) }
-            // Solo esta venta: el servidor suma las demás que cubría la factura anterior.
-            runCatching { felRepository.certifySales(companyId, listOf(sale.id), to, reissue = true) }
+            // Solo esta venta: al reemitir, el servidor suma las demás que cubría la anterior.
+            runCatching { felRepository.certifySales(companyId, listOf(sale.id), to, reissue = reissue) }
                 .onSuccess { r -> _uiState.update { it.copy(isInvoiceBusy = false, notice = reissueNotice(r)) } }
                 .onFailure { e -> _uiState.update { it.copy(isInvoiceBusy = false, error = readable(e, "No se pudo facturar.")) } }
             loadSaleDetail(companyId, sale.id)
+        }
+    }
+
+    /**
+     * Reimprime el ticket de la venta. Si está facturada, con la factura y el QR: se leen del
+     * documento guardado, sin volver a llamar a Digifact.
+     */
+    fun printSale(companyId: String, sale: Sale) {
+        if (_uiState.value.isPrinting) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isPrinting = true, error = null) }
+            runCatching {
+                val branch = _uiState.value.branches.firstOrNull { it.id == sale.branchId }
+                val org = organizationName ?: authRepository.getOrganization(companyId)
+                    .map { it.name }.getOrDefault("").also { organizationName = it }
+                val base = saleReceiptData(
+                    sale = sale,
+                    lines = receiptLinesOf(_uiState.value.selectedSaleLines),
+                    branchName = branch?.name ?: sale.branchName,
+                    branchLocation = branch?.location.orEmpty(),
+                    organizationName = org
+                )
+                val invoice = if (sale.invoiceStatus == com.bakery.erp.model.FelInvoiceStatus.CERTIFICADO)
+                    felRepository.getInvoice(companyId, sale.dteId)
+                        ?.takeIf { it.status == com.bakery.erp.model.FelInvoiceStatus.CERTIFICADO }
+                else null
+                val data = if (invoice == null) base
+                else base.copy(invoice = com.bakery.erp.model.receiptInvoiceFrom(invoice, formatReceiptTimestamp(invoice.certifiedAt)))
+                receiptPrinter.print(data).getOrThrow()
+            }.onSuccess {
+                _uiState.update { it.copy(isPrinting = false) }
+            }.onFailure { e ->
+                _uiState.update { it.copy(isPrinting = false, error = e.message ?: "No se pudo imprimir.") }
+            }
         }
     }
 

@@ -126,3 +126,16 @@ fun felDocTypeTitle(docType: String): String = when (docType.uppercase()) {
 fun felPhrasesFor(result: FelCertifyResult): List<String> = result.phrases.ifEmpty {
     if (result.docType.equals("FPEQ", ignoreCase = true)) listOf("No genera derecho a crédito fiscal") else emptyList()
 }
+
+/**
+ * Una venta que salió sin factura y se puede facturar después, desde el historial (el cliente
+ * la pide al rato, o la cajera olvidó marcarla). Solo pan de una sucursal con NIT: la cuenta
+ * del restaurante la factura ComandaYa, y emitirla acá también sería una doble factura del
+ * mismo consumo. Una venta anulada o todavía sin recibir en caja no se factura.
+ */
+fun felCanInvoiceLater(sale: Sale, branchHasNit: Boolean): Boolean =
+    branchHasNit &&
+        sale.invoiceStatus.isBlank() &&
+        sale.status == SaleStatus.COMPLETED &&
+        sale.salesChannel == SalesChannel.BAKERY &&
+        sale.total > 0.0

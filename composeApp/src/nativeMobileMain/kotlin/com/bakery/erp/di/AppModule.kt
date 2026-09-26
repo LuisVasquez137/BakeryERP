@@ -216,7 +216,7 @@ val appModule = module {
     single { FixedAssetViewModel(get(), get(), get()) }
     single { POSViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { CashSessionViewModel(get(), get(), get(), get(), get()) }
-    single { SaleHistoryViewModel(get(), get(), get(), get()) }
+    single { SaleHistoryViewModel(get(), get(), get(), get(), get(), get()) }
     single { CashRegisterAdminViewModel(get(), get(), get()) }
     single { POSCategoryAdminViewModel(get(), get(), get()) }
     single { BreadCountViewModel(get(), get()) }

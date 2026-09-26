@@ -61,6 +61,12 @@ interface FelRepository {
      */
     suspend fun voidInvoice(companyId: String, dteId: String, reason: String)
 
+    /**
+     * La factura ya emitida, tal como quedó guardada al certificarse. Para reimprimirla: se lee
+     * de Firestore, sin volver a llamar a Digifact. Null si no existe.
+     */
+    suspend fun getInvoice(companyId: String, dteId: String): FelCertifyResult?
+
     /** Nombre registrado en la SAT para ese NIT, o null si no existe. */
     suspend fun lookupNit(companyId: String, branchId: String, nit: String): String?
 }

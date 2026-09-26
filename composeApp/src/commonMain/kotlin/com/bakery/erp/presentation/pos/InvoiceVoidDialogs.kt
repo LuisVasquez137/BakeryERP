@@ -100,13 +100,18 @@ fun VoidInvoiceDialog(
     )
 }
 
-/** Facturar otra vez una venta cuya factura se anuló o fue rechazada. */
+/**
+ * Facturar una venta desde el historial: por primera vez (salió sin factura) o de nuevo (la
+ * anterior se anuló o fue rechazada). Mismo formulario de receptor que el cobro.
+ */
 @Composable
 fun ReissueInvoiceDialog(
     sale: Sale,
     lookupNit: suspend (String) -> Result<String?>,
     onDismiss: () -> Unit,
-    onConfirm: (FelInvoiceRequest) -> Unit
+    onConfirm: (FelInvoiceRequest) -> Unit,
+    title: String = "Facturar de nuevo",
+    message: String = "Se emite una factura nueva por esta venta. La anterior queda como está."
 ) {
     val form = remember { InvoiceFormState(defaultOn = true) }
     val options = remember(sale.id) { InvoiceOptions(true, sale.total, false, lookupNit) }
@@ -114,16 +119,13 @@ fun ReissueInvoiceDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Facturar de nuevo") },
+        title = { Text(title) },
         text = {
             Column(
                 Modifier.fillMaxWidth().heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text(
-                    "Se emite una factura nueva por esta venta. La anterior queda como está.",
-                    style = MaterialTheme.typography.bodyMedium
-                )
+                Text(message, style = MaterialTheme.typography.bodyMedium)
                 InvoiceSection(form, options, sale.total)
             }
         },
