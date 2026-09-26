@@ -1421,7 +1421,10 @@ private fun SaleSuccessDialog(
                     } else {
                         Icon(Icons.Default.Print, null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("Imprimir ticket")
+                        Text(
+                            if (invoice?.status == com.bakery.erp.model.FelInvoiceStatus.CERTIFICADO) "Imprimir factura"
+                            else "Imprimir ticket"
+                        )
                     }
                 }
             }

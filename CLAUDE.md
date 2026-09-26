@@ -1911,7 +1911,26 @@ defecto").
   `set()` y sin ellos recibir una cuenta le borraría la factura.
 - Historial y detalle de venta muestran `SaleInvoiceChip`.
 
-**Pendiente**: Fase 3b (ticket con QR), 3c (anulación), Fase 4 (puente con ComandaYa y crédito compartido; y arreglar que
+**Fase 3b (hecha, sin probar impresa): ticket con la factura.** `ReceiptData.invoice`
+(`ReceiptInvoice`, armado por `receiptInvoiceFrom` desde la respuesta de la función) lleva lo
+que la SAT pide en la representación gráfica: emisor (manda sobre el nombre de la empresa en el
+encabezado), tipo de documento, serie/número, autorización, fecha de certificación, receptor,
+frases, certificador (`FEL_CERTIFIER_NAME`/`NIT`) y el QR.
+- **URL del QR**: `felVerificationUrl`, formato de la SAT ("Reglas y Validaciones FEL" 5.6), el
+  mismo que ComandaYa (`DatosCertificador.urlVerificacion`).
+- **Térmica**: la impresora dibuja el QR sola con `GS ( k` (`util/QrCode.kt::escPosQr`). Si el
+  byte bajo del largo diera 0x0A se agrega un `&`: `chunkAtLineBreaks` corta en 0x0A y partiría
+  el comando entre dos envíos.
+- **Hoja/PDF/web**: `qrSvg` arma un SVG con la matriz de `io.github.g0dkar:qrcode-kotlin`
+  (`QRCodeProcessor`, solo la matriz — `QRCode.ofSquares()` trae el render de cada plataforma).
+- Si la factura cubre menos que el cobro (cuenta del restaurante aparte), el ticket imprime
+  "Monto facturado": el total impreso y el de la SAT tienen que poder cuadrarse.
+- La factura se adjunta al ticket del cobro al certificarse (`certifyInvoice`); el acuse cambia
+  el botón a "Imprimir factura". Tests en `ReceiptInvoicePrintTest` (ancho de cada línea, URL,
+  QR presente).
+- **Falta**: reimprimir la factura desde el historial de ventas.
+
+**Pendiente**: 3c (anulación), Fase 4 (puente con ComandaYa y crédito compartido; y arreglar que
 `ingestExternalSale` hace `set` sin merge y reabre una venta ya recibida en caja).
 
 ### Empleados

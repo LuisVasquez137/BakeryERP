@@ -18,7 +18,54 @@ data class ReceiptData(
     val paymentMethodLabel: String,
     val tenderedAmount: Double,
     val changeAmount: Double,
-    val footerMessage: String = "¡Gracias por su compra!"
+    val footerMessage: String = "¡Gracias por su compra!",
+    /** Datos de la factura electrónica. Null = ticket sin factura (no se pidió o no salió aún). */
+    val invoice: ReceiptInvoice? = null
+)
+
+/**
+ * Lo que la SAT exige en la representación gráfica de una factura: emisor, documento,
+ * autorización, receptor, frases, certificador y el QR de verificación.
+ */
+data class ReceiptInvoice(
+    val title: String,
+    val emisorName: String,
+    val emisorTradeName: String,
+    val emisorNit: String,
+    val emisorAddress: String,
+    val serie: String,
+    val numero: String,
+    val authorization: String,
+    val certifiedAtLabel: String,
+    val receptorId: String,
+    val receptorName: String,
+    /** Lo que cubre la factura. Puede ser menos que el cobro: la cuenta del restaurante va aparte. */
+    val invoicedTotal: Double,
+    val phrases: List<String>,
+    /** Null si faltan datos para armarla: no se imprime un QR que no verifica nada. */
+    val verificationUrl: String?,
+    /** Certificado en el ambiente de pruebas: sin validez fiscal, y el ticket lo dice. */
+    val isTest: Boolean = false
+)
+
+/** Arma el bloque fiscal del ticket desde la respuesta de la Cloud Function. */
+fun receiptInvoiceFrom(result: FelCertifyResult, certifiedAtLabel: String) = ReceiptInvoice(
+    title = felDocTypeTitle(result.docType),
+    emisorName = result.emisorName,
+    emisorTradeName = result.emisorTradeName.ifBlank { result.emisorName },
+    emisorNit = formatNit(result.emisorNit),
+    emisorAddress = result.emisorAddress,
+    serie = result.serie,
+    numero = result.numero,
+    authorization = result.uuid,
+    certifiedAtLabel = certifiedAtLabel,
+    receptorId = if (result.receptorId.isBlank() || result.receptorId == FEL_CONSUMIDOR_FINAL) FEL_CONSUMIDOR_FINAL
+        else formatNit(result.receptorId),
+    receptorName = result.receptorName.ifBlank { "CONSUMIDOR FINAL" },
+    invoicedTotal = result.total,
+    phrases = felPhrasesFor(result),
+    verificationUrl = felVerificationUrl(result.uuid, result.emisorNit, result.receptorId, result.total),
+    isTest = result.environment.equals("TEST", ignoreCase = true)
 )
 
 data class ReceiptLine(

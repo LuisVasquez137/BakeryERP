@@ -111,6 +111,9 @@ kotlin {
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.datetime)
             implementation(libs.kotlinx.serialization.json)
+            // QR de verificación de la SAT en el ticket de hoja/PDF. La térmica dibuja el suyo con
+            // ESC/POS; esto solo calcula la matriz (QRCodeProcessor), sin el render de cada plataforma.
+            implementation(libs.qrcode.kotlin)
             implementation(libs.navigation.compose)
         }
         commonTest.dependencies {

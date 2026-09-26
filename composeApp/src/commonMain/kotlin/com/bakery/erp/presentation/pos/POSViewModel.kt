@@ -980,7 +980,18 @@ class POSViewModel(
                         "No se pudo pedir la factura ahora. La venta quedó guardada y la factura se reintenta sola.")
                 }
             )
-            _uiState.update { s -> if (s.invoiceProgress?.saleId == saleId) s.copy(invoiceProgress = progress) else s }
+            _uiState.update { s ->
+                if (s.invoiceProgress?.saleId != saleId) return@update s
+                // Certificada: el ticket del cobro pasa a llevar la factura y el QR, así el
+                // "Imprimir ticket" del acuse ya imprime la representación gráfica.
+                val certified = progress.result?.takeIf { progress.status == FelInvoiceStatus.CERTIFICADO }
+                s.copy(
+                    invoiceProgress = progress,
+                    lastReceiptData = if (certified != null) s.lastReceiptData?.copy(
+                        invoice = com.bakery.erp.model.receiptInvoiceFrom(certified, formatTimestamp(certified.certifiedAt))
+                    ) else s.lastReceiptData
+                )
+            }
         }
     }
 

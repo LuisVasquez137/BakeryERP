@@ -1,5 +1,7 @@
 package com.bakery.erp.util
 
+import com.bakery.erp.model.FEL_CERTIFIER_NAME
+import com.bakery.erp.model.FEL_CERTIFIER_NIT
 import com.bakery.erp.model.ReceiptData
 
 /**
@@ -33,6 +35,38 @@ fun buildReceiptHtml(data: ReceiptData): String {
         """<div class="row"><span>Recibido</span><span>Q${data.tenderedAmount.fmt(2)}</span></div>"""
     } else ""
 
+    val inv = data.invoice
+    // Con factura manda el EMISOR en el encabezado: la SAT pide su nombre, NIT y dirección.
+    val header = if (inv != null) """
+      <div class="center bold big">${escapeHtml(inv.emisorTradeName)}</div>
+      <div class="center">${escapeHtml(inv.emisorName)}</div>
+      <div class="center">NIT: ${escapeHtml(inv.emisorNit)}</div>
+      <div class="center">${escapeHtml(inv.emisorAddress)}</div>
+      <div class="sep"></div>
+      <div class="center bold">${escapeHtml(inv.title)}</div>
+      <div class="center">DOCUMENTO TRIBUTARIO ELECTRÓNICO</div>
+      <div>Serie: ${escapeHtml(inv.serie)} · Número: ${escapeHtml(inv.numero)}</div>
+      <div>Autorización:</div>
+      <div class="mono-wrap">${escapeHtml(inv.authorization)}</div>
+      <div>Certificada: ${escapeHtml(inv.certifiedAtLabel)}</div>
+      <div class="sep"></div>
+      <div>NIT: ${escapeHtml(inv.receptorId)}</div>
+      <div>Nombre: ${escapeHtml(inv.receptorName)}</div>
+    """ else """
+      <div class="center bold big">${escapeHtml(data.companyName)}</div>
+      <div class="center">${escapeHtml(data.branchName)}</div>
+    """
+    val invoicedRow = if (inv != null && kotlin.math.abs(inv.invoicedTotal - data.total) > 0.004) {
+        """<div class="row"><span>Monto facturado</span><span>Q${inv.invoicedTotal.fmt(2)}</span></div>"""
+    } else ""
+    val fiscalFooter = if (inv != null) """
+      <div class="center footer">${inv.phrases.joinToString("<br>") { escapeHtml(it) }}</div>
+      <div class="center footer">Certificador: ${escapeHtml(FEL_CERTIFIER_NAME)} · NIT $FEL_CERTIFIER_NIT</div>
+      ${inv.verificationUrl?.let { """<div class="center qr">${qrSvg(it, 34)}</div><div class="center footer">Verifique su factura en la SAT</div>""" } ?: ""}
+      ${if (inv.isTest) """<div class="center bold">DOCUMENTO DE PRUEBA — SIN VALIDEZ FISCAL</div>""" else ""}
+      <div class="sep"></div>
+    """ else ""
+
     return """
     <!DOCTYPE html>
     <html lang="es">
@@ -63,14 +97,15 @@ fun buildReceiptHtml(data: ReceiptData): String {
         .row    { display: flex; justify-content: space-between; padding: 1px 0; }
         .total  { font-size: 14px; font-weight: bold; }
         .footer { margin-top: 8px; font-size: 10px; }
+        .mono-wrap { word-break: break-all; }
+        .qr { margin-top: 6px; }
         @media print {
           html, body { margin: 0; padding: 0; }
         }
       </style>
     </head>
     <body>
-      <div class="center bold big">${escapeHtml(data.companyName)}</div>
-      <div class="center">${escapeHtml(data.branchName)}</div>
+      $header
       <div class="sep"></div>
       <div>Caja: ${escapeHtml(data.registerName)}</div>
       <div>Cajero: ${escapeHtml(data.cashierName)}</div>
@@ -82,11 +117,13 @@ fun buildReceiptHtml(data: ReceiptData): String {
       <div class="row"><span>Subtotal</span><span>Q${data.subtotal.fmt(2)}</span></div>
       $discountRow
       <div class="row total"><span>TOTAL</span><span>Q${data.total.fmt(2)}</span></div>
+      $invoicedRow
       <div class="sep"></div>
       <div class="row"><span>Pago</span><span>${escapeHtml(data.paymentMethodLabel)}</span></div>
       $tenderedRow
       $changeRow
       <div class="sep"></div>
+      $fiscalFooter
       <div class="center footer">${escapeHtml(data.footerMessage)}</div>
     </body>
     </html>
