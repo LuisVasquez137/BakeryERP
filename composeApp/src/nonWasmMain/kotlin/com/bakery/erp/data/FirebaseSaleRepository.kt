@@ -496,6 +496,15 @@ class FirebaseSaleRepository(
         "creditPersonName" to creditPersonName,
         "discountAccountId" to discountAccountId,
         "discountLabel" to discountLabel,
+        // Van en el mapa completo porque collectPendingSale reescribe la venta con set():
+        // sin ellos, recibir una cuenta ya facturada le borraría la factura.
+        "invoiceStatus" to invoiceStatus,
+        "dteId" to dteId,
+        "invoiceSerie" to invoiceSerie,
+        "invoiceNumero" to invoiceNumero,
+        "invoiceUuid" to invoiceUuid,
+        "invoiceReceptorId" to invoiceReceptorId,
+        "invoiceReceptorName" to invoiceReceptorName,
         "createdAt" to createdAt
     )
 
@@ -539,6 +548,13 @@ class FirebaseSaleRepository(
         creditPersonName = get<String?>("creditPersonName") ?: "",
         discountAccountId = get<String?>("discountAccountId") ?: "",
         discountLabel = get<String?>("discountLabel") ?: "",
+        invoiceStatus = runCatching { get<String?>("invoiceStatus") }.getOrNull() ?: "",
+        dteId = runCatching { get<String?>("dteId") }.getOrNull() ?: "",
+        invoiceSerie = runCatching { get<String?>("invoiceSerie") }.getOrNull() ?: "",
+        invoiceNumero = runCatching { get<String?>("invoiceNumero") }.getOrNull() ?: "",
+        invoiceUuid = runCatching { get<String?>("invoiceUuid") }.getOrNull() ?: "",
+        invoiceReceptorId = runCatching { get<String?>("invoiceReceptorId") }.getOrNull() ?: "",
+        invoiceReceptorName = runCatching { get<String?>("invoiceReceptorName") }.getOrNull() ?: "",
         createdAt = readMillis("createdAt")
     )
 

@@ -60,13 +60,13 @@ fun PaymentDialog(
      * [bills] = billetes que la cajera tocó (valor → cantidad). Vacío si tecleó el monto: en
      * ese caso no se sabe con qué billetes pagaron, y es mejor no inventarlo.
      */
-    onConfirm: (method: String, tendered: Double, bills: Map<Int, Int>) -> Unit,
+    onConfirm: (method: String, tendered: Double, bills: Map<Int, Int>, invoice: com.bakery.erp.model.FelInvoiceRequest?) -> Unit,
     /**
      * Cuentas a las que se puede fiar. `null` = esta cajera no puede vender a crédito (o el
      * carrito trae una cuenta del restaurante) y la opción no aparece.
      */
     creditAccounts: List<com.bakery.erp.model.CreditAccount>? = null,
-    onConfirmCredit: (CreditCharge) -> Unit = {},
+    onConfirmCredit: (CreditCharge, com.bakery.erp.model.FelInvoiceRequest?) -> Unit = { _, _ -> },
     /**
      * Colaboradores con derecho a descuento. Se ofrece solo si [employeeDiscount] > 0, o sea
      * si algún producto del carrito lleva % de colaborador.
@@ -74,8 +74,11 @@ fun PaymentDialog(
     discountAccounts: List<com.bakery.erp.model.CreditAccount> = emptyList(),
     /** Lo que se descontaría con efectivo: el % de cada producto sobre su línea. */
     employeeDiscount: Double = 0.0,
-    onDiscountChange: (com.bakery.erp.model.CreditAccount?) -> Unit = {}
+    onDiscountChange: (com.bakery.erp.model.CreditAccount?) -> Unit = {},
+    /** Null = esta sucursal no factura y la sección no aparece. */
+    invoiceOptions: InvoiceOptions? = null
 ) {
+    val invoiceForm = remember { InvoiceFormState(invoiceOptions?.defaultOn == true) }
     var discountAccount by remember { mutableStateOf<com.bakery.erp.model.CreditAccount?>(null) }
     var discountPickerOpen by remember { mutableStateOf(false) }
     val baseTotal = total
@@ -93,7 +96,11 @@ fun PaymentDialog(
     val isCashShort = isCash && tenderedText.isNotEmpty() && tendered < total - 0.004
 
     val methods = SalePaymentMethod.all + listOfNotNull(SalePaymentMethod.CREDIT.takeIf { creditAccounts != null })
-    val canConfirm = when (method) {
+    // La factura cubre solo el pan, con el descuento de colaborador ya aplicado.
+    val invoicedTotal = ((invoiceOptions?.bakeryTotal ?: 0.0) - discountAmount).coerceAtLeast(0.0)
+    val invoice = if (invoiceOptions != null) invoiceForm.request() else null
+    val invoiceReady = invoiceOptions == null || invoiceForm.problem(invoicedTotal) == null
+    val canConfirm = invoiceReady && when (method) {
         SalePaymentMethod.CASH -> tendered >= total - 0.004 && total > 0
         SalePaymentMethod.CREDIT -> creditReady && total > 0
         else -> total > 0
@@ -101,8 +108,8 @@ fun PaymentDialog(
 
     fun confirm() {
         val c = credit
-        if (isCredit && c != null) onConfirmCredit(c)
-        else onConfirm(method, if (isCash) tendered else total, if (isCash) bills else emptyMap())
+        if (isCredit && c != null) onConfirmCredit(c, invoice)
+        else onConfirm(method, if (isCash) tendered else total, if (isCash) bills else emptyMap(), invoice)
     }
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -252,6 +259,10 @@ fun PaymentDialog(
                             InfoNote("Pasá la tarjeta y confirmá cuando el voucher salga aprobado.")
                         else ->
                             InfoNote("Confirmá que la transferencia ya se acreditó antes de cobrar.")
+                    }
+
+                    if (invoiceOptions != null && invoiceOptions.bakeryTotal > 0.0) {
+                        InvoiceSection(invoiceForm, invoiceOptions, invoicedTotal)
                     }
                 }
 

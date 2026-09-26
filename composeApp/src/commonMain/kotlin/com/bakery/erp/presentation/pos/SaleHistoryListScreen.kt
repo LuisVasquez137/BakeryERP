@@ -209,6 +209,10 @@ private fun SaleCard(sale: Sale, canSeeValue: Boolean, onClick: () -> Unit) {
                 Text(SalePaymentMethod.label(sale.paymentMethod),
                      style = MaterialTheme.typography.labelSmall,
                      color = MaterialTheme.colorScheme.outline)
+                if (sale.invoiceStatus.isNotBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    SaleInvoiceChip(sale)
+                }
             }
             if (canSeeValue) {
                 Text("Q ${sale.total.fmtMoney(2)}",

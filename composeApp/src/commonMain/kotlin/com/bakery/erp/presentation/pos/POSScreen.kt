@@ -604,13 +604,21 @@ fun POSScreen(
         PaymentDialog(
             onDismiss = { paymentOpen = false; paymentDiscountAccount = null },
             total = viewModel.cartTotal(),
-            onConfirm = { method, tendered, bills ->
+            onConfirm = { method, tendered, bills, invoice ->
                 paymentOpen = false
                 cartSheetOpen = false
                 val discount = paymentDiscountAccount
                 paymentDiscountAccount = null
-                user?.let { viewModel.confirmSale(companyId, it, method, tendered, bills, discountAccount = discount) }
+                user?.let {
+                    viewModel.confirmSale(companyId, it, method, tendered, bills, discountAccount = discount, invoice = invoice)
+                }
             },
+            invoiceOptions = if (viewModel.canInvoice()) InvoiceOptions(
+                defaultOn = viewModel.invoiceByDefault(),
+                bakeryTotal = state.cart.filter { l -> l.isBakery }.sumOf { l -> l.subtotal },
+                excludesRestaurant = state.cart.any { l -> l.isRestaurant },
+                lookupNit = { nit -> viewModel.lookupNit(companyId, nit) }
+            ) else null,
             discountAccounts = creditState?.accounts.orEmpty()
                 .filter { it.isEmployee && it.active && it.cashDiscountEligible },
             employeeDiscount = viewModel.employeeDiscountAmount(),
@@ -618,12 +626,12 @@ fun POSScreen(
             // Una cuenta del restaurante en el carrito ya es venta cobrada: no se fía.
             creditAccounts = creditState?.accounts
                 ?.takeIf { canSellOnCredit && state.cart.none { l -> l.isRestaurant } },
-            onConfirmCredit = { charge ->
+            onConfirmCredit = { charge, invoice ->
                 paymentDiscountAccount = null
                 paymentOpen = false
                 cartSheetOpen = false
                 user?.let {
-                    viewModel.confirmSale(companyId, it, SalePaymentMethod.CREDIT, 0.0, emptyMap(), charge)
+                    viewModel.confirmSale(companyId, it, SalePaymentMethod.CREDIT, 0.0, emptyMap(), charge, invoice = invoice)
                 }
             }
         )
@@ -643,6 +651,7 @@ fun POSScreen(
                 bluetoothPrinterManager.clearConfig()
                 btPickerOpen = true
             },
+            invoice = state.invoiceProgress,
             onDismiss = { viewModel.dismissLastSale() }
         )
     }
@@ -1313,6 +1322,7 @@ private fun SaleSuccessDialog(
     savedPrinterName: String?,
     onPrint: () -> Unit,
     onChangePrinter: () -> Unit,
+    invoice: InvoiceProgress? = null,
     onDismiss: () -> Unit
 ) {
     AlertDialog(
@@ -1367,6 +1377,10 @@ private fun SaleSuccessDialog(
                         }
                     }
                 }
+                if (invoice != null) {
+                    Spacer(Modifier.height(12.dp))
+                    InvoiceStatusBanner(invoice)
+                }
                 if (isPrintingAvailable && savedPrinterName != null) {
                     Spacer(Modifier.height(10.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1413,6 +1427,47 @@ private fun SaleSuccessDialog(
             }
         }
     )
+}
+
+/** Cómo va la factura en el acuse del cobro. La venta ya está guardada pase lo que pase. */
+@Composable
+private fun InvoiceStatusBanner(invoice: InvoiceProgress) {
+    val status = invoice.status
+    val (bg, ink) = com.bakery.erp.ui.theme.chipColors(
+        when (status) {
+            com.bakery.erp.model.FelInvoiceStatus.CERTIFICADO -> com.bakery.erp.ui.theme.ChipTone.SUCCESS
+            com.bakery.erp.model.FelInvoiceStatus.RECHAZADO -> com.bakery.erp.ui.theme.ChipTone.DANGER
+            com.bakery.erp.model.FelInvoiceStatus.PENDIENTE -> com.bakery.erp.ui.theme.ChipTone.ATTENTION
+            else -> com.bakery.erp.ui.theme.ChipTone.INFO
+        },
+        com.bakery.erp.ui.theme.ChipEmphasis.SOFT
+    )
+    Surface(color = bg, shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (com.bakery.erp.model.FelInvoiceStatus.isInFlight(status) && status != com.bakery.erp.model.FelInvoiceStatus.PENDIENTE) {
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = ink)
+                Spacer(Modifier.width(10.dp))
+            }
+            Column {
+                val r = invoice.result
+                Text(
+                    when (status) {
+                        com.bakery.erp.model.FelInvoiceStatus.CERTIFICADO ->
+                            "Factura ${r?.docType.orEmpty()} serie ${r?.serie.orEmpty()} · núm. ${r?.numero.orEmpty()}"
+                        com.bakery.erp.model.FelInvoiceStatus.PENDIENTE -> "Factura pendiente"
+                        com.bakery.erp.model.FelInvoiceStatus.RECHAZADO -> "La factura no se emitió"
+                        else -> "Certificando factura…"
+                    },
+                    color = ink, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium
+                )
+                val detail = when (status) {
+                    com.bakery.erp.model.FelInvoiceStatus.CERTIFICADO -> r?.receptorName?.let { "A nombre de $it" }
+                    else -> invoice.message.takeIf { it.isNotBlank() }
+                }
+                detail?.let { Text(it, color = ink, style = MaterialTheme.typography.bodySmall) }
+            }
+        }
+    }
 }
 
 @Composable

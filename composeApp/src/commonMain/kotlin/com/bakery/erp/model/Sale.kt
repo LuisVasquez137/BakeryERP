@@ -115,6 +115,22 @@ data class Sale(
      */
     val discountAccountId: String = "",
     val discountLabel: String = "",
+    /**
+     * Factura electrónica (FEL). Vacío = no se facturó. Ver [FelInvoiceStatus]: la app escribe
+     * SOLICITADA junto con la venta y todo lo demás lo escribe la Cloud Function.
+     */
+    val invoiceStatus: String = "",
+    /** Documento en `companies/{c}/dtes`. Varias ventas de un mismo cobro comparten uno. */
+    val dteId: String = "",
+    val invoiceSerie: String = "",
+    val invoiceNumero: String = "",
+    val invoiceUuid: String = "",
+    /**
+     * A quién se pidió facturar ("CF" o NIT). Viaja en la venta para que el reintento del
+     * servidor pueda emitirla aunque la llamada desde la caja nunca haya llegado.
+     */
+    val invoiceReceptorId: String = "",
+    val invoiceReceptorName: String = "",
     val createdAt: Long = 0L
 )
 

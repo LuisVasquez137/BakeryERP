@@ -2,6 +2,8 @@ package com.bakery.erp.data
 
 import com.bakery.erp.domain.FelRepository
 import com.bakery.erp.model.FelBranchAssignment
+import com.bakery.erp.model.FelCertifyResult
+import com.bakery.erp.model.FelInvoiceRequest
 import com.bakery.erp.model.FelCredentialsInput
 import com.bakery.erp.model.FelEnvironment
 import com.bakery.erp.model.FelProfile
@@ -86,6 +88,37 @@ class FirebaseFelRepository(
         }
     }
 
+    override suspend fun certifySales(
+        companyId: String,
+        saleIds: List<String>,
+        request: FelInvoiceRequest
+    ): FelCertifyResult {
+        val result = functions.httpsCallable("felCertificarVenta").invoke(
+            CertifyRequest(
+                companyId = companyId,
+                saleIds = saleIds,
+                receptor = ReceptorPayload(id = request.receptorId, nombre = request.receptorName)
+            )
+        )
+        val r = result.data<CertifyResponse>()
+        return FelCertifyResult(
+            dteId = r.dteId, status = r.estado, message = r.mensaje,
+            serie = r.serie, numero = r.numero, uuid = r.uuid, docType = r.docType,
+            certifiedAt = r.fechaCertificacion.toLong(), total = r.granTotal, vat = r.totalIVA,
+            receptorId = r.receptorId, receptorName = r.receptorNombre,
+            emisorNit = r.emisorNit, emisorName = r.emisorNombre,
+            emisorTradeName = r.emisorNombreComercial, emisorAddress = r.emisorDireccion,
+            phrases = r.frases, environment = r.ambiente
+        )
+    }
+
+    override suspend fun lookupNit(companyId: String, branchId: String, nit: String): String? {
+        val result = functions.httpsCallable("felConsultarNit")
+            .invoke(NitLookupRequest(companyId, branchId, cleanNit(nit)))
+        val r = result.data<NitLookupResponse>()
+        return r.nombre.takeIf { r.encontrado && it.isNotBlank() }
+    }
+
     private fun DocumentSnapshot.toProfile() = FelProfile(
         id = id,
         nit = get<String?>("nit") ?: "",
@@ -141,3 +174,47 @@ private data class CredentialsPayload(
 
 @Serializable
 private data class SaveProfileResponse(val profileId: String)
+
+@Serializable
+private data class CertifyRequest(
+    val companyId: String,
+    val saleIds: List<String>,
+    val receptor: ReceptorPayload
+)
+
+@Serializable
+private data class ReceptorPayload(val id: String, val nombre: String)
+
+// Todos con default: la respuesta de una factura PENDIENTE trae la mayoría vacíos, y un campo
+// que falte no puede tumbar el cobro.
+@Serializable
+private data class CertifyResponse(
+    val dteId: String = "",
+    val estado: String = "",
+    val mensaje: String = "",
+    val serie: String = "",
+    val numero: String = "",
+    val uuid: String = "",
+    val docType: String = "",
+    val fechaCertificacion: Double = 0.0,
+    val granTotal: Double = 0.0,
+    val totalIVA: Double = 0.0,
+    val receptorId: String = "CF",
+    val receptorNombre: String = "CONSUMIDOR FINAL",
+    val emisorNit: String = "",
+    val emisorNombre: String = "",
+    val emisorNombreComercial: String = "",
+    val emisorDireccion: String = "",
+    val frases: List<String> = emptyList(),
+    val ambiente: String = ""
+)
+
+@Serializable
+private data class NitLookupRequest(val companyId: String, val branchId: String, val nit: String)
+
+@Serializable
+private data class NitLookupResponse(
+    val encontrado: Boolean = false,
+    val nit: String = "",
+    val nombre: String = ""
+)

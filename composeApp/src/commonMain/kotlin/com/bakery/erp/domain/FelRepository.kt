@@ -1,12 +1,15 @@
 package com.bakery.erp.domain
 
 import com.bakery.erp.model.FelBranchAssignment
+import com.bakery.erp.model.FelCertifyResult
+import com.bakery.erp.model.FelInvoiceRequest
 import com.bakery.erp.model.FelCredentialsInput
 import com.bakery.erp.model.FelProfile
 
 /**
- * Configuración de la facturación electrónica: NITs emisores y qué sucursal factura con cuál.
- * Certificar y anular viven en la Cloud Function; esto es solo lo que el dueño configura.
+ * Facturación electrónica: la configuración del dueño (NITs emisores y qué sucursal factura
+ * con cuál) y las llamadas del cobro. Toda operación con Digifact pasa por Cloud Functions:
+ * las credenciales nunca llegan a la app.
  */
 interface FelRepository {
     suspend fun getProfiles(companyId: String): List<FelProfile>
@@ -34,4 +37,19 @@ interface FelRepository {
         assignments: List<FelBranchAssignment>,
         releasedBranchIds: List<String>
     )
+
+    /**
+     * Certifica las ventas de un cobro en una sola factura (Cloud Function
+     * `felCertificarVenta`). Idempotente del lado del servidor: repetir con las mismas ventas
+     * devuelve el mismo documento en vez de emitir otro. No lanza por fallas de Digifact —
+     * vuelven como estado PENDIENTE/RECHAZADO con el motivo—; sí lanza si la llamada no llegó.
+     */
+    suspend fun certifySales(
+        companyId: String,
+        saleIds: List<String>,
+        request: FelInvoiceRequest
+    ): FelCertifyResult
+
+    /** Nombre registrado en la SAT para ese NIT, o null si no existe. */
+    suspend fun lookupNit(companyId: String, branchId: String, nit: String): String?
 }

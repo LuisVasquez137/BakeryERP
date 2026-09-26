@@ -102,6 +102,7 @@ actual fun createAppViewModels(): AppViewModels {
     val supplierRepo = FirebaseSupplierRepository(firestore)
     val recipeRepo = FirebaseRecipeRepository(firestore)
     val branchRepo = FirebaseBranchRepository(firestore)
+    val felRepo = com.bakery.erp.data.FirebaseFelRepository(firestore)
     val purchaseRepo = FirebasePurchaseRepository(firestore)
     val purchaseConceptRepo = FirebasePurchaseConceptRepository(firestore)
     val productionRepo = FirebaseProductionRepository(firestore)
@@ -176,7 +177,7 @@ actual fun createAppViewModels(): AppViewModels {
         pos = POSViewModel(
             saleRepo, posCategoryRepo, cashSessionRepo, productRepoJs,
             finishedStockRepo, ingredientRepo, priceListRepo, branchRepo,
-            JsReceiptPrinter(), authRepo, creditRepo
+            JsReceiptPrinter(), authRepo, creditRepo, felRepo
         ),
         cashSession = CashSessionViewModel(cashSessionRepo, cashRegisterRepo, branchRepo, dailyCloseRepo, purchaseRepo),
         saleHistory = SaleHistoryViewModel(saleRepo, cashSessionRepo, branchRepo),
@@ -206,7 +207,7 @@ actual fun createAppViewModels(): AppViewModels {
         ),
         organizationSettings = OrganizationSettingsViewModel(authRepo, saleRepo),
         fel = com.bakery.erp.presentation.fel.FelViewModel(
-            com.bakery.erp.data.FirebaseFelRepository(firestore), branchRepo
+            felRepo, branchRepo
         ),
         resellerSetup = ResellerSetupViewModel(authRepo, branchRepo),
         reseller = ResellerViewModel(

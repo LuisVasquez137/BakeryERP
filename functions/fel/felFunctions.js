@@ -99,7 +99,8 @@ async function lineasDeVenta(companyId, sale) {
  * Nunca deja ventas a medias: o el DTE queda CERTIFICADO, o queda PENDIENTE/RECHAZADO
  * con el motivo, y las ventas dicen lo mismo.
  */
-async function certificarVentas({ companyId, saleIds, receptor, sinDetalle, userId }) {
+async function certificarVentas({ companyId, saleIds, receptor: receptorPedido, sinDetalle, userId }) {
+  let receptor = receptorPedido;
   const firestore = db();
   const ids = [...new Set((saleIds || []).map(String).filter(Boolean))];
   if (!ids.length) throw new HttpsError("invalid-argument", "No hay ventas que facturar.");
@@ -121,6 +122,13 @@ async function certificarVentas({ companyId, saleIds, receptor, sinDetalle, user
   // vuelve a meter en otro documento.
   const otraFactura = ventas.find((v) => v.dteId && v.dteId !== dteIdPara(companyId, ids) && v.invoiceStatus === ESTADO.CERTIFICADO);
   if (otraFactura) throw new HttpsError("failed-precondition", "Una de las ventas ya tiene su propia factura.");
+
+  // Sin receptor en la llamada (reintento, barrido de SOLICITADA) manda el que la caja dejó
+  // escrito en la venta al cobrar: el cliente pidió factura a su NIT y así tiene que salir.
+  if (!receptor?.id) {
+    const v = ventas.find((x) => x.invoiceReceptorId);
+    if (v) receptor = { id: v.invoiceReceptorId, nombre: v.invoiceReceptorName };
+  }
 
   const dteId = dteIdPara(companyId, ids);
   const dteRef = firestore.doc(`companies/${companyId}/dtes/${dteId}`);
@@ -433,8 +441,42 @@ exports.felReintentarPendientes = onSchedule(
         console.warn(`Reintento FEL ${companyId}/${dteId}:`, e.message);
       }
     }
+    await certificarSolicitadasHuerfanas();
   }
 );
+
+/**
+ * Ventas que la caja marcó SOLICITADA y cuya llamada nunca llegó (la tablet se quedó sin
+ * internet justo al cobrar). Sin este barrido quedarían sin factura para siempre: la cola de
+ * `felPendientes` solo conoce lo que el servidor alcanzó a registrar.
+ *
+ * Por empresa y no con collectionGroup: una igualdad sobre la colección de ventas usa el
+ * índice automático, y un grupo de colecciones pediría declarar uno. Espera 2 minutos para
+ * no pisar la llamada de la caja que todavía está en camino (el candado del DTE lo atajaría
+ * igual, pero así ni se intenta).
+ */
+async function certificarSolicitadasHuerfanas() {
+  const limite = Date.now() - 2 * 60 * 1000;
+  const empresas = await db().collection("companies").listDocuments();
+  for (const empresa of empresas) {
+    const snap = await empresa.collection("sales").where("invoiceStatus", "==", "SOLICITADA").limit(20).get();
+    // Un cobro = una factura: las ventas del mismo checkout van juntas.
+    const grupos = new Map();
+    for (const d of snap.docs) {
+      const v = d.data();
+      if ((Number(v.createdAt) || 0) > limite) continue;
+      const clave = v.checkoutId || d.id;
+      grupos.set(clave, [...(grupos.get(clave) || []), d.id]);
+    }
+    for (const saleIds of grupos.values()) {
+      try {
+        await certificarVentas({ companyId: empresa.id, saleIds, receptor: null, sinDetalle: false, userId: "" });
+      } catch (e) {
+        console.warn(`FEL solicitada ${empresa.id}/${saleIds.join(",")}:`, e.message);
+      }
+    }
+  }
+}
 
 // Para pruebas de la lógica sin desplegar.
 exports._internals = { dteIdPara, respuestaDe };

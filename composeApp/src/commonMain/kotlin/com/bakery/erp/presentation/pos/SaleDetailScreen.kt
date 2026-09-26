@@ -100,6 +100,18 @@ private fun SaleHeaderCard(sale: Sale, canSeeValue: Boolean) {
                  color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text("Método: ${SalePaymentMethod.label(sale.paymentMethod)}",
                  style = MaterialTheme.typography.bodySmall)
+            if (sale.invoiceStatus.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                SaleInvoiceChip(sale)
+                if (sale.invoiceReceptorName.isNotBlank()) {
+                    Text(
+                        "A nombre de ${sale.invoiceReceptorName}" +
+                            if (sale.invoiceReceptorId.isNotBlank() && sale.invoiceReceptorId != "CF") " · NIT ${sale.invoiceReceptorId}" else "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
             if (canSeeValue) {
                 HorizontalDivider(Modifier.padding(vertical = 6.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {

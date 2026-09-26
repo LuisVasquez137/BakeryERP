@@ -47,6 +47,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import com.bakery.erp.model.FelCertifyResult
+import com.bakery.erp.model.FelInvoiceRequest
+import com.bakery.erp.model.FelInvoiceStatus
+import com.bakery.erp.model.felReceptorProblem
 
 /**
  * Línea del carrito antes de confirmar la venta. Vive solo en memoria del ViewModel.
@@ -129,7 +134,21 @@ data class POSUiState(
     val notice: String? = null,
     val isCreditBusy: Boolean = false,
     /** Cuenta recién recibida — para el acuse; se limpia al cerrarlo. */
-    val justCollected: Sale? = null
+    val justCollected: Sale? = null,
+    /** Factura de la venta recién cobrada, para el diálogo de éxito. Null = no se facturó. */
+    val invoiceProgress: InvoiceProgress? = null
+)
+
+/**
+ * Cómo va la factura de la venta recién cobrada. [saleId] ata el resultado a SU venta: si la
+ * cajera ya cobró la siguiente cuando Digifact contesta, la respuesta vieja no puede aparecer
+ * en el acuse de la nueva.
+ */
+data class InvoiceProgress(
+    val saleId: String,
+    val status: String,
+    val message: String = "",
+    val result: FelCertifyResult? = null
 )
 
 /** A qué cuenta se carga una venta a crédito y quién se lleva la mercadería. */
@@ -158,7 +177,9 @@ class POSViewModel(
     private val receiptPrinter: ReceiptPrinter,
     private val authRepository: AuthRepository,
     /** Ventas a crédito, abonos cobrados en caja y adelantos a colaboradores. */
-    private val creditRepository: com.bakery.erp.domain.CreditRepository
+    private val creditRepository: com.bakery.erp.domain.CreditRepository,
+    /** Facturación electrónica: certificar al cobrar y consultar NIT. */
+    private val felRepository: com.bakery.erp.domain.FelRepository
 ) : ViewModel() {
 
     private var organizationName: String = ""
@@ -485,7 +506,9 @@ class POSViewModel(
         bills: Map<Int, Int> = emptyMap(),
         credit: CreditCharge? = null,
         /** Colaborador que compra pagando en efectivo y tiene descuento configurado. */
-        discountAccount: com.bakery.erp.model.CreditAccount? = null
+        discountAccount: com.bakery.erp.model.CreditAccount? = null,
+        /** A quién facturar, o null si el cliente no pidió factura. */
+        invoice: FelInvoiceRequest? = null
     ) {
         val state = _uiState.value
         val session = state.session ?: run {
@@ -528,6 +551,15 @@ class POSViewModel(
         val bakeryCart = snapshotCart.filter { it.isBakery }
         val restaurantCart = snapshotCart.filter { it.isRestaurant }
         val bakeryTotal = bakeryCart.sumOf { it.subtotal }
+        // Por ahora la factura cubre solo el pan: la cuenta del restaurante la puede estar
+        // facturando ComandaYa, y hasta que las dos apps se avisen (fase 4) meterla acá
+        // arriesga una doble factura del mismo consumo.
+        val invoiceRequest = invoice?.takeIf { bakeryCart.isNotEmpty() && canInvoice() }
+        if (invoiceRequest != null) {
+            felReceptorProblem(invoiceRequest, bakeryTotal - discountAmount)?.let { problem ->
+                _uiState.update { it.copy(error = problem) }; return
+            }
+        }
         val payment = CheckoutPayment(
             checkoutId = newCheckoutId(),
             method = paymentMethod,
@@ -595,7 +627,12 @@ class POSViewModel(
                     billCounts = payment.billCounts,
                     creditAccountId = credit?.account?.id.orEmpty(),
                     creditAccountName = credit?.account?.name.orEmpty(),
-                    creditPersonName = credit?.personName.orEmpty()
+                    creditPersonName = credit?.personName.orEmpty(),
+                    // SOLICITADA en la misma escritura que crea la venta: si la llamada que
+                    // sigue se pierde, el reintento del servidor la encuentra igual.
+                    invoiceStatus = if (invoiceRequest != null) FelInvoiceStatus.SOLICITADA else "",
+                    invoiceReceptorId = invoiceRequest?.receptorId.orEmpty(),
+                    invoiceReceptorName = invoiceRequest?.receptorName.orEmpty()
                 )
                 val lines = bakeryCart.map { line ->
                     if (line.isGroup) {
@@ -689,6 +726,7 @@ class POSViewModel(
                     ),
                     cashierName = currentUser.displayName
                 )
+                val invoiced = invoiceRequest != null && sale.invoiceStatus == FelInvoiceStatus.SOLICITADA
                 _uiState.update {
                     it.copy(
                         isLoading = false,
@@ -696,9 +734,11 @@ class POSViewModel(
                         cart = emptyList(),
                         lastSaleSummary = LastSaleSummary(total, change, paymentMethod),
                         lastReceiptData = receipt,
-                        recentCheckouts = (listOf(record) + it.recentCheckouts).take(MAX_RECENT_CHECKOUTS)
+                        recentCheckouts = (listOf(record) + it.recentCheckouts).take(MAX_RECENT_CHECKOUTS),
+                        invoiceProgress = if (invoiced) InvoiceProgress(sale.id, FelInvoiceStatus.SOLICITADA) else null
                     )
                 }
+                if (invoiced && invoiceRequest != null) certifyInvoice(companyId, sale.id, invoiceRequest)
             }.onFailure { err ->
                 _uiState.update { it.copy(isLoading = false, isCheckingOut = false, error = err.message) }
             }
@@ -899,7 +939,49 @@ class POSViewModel(
 
     /** Cierra el diálogo de éxito y descarta el último ticket. */
     fun dismissLastSale() {
-        _uiState.update { it.copy(lastReceiptData = null, lastSaleSummary = null) }
+        _uiState.update { it.copy(lastReceiptData = null, lastSaleSummary = null, invoiceProgress = null) }
+    }
+
+    /** La sucursal abierta tiene un NIT asignado. Que el NIT esté activo lo decide el servidor. */
+    fun canInvoice(): Boolean = _uiState.value.branch?.felProfileId?.isNotBlank() == true
+
+    /** El cobro sale con "Facturar" marcado en esta sucursal. */
+    fun invoiceByDefault(): Boolean = canInvoice() && _uiState.value.branch?.invoiceByDefault == true
+
+    /** Nombre del NIT en la SAT, para que la cajera confirme a quién le factura. */
+    suspend fun lookupNit(companyId: String, nit: String): Result<String?> {
+        val branchId = _uiState.value.branch?.id ?: return Result.success(null)
+        return runCatching { felRepository.lookupNit(companyId, branchId, nit) }
+    }
+
+    /**
+     * Pide la certificación y espera hasta [INVOICE_WAIT_MS]. Digifact tarda de 2 a 45 s; esperar
+     * siempre lo peor trabaría la fila en sus días malos. Si no contesta a tiempo, la venta ya
+     * está guardada con su factura pedida y el servidor la termina solo — el acuse lo dice y la
+     * factura aparece después en el historial.
+     */
+    private fun certifyInvoice(companyId: String, saleId: String, request: FelInvoiceRequest) {
+        viewModelScope.launch {
+            val progress = runCatching {
+                withTimeoutOrNull(INVOICE_WAIT_MS) { felRepository.certifySales(companyId, listOf(saleId), request) }
+            }.fold(
+                onSuccess = { r ->
+                    if (r == null) InvoiceProgress(saleId, FelInvoiceStatus.PENDIENTE,
+                        "Digifact está tardando. La factura se completa sola y queda en el historial de ventas.")
+                    else InvoiceProgress(saleId, r.status, r.message, r)
+                },
+                onFailure = { e ->
+                    val msg = e.message.orEmpty()
+                    // Configuración (sucursal sin NIT, NIT desactivado): el servidor ya la marcó
+                    // RECHAZADA y reintentar no la arregla.
+                    if (msg.contains("failed", ignoreCase = true) && msg.contains("precondition", ignoreCase = true))
+                        InvoiceProgress(saleId, FelInvoiceStatus.RECHAZADO, msg.replaceFirst(Regex("^[A-Z_]+:\\s*"), ""))
+                    else InvoiceProgress(saleId, FelInvoiceStatus.PENDIENTE,
+                        "No se pudo pedir la factura ahora. La venta quedó guardada y la factura se reintenta sola.")
+                }
+            )
+            _uiState.update { s -> if (s.invoiceProgress?.saleId == saleId) s.copy(invoiceProgress = progress) else s }
+        }
     }
 
     fun clearLastSaleSummary() { _uiState.update { it.copy(lastSaleSummary = null) } }
@@ -999,3 +1081,6 @@ private const val POPULARITY_DAYS = 30
 
 /** Cuántos cobros guarda "Último cobro" para ir hacia atrás. */
 private const val MAX_RECENT_CHECKOUTS = 10
+
+/** Cuánto espera el acuse a que Digifact certifique antes de decir "se completa sola". */
+private const val INVOICE_WAIT_MS = 15_000L

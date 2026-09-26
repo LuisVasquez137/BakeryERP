@@ -1891,8 +1891,27 @@ defecto").
 
 **Desplegadas** las seis funciones `fel*` en `bakery-erp-saas` (2026-09-25).
 
-**Pendiente**: Fase 3 (cobro, ticket con QR,
-anulación), Fase 4 (puente con ComandaYa y crédito compartido; y arreglar que
+**Fase 3a (hecha, sin probar en dispositivo): facturar al cobrar.**
+- `PaymentDialog` lleva la sección **"Facturar"** (`pos/InvoiceSection.kt`) solo si la sucursal
+  tiene NIT (`POSViewModel.canInvoice`); sale marcada con `Branch.invoiceByDefault`. Consumidor
+  final o NIT con consulta a la SAT (`felConsultarNit`); si la SAT no contesta, el nombre se
+  escribe a mano en vez de dejar al cliente sin factura. **Desde Q2,500 no se acepta CF**
+  (`FEL_CF_LIMIT`, `felReceptorProblem` en `model/FelInvoice.kt`, tests en `FelInvoiceTest`).
+- **La factura cubre solo el pan.** La cuenta del restaurante del carrito queda fuera hasta la
+  fase 4: ComandaYa la puede estar facturando y meterla acá arriesga doble factura.
+- **La venta nace `invoiceStatus = SOLICITADA`** con el receptor adentro, en la misma escritura
+  que la crea. Si la llamada a `felCertificarVenta` se pierde (tablet sin internet justo al
+  cobrar), el servidor nunca se enteraría: `felReintentarPendientes` barre las SOLICITADA de
+  más de 2 minutos por empresa (igualdad simple, sin índice de grupo) y las certifica con el
+  receptor guardado en la venta.
+- El acuse del cobro espera **hasta 15 s** (`INVOICE_WAIT_MS`) y muestra serie/número, o
+  "pendiente — se completa sola". Esperar los 45 s que puede tardar Digifact trabaría la fila.
+  `InvoiceProgress.saleId` evita que una respuesta tardía aparezca en el acuse de otra venta.
+- Los campos de factura van en `Sale.toMap()`: `collectPendingSale` reescribe la venta con
+  `set()` y sin ellos recibir una cuenta le borraría la factura.
+- Historial y detalle de venta muestran `SaleInvoiceChip`.
+
+**Pendiente**: Fase 3b (ticket con QR), 3c (anulación), Fase 4 (puente con ComandaYa y crédito compartido; y arreglar que
 `ingestExternalSale` hace `set` sin merge y reabre una venta ya recibida en caja).
 
 ### Empleados
