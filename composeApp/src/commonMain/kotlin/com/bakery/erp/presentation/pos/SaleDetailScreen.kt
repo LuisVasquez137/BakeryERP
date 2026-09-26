@@ -42,6 +42,14 @@ fun SaleDetailScreen(
     LaunchedEffect(state.error) {
         state.error?.let { snackbar.showSnackbar(it); viewModel.clearError() }
     }
+    LaunchedEffect(state.notice) {
+        state.notice?.let { snackbar.showSnackbar(it); viewModel.clearNotice() }
+    }
+    // Anular una factura es corregir un documento fiscal ya emitido: mismo permiso que el
+    // servidor exige, así el botón no aparece para quien igual recibiría un "sin permiso".
+    val canFixInvoice = authState.user?.hasPermission(Permission.VOID_SALE) == true
+    var voidOpen by remember { mutableStateOf(false) }
+    var reissueOpen by remember { mutableStateOf(false) }
 
     val sale = state.selectedSale
     val lines = state.selectedSaleLines
@@ -76,6 +84,27 @@ fun SaleDetailScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 item { SaleHeaderCard(sale, canSeeValue) }
+                if (canFixInvoice) {
+                    when (sale.invoiceStatus) {
+                        com.bakery.erp.model.FelInvoiceStatus.CERTIFICADO -> item {
+                            OutlinedButton(
+                                onClick = { voidOpen = true },
+                                enabled = !state.isInvoiceBusy,
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("Anular factura") }
+                        }
+                        com.bakery.erp.model.FelInvoiceStatus.ANULADO,
+                        com.bakery.erp.model.FelInvoiceStatus.RECHAZADO -> item {
+                            OutlinedButton(
+                                onClick = { reissueOpen = true },
+                                enabled = !state.isInvoiceBusy,
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("Facturar de nuevo") }
+                        }
+                        else -> Unit
+                    }
+                }
                 item {
                     Text("Líneas", fontWeight = FontWeight.SemiBold,
                          modifier = Modifier.padding(top = 4.dp))
@@ -83,6 +112,34 @@ fun SaleDetailScreen(
                 items(lines, key = { it.id }) { line -> SaleLineRow(line, canSeeValue) }
             }
         }
+        com.bakery.erp.ui.LoadingOverlay(
+            visible = state.isInvoiceBusy,
+            message = "Hablando con la SAT…"
+        )
+    }
+
+    val lookup: suspend (String) -> Result<String?> = { nit -> viewModel.lookupNit(companyId, sale?.branchId.orEmpty(), nit) }
+    if (voidOpen && sale != null) {
+        VoidInvoiceDialog(
+            sale = sale,
+            lookupNit = lookup,
+            onDismiss = { voidOpen = false },
+            onConfirm = { reason, reissueTo ->
+                voidOpen = false
+                viewModel.voidInvoice(companyId, sale, reason, reissueTo)
+            }
+        )
+    }
+    if (reissueOpen && sale != null) {
+        ReissueInvoiceDialog(
+            sale = sale,
+            lookupNit = lookup,
+            onDismiss = { reissueOpen = false },
+            onConfirm = { to ->
+                reissueOpen = false
+                viewModel.reissueInvoice(companyId, sale, to)
+            }
+        )
     }
 }
 

@@ -91,13 +91,15 @@ class FirebaseFelRepository(
     override suspend fun certifySales(
         companyId: String,
         saleIds: List<String>,
-        request: FelInvoiceRequest
+        request: FelInvoiceRequest,
+        reissue: Boolean
     ): FelCertifyResult {
         val result = functions.httpsCallable("felCertificarVenta").invoke(
             CertifyRequest(
                 companyId = companyId,
                 saleIds = saleIds,
-                receptor = ReceptorPayload(id = request.receptorId, nombre = request.receptorName)
+                receptor = ReceptorPayload(id = request.receptorId, nombre = request.receptorName),
+                reemitir = reissue
             )
         )
         val r = result.data<CertifyResponse>()
@@ -110,6 +112,10 @@ class FirebaseFelRepository(
             emisorTradeName = r.emisorNombreComercial, emisorAddress = r.emisorDireccion,
             phrases = r.frases, environment = r.ambiente
         )
+    }
+
+    override suspend fun voidInvoice(companyId: String, dteId: String, reason: String) {
+        functions.httpsCallable("felAnularDte").invoke(VoidRequest(companyId, dteId, reason.trim()))
     }
 
     override suspend fun lookupNit(companyId: String, branchId: String, nit: String): String? {
@@ -179,8 +185,12 @@ private data class SaveProfileResponse(val profileId: String)
 private data class CertifyRequest(
     val companyId: String,
     val saleIds: List<String>,
-    val receptor: ReceptorPayload
+    val receptor: ReceptorPayload,
+    val reemitir: Boolean = false
 )
+
+@Serializable
+private data class VoidRequest(val companyId: String, val dteId: String, val motivo: String)
 
 @Serializable
 private data class ReceptorPayload(val id: String, val nombre: String)

@@ -35,13 +35,19 @@ data class SaleHistoryUiState(
     val sessions: List<CashSession> = emptyList(),
     val isLoading: Boolean = false,
     val isDetailLoading: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    /** Anulando o volviendo a facturar: tapa la pantalla, Digifact puede tardar. */
+    val isInvoiceBusy: Boolean = false,
+    /** Resultado para el snackbar ("Factura anulada", "Nueva factura serie…"). */
+    val notice: String? = null
 )
 
 class SaleHistoryViewModel(
     private val saleRepository: SaleRepository,
     private val cashSessionRepository: CashSessionRepository,
-    private val branchRepository: BranchRepository
+    private val branchRepository: BranchRepository,
+    /** Anular y volver a facturar desde el detalle de la venta. */
+    private val felRepository: com.bakery.erp.domain.FelRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SaleHistoryUiState())
@@ -135,4 +141,57 @@ class SaleHistoryViewModel(
     }
 
     fun clearError() { _uiState.update { it.copy(error = null) } }
+    fun clearNotice() { _uiState.update { it.copy(notice = null) } }
+
+    /**
+     * Anula la factura de [sale] y, si viene [reissueTo], emite otra con esos datos. Las dos cosas
+     * en ese orden y por separado: si la anulación sale y la nueva falla, lo anulado ya es un
+     * hecho ante la SAT y la venta queda para "Facturar de nuevo", en vez de revertir algo que
+     * no se puede revertir.
+     */
+    fun voidInvoice(companyId: String, sale: Sale, reason: String, reissueTo: com.bakery.erp.model.FelInvoiceRequest?) {
+        if (_uiState.value.isInvoiceBusy) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isInvoiceBusy = true, error = null) }
+            val voided = runCatching { felRepository.voidInvoice(companyId, sale.dteId, reason) }
+            voided.onFailure { e ->
+                _uiState.update { it.copy(isInvoiceBusy = false, error = readable(e, "No se pudo anular la factura.")) }
+                return@launch
+            }
+            val notice = if (reissueTo == null) "Factura anulada."
+            else runCatching { felRepository.certifySales(companyId, listOf(sale.id), reissueTo, reissue = true) }
+                .fold(
+                    onSuccess = { r -> reissueNotice(r) },
+                    onFailure = { e -> "Factura anulada, pero la nueva no salió: ${readable(e, "")}. Usá \"Facturar de nuevo\"." }
+                )
+            _uiState.update { it.copy(isInvoiceBusy = false, notice = notice) }
+            loadSaleDetail(companyId, sale.id)
+        }
+    }
+
+    /** Factura otra vez una venta cuya factura se anuló o fue rechazada. */
+    fun reissueInvoice(companyId: String, sale: Sale, to: com.bakery.erp.model.FelInvoiceRequest) {
+        if (_uiState.value.isInvoiceBusy) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isInvoiceBusy = true, error = null) }
+            // Solo esta venta: el servidor suma las demás que cubría la factura anterior.
+            runCatching { felRepository.certifySales(companyId, listOf(sale.id), to, reissue = true) }
+                .onSuccess { r -> _uiState.update { it.copy(isInvoiceBusy = false, notice = reissueNotice(r)) } }
+                .onFailure { e -> _uiState.update { it.copy(isInvoiceBusy = false, error = readable(e, "No se pudo facturar.")) } }
+            loadSaleDetail(companyId, sale.id)
+        }
+    }
+
+    /** NIT en la SAT, para confirmar a quién se le factura. */
+    suspend fun lookupNit(companyId: String, branchId: String, nit: String): Result<String?> =
+        runCatching { felRepository.lookupNit(companyId, branchId, nit) }
+
+    private fun reissueNotice(r: com.bakery.erp.model.FelCertifyResult): String = when (r.status) {
+        com.bakery.erp.model.FelInvoiceStatus.CERTIFICADO -> "Nueva factura serie ${r.serie} · núm. ${r.numero}."
+        com.bakery.erp.model.FelInvoiceStatus.PENDIENTE -> "La nueva factura quedó pendiente: se completa sola."
+        else -> "La nueva factura no se emitió: ${r.message}"
+    }
+
+    private fun readable(e: Throwable, fallback: String): String =
+        (e.message ?: fallback).replaceFirst(Regex("^[A-Z_]+:\\s*"), "").ifBlank { fallback }
 }

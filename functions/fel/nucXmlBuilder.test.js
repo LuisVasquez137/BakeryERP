@@ -95,6 +95,10 @@ test("la referencia interna es estable ante el orden de las ventas y distinta po
   assert.equal(referenciaInterna("c1", ["b", "a"]), referenciaInterna("c1", ["a", "b"]));
   assert.notEqual(referenciaInterna("c1", ["a"]), referenciaInterna("c1", ["a", "b"]));
   assert.ok(referenciaInterna("c1", ["a"]).startsWith("BKOS-"));
+  // Volver a facturar tras anular cambia la referencia; la versión 0 es la de siempre.
+  assert.equal(referenciaInterna("c1", ["a"], 0), referenciaInterna("c1", ["a"]));
+  assert.notEqual(referenciaInterna("c1", ["a"], 1), referenciaInterna("c1", ["a"]));
+  assert.notEqual(referenciaInterna("c1", ["a"], 2), referenciaInterna("c1", ["a"], 1));
 });
 
 test("receptor y montos en letras", () => {

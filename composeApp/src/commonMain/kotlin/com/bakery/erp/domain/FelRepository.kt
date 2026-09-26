@@ -47,8 +47,19 @@ interface FelRepository {
     suspend fun certifySales(
         companyId: String,
         saleIds: List<String>,
-        request: FelInvoiceRequest
+        request: FelInvoiceRequest,
+        /**
+         * Volver a facturar ventas cuya factura se anuló o fue rechazada (el cliente dio mal su
+         * NIT). El servidor sube la versión: id de documento y referencia nuevos.
+         */
+        reissue: Boolean = false
     ): FelCertifyResult
+
+    /**
+     * Anula la factura ante la SAT. La venta sigue igual: no devuelve dinero ni inventario.
+     * Lanza con el motivo de Digifact si la rechaza (p. ej. fuera del plazo de anulación).
+     */
+    suspend fun voidInvoice(companyId: String, dteId: String, reason: String)
 
     /** Nombre registrado en la SAT para ese NIT, o null si no existe. */
     suspend fun lookupNit(companyId: String, branchId: String, nit: String): String?

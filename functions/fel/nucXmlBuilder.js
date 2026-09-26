@@ -290,9 +290,12 @@ function idReceptorParaXml(valor) {
  * empresa + huella de las ventas que cubre. El prefijo evita chocar con ComandaYa, que
  * factura con el mismo NIT y también valida referencias.
  */
-function referenciaInterna(companyId, saleIds) {
+function referenciaInterna(companyId, saleIds, version = 0) {
+  // La versión cambia la huella al volver a facturar un cobro cuya factura se anuló: Digifact
+  // valida referencias y rechazaría la segunda con la misma. La versión 0 no suma nada, así
+  // las facturas ya emitidas conservan su referencia.
   const huella = crypto.createHash("sha1")
-    .update([...saleIds].map(String).sort().join("|"))
+    .update([...saleIds].map(String).sort().join("|") + (version > 0 ? `|v${version}` : ""))
     .digest("hex").slice(0, 12).toUpperCase();
   return `BKOS-${String(companyId).slice(0, 12)}-${huella}`.slice(0, 60);
 }

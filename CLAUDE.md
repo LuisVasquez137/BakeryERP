@@ -1930,7 +1930,25 @@ frases, certificador (`FEL_CERTIFIER_NAME`/`NIT`) y el QR.
   QR presente).
 - **Falta**: reimprimir la factura desde el historial de ventas.
 
-**Pendiente**: 3c (anulación), Fase 4 (puente con ComandaYa y crédito compartido; y arreglar que
+**Fase 3c (hecha, sin probar en dispositivo): anular y volver a facturar.** Desde el detalle
+de la venta, con `VOID_SALE` (`pos/InvoiceVoidDialogs.kt`). **Anular la factura no anula la
+venta**: no devuelve dinero ni inventario, y el diálogo lo dice. BakeOS todavía no tiene
+"anular venta" (`SaleStatus.VOIDED` existe sin flujo).
+- **"Anular y facturar"** en un paso y **"Facturar de nuevo"** para anuladas o rechazadas. El
+  caso común de anular es el NIT equivocado; sin reemisión, esa venta quedaba sin factura porque
+  el id del DTE sale de las ventas y la segunda chocaba con la primera.
+- `Sale.invoiceVersion` (solo servidor): reemitir la sube, y con ella cambian `dteIdPara` y
+  `referenciaInterna` (Digifact rechaza referencias repetidas). La versión 0 no altera los ids
+  ni las referencias de las facturas ya emitidas. Reemitir marca las ventas SOLICITADA con el
+  receptor nuevo ANTES de llamar a Digifact, así el barrido retoma la versión correcta.
+- El servidor lee del DTE anterior qué ventas cubría: la app manda solo la venta abierta.
+- **Anular pide la fecha de emisión EXACTA**: `fechaEmision` se guarda al certificar, y las
+  facturas anteriores la sacan del `<IssuedDateTime>` del XML guardado (`fechaEmisionDelDte`).
+  Antes se mandaba la de certificación, que llega segundos después.
+- Anular y reemitir son dos llamadas separadas: si la anulación sale y la nueva falla, lo
+  anulado ya es un hecho ante la SAT; la venta queda para "Facturar de nuevo".
+
+**Pendiente**: reimprimir la factura desde el historial, Fase 4 (puente con ComandaYa y crédito compartido; y arreglar que
 `ingestExternalSale` hace `set` sin merge y reabre una venta ya recibida en caja).
 
 ### Empleados

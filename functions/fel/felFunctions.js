@@ -34,7 +34,7 @@ const { resolverEmisor, limpiarNit, FEL_PROFILES } = require("./felEmisor");
 const { clienteParaPerfil, guardarCredenciales, URLS } = require("./felCredenciales");
 const { DigifactClient, serieYNumero } = require("./digifactClient");
 const {
-  buildFacturaNuc, prorateDiscount, referenciaInterna, fechaEmisionParaAnular, idReceptorParaXml,
+  buildFacturaNuc, prorateDiscount, referenciaInterna, fechaEmisionParaAnular, idReceptorParaXml, nowGuatemalaISO,
 } = require("./nucXmlBuilder");
 
 const REGION = "us-central1";
@@ -72,9 +72,9 @@ function exigirPermiso(user, ...permisos) {
 
 // ── Certificación ──────────────────────────────────────────────────────────
 
-function dteIdPara(companyId, saleIds) {
+function dteIdPara(companyId, saleIds, version = 0) {
   return "dte_" + crypto.createHash("sha1")
-    .update(`${companyId}|${[...saleIds].sort().join("|")}`)
+    .update(`${companyId}|${[...saleIds].sort().join("|")}${version > 0 ? `|v${version}` : ""}`)
     .digest("hex").slice(0, 24);
 }
 
@@ -99,11 +99,24 @@ async function lineasDeVenta(companyId, sale) {
  * Nunca deja ventas a medias: o el DTE queda CERTIFICADO, o queda PENDIENTE/RECHAZADO
  * con el motivo, y las ventas dicen lo mismo.
  */
-async function certificarVentas({ companyId, saleIds, receptor: receptorPedido, sinDetalle, userId }) {
+async function certificarVentas({ companyId, saleIds, receptor: receptorPedido, sinDetalle, userId, reemitir = false }) {
   let receptor = receptorPedido;
   const firestore = db();
-  const ids = [...new Set((saleIds || []).map(String).filter(Boolean))];
+  let ids = [...new Set((saleIds || []).map(String).filter(Boolean))];
   if (!ids.length) throw new HttpsError("invalid-argument", "No hay ventas que facturar.");
+
+  // Volver a facturar cubre lo mismo que cubría la factura anterior: se leen sus ventas del
+  // documento viejo. La app manda solo la venta que se está viendo, y reemitir por una parte
+  // del cobro dejaría el resto sin factura.
+  if (reemitir) {
+    const primera = (await firestore.doc(`companies/${companyId}/sales/${ids[0]}`).get()).data();
+    const anterior = primera?.dteId
+      ? (await firestore.doc(`companies/${companyId}/dtes/${primera.dteId}`).get()).data()
+      : null;
+    if (Array.isArray(anterior?.saleIds) && anterior.saleIds.length) {
+      ids = [...new Set([...ids, ...anterior.saleIds.map(String)])];
+    }
+  }
 
   const ventas = [];
   for (const id of ids) {
@@ -118,10 +131,35 @@ async function certificarVentas({ companyId, saleIds, receptor: receptorPedido, 
   if (ventas.some((v) => v.status === "VOIDED" || v.status === "CANCELLED")) {
     throw new HttpsError("failed-precondition", "No se puede facturar una venta anulada.");
   }
+  // Cada vez que se vuelve a facturar un cobro (la anterior se anuló o la rechazaron) sube la
+  // versión: cambia el id del DTE y la referencia interna, porque las viejas ya se usaron.
+  const versionActual = Math.max(0, ...ventas.map((v) => Number(v.invoiceVersion) || 0));
+  let version = versionActual;
+  if (reemitir) {
+    const bloquea = ventas.find((v) => v.invoiceStatus &&
+      v.invoiceStatus !== ESTADO.ANULADO && v.invoiceStatus !== ESTADO.RECHAZADO);
+    if (bloquea) {
+      throw new HttpsError("failed-precondition", "Solo se vuelve a facturar una venta cuya factura se anuló o fue rechazada.");
+    }
+    if (!receptorPedido?.id) throw new HttpsError("invalid-argument", "Falta a quién facturar.");
+    version = versionActual + 1;
+  }
+
   // Una venta ya facturada por su cuenta (p. ej. la cuenta que ComandaYa facturó) no se
   // vuelve a meter en otro documento.
-  const otraFactura = ventas.find((v) => v.dteId && v.dteId !== dteIdPara(companyId, ids) && v.invoiceStatus === ESTADO.CERTIFICADO);
+  const otraFactura = ventas.find((v) => v.dteId && v.dteId !== dteIdPara(companyId, ids, version) && v.invoiceStatus === ESTADO.CERTIFICADO);
   if (otraFactura) throw new HttpsError("failed-precondition", "Una de las ventas ya tiene su propia factura.");
+
+  if (reemitir) {
+    // Queda escrito ANTES de llamar a Digifact: si esto se corta a medias, el barrido de
+    // SOLICITADA la retoma con la versión y el receptor nuevos, no con los de la anulada.
+    await marcarVentas(companyId, ventas, {
+      invoiceVersion: version,
+      invoiceStatus: "SOLICITADA",
+      invoiceReceptorId: idReceptorParaXml(receptorPedido.id),
+      invoiceReceptorName: String(receptorPedido.nombre || "CONSUMIDOR FINAL").trim(),
+    });
+  }
 
   // Sin receptor en la llamada (reintento, barrido de SOLICITADA) manda el que la caja dejó
   // escrito en la venta al cobrar: el cliente pidió factura a su NIT y así tiene que salir.
@@ -130,7 +168,7 @@ async function certificarVentas({ companyId, saleIds, receptor: receptorPedido, 
     if (v) receptor = { id: v.invoiceReceptorId, nombre: v.invoiceReceptorName };
   }
 
-  const dteId = dteIdPara(companyId, ids);
+  const dteId = dteIdPara(companyId, ids, version);
   const dteRef = firestore.doc(`companies/${companyId}/dtes/${dteId}`);
   const ahora = Date.now();
 
@@ -176,9 +214,13 @@ async function certificarVentas({ companyId, saleIds, receptor: receptorPedido, 
     const lines = [];
     for (const v of ventas) lines.push(...await lineasDeVenta(companyId, v));
 
-    const ref = referenciaInterna(companyId, ids);
+    const ref = referenciaInterna(companyId, ids, version);
     const numeros = ventas.map((v) => v.externalOrderNumber).filter(Boolean);
+    // La fecha de emisión se fija acá y se guarda: anular la exige EXACTA, y la de certificación
+    // llega segundos después.
+    const fechaEmision = nowGuatemalaISO();
     const { xml, docType, granTotal, totalIVA, frases } = buildFacturaNuc({
+      fechaHora: fechaEmision,
       emisor,
       receptor: { id: dte.receptorId, nombre: dte.receptorNombre },
       lines,
@@ -216,6 +258,8 @@ async function certificarVentas({ companyId, saleIds, receptor: receptorPedido, 
       numero,
       docType,
       fechaCertificacion: Date.now(),
+      fechaEmision,
+      version,
       granTotal,
       totalIVA,
       frases,
@@ -237,6 +281,7 @@ async function certificarVentas({ companyId, saleIds, receptor: receptorPedido, 
     await dteRef.set(certificado, { merge: true });
     await marcarVentas(companyId, ventas, {
       dteId, invoiceStatus: ESTADO.CERTIFICADO, invoiceSerie: serie, invoiceNumero: numero, invoiceUuid: uuid,
+      invoiceVersion: version,
     });
     await firestore.doc(`felPendientes/${companyId}__${dteId}`).delete().catch(() => {});
     // Fase 4: aquí se avisa a ComandaYa (cuenta del restaurante facturada + crédito DTE).
@@ -311,10 +356,12 @@ function respuestaDe(d) {
 // ── Callables ──────────────────────────────────────────────────────────────
 
 exports.felCertificarVenta = onCall(CALL_OPTS, async (request) => {
-  const { companyId, saleIds, receptor, sinDetalle } = request.data || {};
+  const { companyId, saleIds, receptor, sinDetalle, reemitir } = request.data || {};
   const user = await usuarioDeLaEmpresa(request, companyId);
-  exigirPermiso(user, "OPERATE_POS");
-  return certificarVentas({ companyId, saleIds, receptor, sinDetalle, userId: user.id });
+  // Volver a facturar es corregir una factura ya emitida: el mismo permiso que anularla.
+  if (reemitir) exigirPermiso(user, "VOID_SALE");
+  else exigirPermiso(user, "OPERATE_POS");
+  return certificarVentas({ companyId, saleIds, receptor, sinDetalle, userId: user.id, reemitir: !!reemitir });
 });
 
 exports.felConsultarNit = onCall({ region: REGION, timeoutSeconds: 60 }, async (request) => {
@@ -344,7 +391,7 @@ exports.felAnularDte = onCall(CALL_OPTS, async (request) => {
   const resp = await digifact.anularDocumento(d.emisorNit, {
     autorizacion: d.uuid,
     idReceptor: d.receptorId || "CF",
-    fechaEmision: fechaEmisionParaAnular(d.fechaCertificacion),
+    fechaEmision: fechaEmisionDelDte(d),
     motivo: String(motivo).trim(),
   });
   if (!resp.success) {
@@ -361,6 +408,18 @@ exports.felAnularDte = onCall(CALL_OPTS, async (request) => {
   await marcarVentas(companyId, ventas, { invoiceStatus: ESTADO.ANULADO });
   return { estado: ESTADO.ANULADO };
 });
+
+/**
+ * Fecha de emisión EXACTA del documento, como la pide la anulación ('YYYY-MM-DDTHH:mm:ss', hora
+ * de Guatemala). Se guarda desde la fase 3c; las facturas anteriores la tienen dentro del XML
+ * enviado. La de certificación queda de último recurso: llega segundos después.
+ */
+function fechaEmisionDelDte(d) {
+  if (d.fechaEmision) return String(d.fechaEmision).slice(0, 19);
+  const m = /<IssuedDateTime>([^<]+)<\/IssuedDateTime>/.exec(d.xmlOriginal || "");
+  if (m) return m[1].slice(0, 19);
+  return fechaEmisionParaAnular(d.fechaCertificacion);
+}
 
 exports.felObtenerPdf = onCall({ region: REGION, timeoutSeconds: 60 }, async (request) => {
   const { companyId, dteId } = request.data || {};
@@ -479,4 +538,4 @@ async function certificarSolicitadasHuerfanas() {
 }
 
 // Para pruebas de la lógica sin desplegar.
-exports._internals = { dteIdPara, respuestaDe };
+exports._internals = { dteIdPara, respuestaDe, fechaEmisionDelDte };
