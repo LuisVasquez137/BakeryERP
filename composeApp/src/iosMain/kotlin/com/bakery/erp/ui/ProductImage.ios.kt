@@ -32,3 +32,6 @@ actual fun ProductImage(
         )
     }
 }
+
+@Composable
+actual fun PrefetchImages(urls: List<String>) { /* sin cargador de imágenes en esta plataforma */ }

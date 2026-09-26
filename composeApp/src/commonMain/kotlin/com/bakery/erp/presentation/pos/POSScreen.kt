@@ -1,5 +1,8 @@
 package com.bakery.erp.presentation.pos
 
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -168,14 +171,22 @@ fun POSScreen(
 
     // Animación de "pulso" en el ícono del carrito cuando aumenta el contador
     val cartIconScale = remember { Animatable(1f) }
-    var prevCartCount by remember { mutableStateOf(0) }
-    LaunchedEffect(cartItemCount) {
-        if (cartItemCount > prevCartCount && prevCartCount >= 0) {
-            cartIconScale.snapTo(1.35f)
+    val cartFlight = remember { CartFlightState() }
+    // El ícono late cuando LLEGA el vuelo, no cuando se toca: así el ojo sigue a la miniatura
+    // y el latido le confirma que entró.
+    LaunchedEffect(cartFlight.arrivals) {
+        if (cartFlight.arrivals > 0) {
+            cartIconScale.snapTo(1.3f)
             cartIconScale.animateTo(1f, animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
         }
-        prevCartCount = cartItemCount
     }
+    val highlightItem = cartFlight.lastArrivedItem
+    val highlightAt = cartFlight.lastArrivedAt
+    // Las fotos del catálogo quedan decodificadas a tamaño de ficha antes de dibujarse.
+    val productImageUrls = remember(state.products) {
+        state.products.mapNotNull { it.imageUrl?.takeIf { u -> u.isNotBlank() } }
+    }
+    com.bakery.erp.ui.PrefetchImages(productImageUrls)
 
     val selectedGroup = state.posCategories.firstOrNull { it.id == selectedFilter && it.sellAsGroup }
 
@@ -217,6 +228,7 @@ fun POSScreen(
         }
     }
 
+    CompositionLocalProvider(LocalCartFlight provides cartFlight) {
     BoxWithConstraints {
         val wide = maxWidth >= 1000.dp
         // Teléfono (sobre todo en vertical): no caben cinco acciones en la barra. Las dos que
@@ -292,7 +304,7 @@ fun POSScreen(
                                         ) { Text("$cartItemCount") }
                                     }
                                 },
-                                modifier = Modifier.padding(end = 4.dp)
+                                modifier = Modifier.padding(end = 4.dp).cartFlightTarget()
                             ) {
                                 IconButton(
                                     onClick = { cartSheetOpen = true },
@@ -426,7 +438,10 @@ fun POSScreen(
                             GroupSellPanel(
                                 group = selectedGroup,
                                 inCart = state.cart.firstOrNull { it.quickGroupId == selectedGroup.id }?.quantity ?: 0.0,
-                                onAdd = { qty -> viewModel.addGroupToCart(selectedGroup, qty) },
+                                onAdd = { qty ->
+                                viewModel.addGroupToCart(selectedGroup, qty)
+                                cartFlight.launch("grpq_${qty.toInt()}", "grp_${selectedGroup.id}", null, "+${qty.toInt()}")
+                            },
                                 onOtherQuantity = { groupQuantityFor = selectedGroup },
                                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
                             )
@@ -455,6 +470,10 @@ fun POSScreen(
                         onDecrement = { line -> viewModel.updateLineQuantity(line.key, line.quantity - 1) },
                         onRemoveLine = { key -> viewModel.removeLine(key) },
                         onCheckout = { paymentOpen = true },
+                        highlightItem = highlightItem,
+                        highlightAt = highlightAt,
+                        // Sin `cartFlightTarget`: en horizontal el carrito ya está a la vista y
+                        // el vuelo cruzando la pantalla distrae. Basta con que el renglón aparezca.
                         modifier = Modifier.weight(0.95f).fillMaxHeight().padding(10.dp)
                     )
                 }
@@ -469,7 +488,10 @@ fun POSScreen(
                         GroupSellPanel(
                             group = selectedGroup,
                             inCart = state.cart.firstOrNull { it.quickGroupId == selectedGroup.id }?.quantity ?: 0.0,
-                            onAdd = { qty -> viewModel.addGroupToCart(selectedGroup, qty) },
+                            onAdd = { qty ->
+                                viewModel.addGroupToCart(selectedGroup, qty)
+                                cartFlight.launch("grpq_${qty.toInt()}", "grp_${selectedGroup.id}", null, "+${qty.toInt()}")
+                            },
                             onOtherQuantity = { groupQuantityFor = selectedGroup },
                             modifier = Modifier.weight(1f).fillMaxWidth().padding(12.dp)
                         )
@@ -530,6 +552,8 @@ fun POSScreen(
                 }
             }
         }
+        CartFlightOverlay(cartFlight)
+    }
     }
 
     // ── Dialogs ────────────────────────────────────────────────────
@@ -556,6 +580,7 @@ fun POSScreen(
             onConfirm = { qty ->
                 viewModel.addProductToCart(product, qty)
                 quantityFor = null
+                cartFlight.launch(product.id, product.id, product.imageUrl, "+${qty.fmtMoney(0)}")
             }
         )
     }
@@ -568,6 +593,9 @@ fun POSScreen(
             onConfirm = { qty ->
                 viewModel.addGroupToCart(group, qty)
                 groupQuantityFor = null
+                // Desde la ficha del grupo en "Todos" o desde "Otra cantidad" del panel.
+                val src = if (cartFlight.sources.containsKey("grp_${group.id}")) "grp_${group.id}" else "grpq_other"
+                cartFlight.launch(src, "grp_${group.id}", null, "+${qty.fmtMoney(0)}")
             }
         )
     }
@@ -685,6 +713,8 @@ fun POSScreen(
                     cartSheetOpen = false
                     paymentOpen = true
                 },
+                highlightItem = highlightItem,
+                highlightAt = highlightAt,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
                     .heightIn(min = 240.dp)
             )
@@ -896,7 +926,7 @@ private fun GroupSellPanel(
                     color = MaterialTheme.colorScheme.surface,
                     border = androidx.compose.foundation.BorderStroke(2.dp, color),
                     tonalElevation = 2.dp,
-                    modifier = Modifier.height(84.dp)
+                    modifier = Modifier.height(84.dp).cartFlightSource("grpq_$qty")
                 ) {
                     Column(
                         Modifier.fillMaxSize(),
@@ -916,7 +946,7 @@ private fun GroupSellPanel(
                     onClick = onOtherQuantity,
                     shape = RoundedCornerShape(12.dp),
                     color = color,
-                    modifier = Modifier.height(84.dp)
+                    modifier = Modifier.height(84.dp).cartFlightSource("grpq_other")
                 ) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text("Otra cantidad", color = Color.White, fontWeight = FontWeight.Bold,
@@ -1050,6 +1080,7 @@ private fun GroupTile(
     val selected = quantityInCart > 0
     Card(
         modifier = Modifier
+            .cartFlightSource("grp_${group.id}")
             .fillMaxWidth()
             .height(148.dp)
             .then(if (selected) Modifier.border(3.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(10.dp)) else Modifier)
@@ -1113,6 +1144,7 @@ private fun ProductTile(
 
     Card(
         modifier = Modifier
+            .cartFlightSource(product.id)
             .fillMaxWidth()
             .height(148.dp)
             .then(if (selected) Modifier.border(3.dp, primary, RoundedCornerShape(10.dp)) else Modifier)
@@ -1184,6 +1216,9 @@ private fun CartPanel(
     onDecrement: (CartLine) -> Unit,
     onRemoveLine: (key: String) -> Unit,
     onCheckout: () -> Unit,
+    /** Renglón al que acaba de llegar el vuelo ("productId" o "grp_<id>") y cuándo. */
+    highlightItem: String? = null,
+    highlightAt: Long = 0L,
     modifier: Modifier = Modifier
 ) {
     // El grupo de precio no tiene producto contra el cual comparar stock.
@@ -1201,11 +1236,25 @@ private fun CartPanel(
                      textAlign = TextAlign.Center)
             }
         } else {
-            LazyColumn(modifier = Modifier.weight(1f, fill = false).heightIn(max = 480.dp),
+            val listState = rememberLazyListState()
+            // Siempre a la vista lo último que se pidió: el renglón que se acaba de agregar o
+            // de sumar, y si no se sabe cuál, el final de la lista.
+            LaunchedEffect(highlightAt, cart.size) {
+                val target = cart.indexOfFirst {
+                    highlightItem != null && (it.productId == highlightItem || "grp_${it.quickGroupId}" == highlightItem)
+                }.takeIf { it >= 0 && kotlin.time.Clock.System.now().toEpochMilliseconds() - highlightAt < 1500 }
+                    ?: cart.lastIndex
+                if (target >= 0) listState.animateScrollToItem(target)
+            }
+            LazyColumn(state = listState,
+                       modifier = Modifier.weight(1f, fill = false).heightIn(max = 480.dp),
                        verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 items(cart, key = { it.key }) { line ->
                     CartLineRow(
+                        modifier = Modifier.animateItem(),
                         line = line,
+                        highlightAt = if (highlightItem != null &&
+                            (line.productId == highlightItem || "grp_${line.quickGroupId}" == highlightItem)) highlightAt else 0L,
                         available = if (line.isGroup || line.isRestaurant) Double.MAX_VALUE else stockOf(line.productId),
                         onIncrement = { onIncrement(line) },
                         onDecrement = { onDecrement(line) },
@@ -1372,12 +1421,53 @@ private fun CartLineRow(
     available: Double,
     onIncrement: () -> Unit,
     onDecrement: () -> Unit,
-    onRemove: () -> Unit
+    onRemove: () -> Unit,
+    highlightAt: Long = 0L,
+    modifier: Modifier = Modifier
 ) {
     val oversold = line.quantity > available
+    // Solo cuenta si llegó recién: abrir el carrito más tarde no debe iluminar nada.
+    val recent = highlightAt > 0 && kotlin.time.Clock.System.now().toEpochMilliseconds() - highlightAt < 1500
+
+    // Entrada: un renglón NUEVO entra deslizándose desde la derecha y creciendo. Se decide en
+    // la primera composición — si el renglón ya existía, esto no corre y solo late.
+    val enter = remember { Animatable(if (recent) 0f else 1f) }
+    LaunchedEffect(Unit) {
+        if (enter.value < 1f) {
+            enter.animateTo(1f, spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow))
+        }
+    }
+    // Latido: si el producto ya estaba y se le sumó cantidad, el renglón crece un instante.
+    val pulse = remember { Animatable(1f) }
+    // Destello naranja, marcado y con una pausa antes de apagarse, para que se note.
+    val flash = remember { Animatable(0f) }
+    LaunchedEffect(highlightAt) {
+        if (!recent) return@LaunchedEffect
+        flash.snapTo(1f)
+        if (enter.value >= 1f) {
+            pulse.snapTo(1.05f)
+            pulse.animateTo(1f, spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium))
+        }
+        kotlinx.coroutines.delay(350)
+        flash.animateTo(0f, tween(durationMillis = 1100))
+    }
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val slide = with(density) { 48.dp.toPx() }
+    val base = MaterialTheme.colorScheme.surfaceVariant
     Card(
+        modifier = modifier.graphicsLayer {
+            val e = enter.value
+            alpha = e.coerceIn(0f, 1f)
+            translationX = (1f - e) * slide
+            val sc = (0.9f + 0.1f * e) * pulse.value
+            scaleX = sc; scaleY = sc
+        },
         shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        colors = CardDefaults.cardColors(
+            containerColor = androidx.compose.ui.graphics.lerp(base, CartFlashColor, flash.value)
+        ),
+        border = if (flash.value > 0.01f)
+            androidx.compose.foundation.BorderStroke(2.dp, BrandColors.Accent.copy(alpha = flash.value)) else null
     ) {
         Column(Modifier.padding(10.dp).fillMaxWidth()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1435,3 +1525,6 @@ private fun CartLineRow(
         }
     }
 }
+
+/** Naranja pálido del destello: más marcado que `AccentSoft` para que el renglón nuevo se note. */
+private val CartFlashColor = Color(0xFFFFE0B2)

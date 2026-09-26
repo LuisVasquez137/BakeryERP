@@ -11,3 +11,10 @@ expect fun ProductImage(
     modifier: Modifier = Modifier,
     contentScale: ContentScale = ContentScale.Crop
 )
+
+/**
+ * Precarga fotos de productos para que ya estén listas cuando se dibujan (el POS la llama al
+ * abrir con todo su catálogo). No dibuja nada.
+ */
+@Composable
+expect fun PrefetchImages(urls: List<String>)
