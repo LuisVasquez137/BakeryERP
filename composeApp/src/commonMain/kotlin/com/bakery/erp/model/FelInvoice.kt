@@ -20,6 +20,8 @@ object FelInvoiceStatus {
     /** Digifact/SAT rechazó el contenido o falta configuración: reintentar no sirve. */
     const val RECHAZADO = "RECHAZADO"
     const val ANULADO = "ANULADO"
+    /** Cuenta del restaurante que ya facturó ComandaYa. BakeOS no la vuelve a facturar. */
+    const val EXTERNA = "EXTERNA"
 
     fun label(status: String): String = when (status) {
         SOLICITADA, CERTIFICANDO -> "Facturando…"
@@ -27,6 +29,7 @@ object FelInvoiceStatus {
         PENDIENTE -> "Factura pendiente"
         RECHAZADO -> "Factura rechazada"
         ANULADO -> "Factura anulada"
+        EXTERNA -> "Facturada en ComandaYa"
         else -> ""
     }
 
@@ -129,13 +132,12 @@ fun felPhrasesFor(result: FelCertifyResult): List<String> = result.phrases.ifEmp
 
 /**
  * Una venta que salió sin factura y se puede facturar después, desde el historial (el cliente
- * la pide al rato, o la cajera olvidó marcarla). Solo pan de una sucursal con NIT: la cuenta
- * del restaurante la factura ComandaYa, y emitirla acá también sería una doble factura del
- * mismo consumo. Una venta anulada o todavía sin recibir en caja no se factura.
+ * la pide al rato, o la cajera olvidó marcarla). Pan o cuenta del restaurante, en una sucursal
+ * con NIT. La cuenta que ComandaYa ya facturó trae [FelInvoiceStatus.EXTERNA] y por eso no
+ * pasa. Una venta anulada o todavía sin recibir en caja no se factura.
  */
 fun felCanInvoiceLater(sale: Sale, branchHasNit: Boolean): Boolean =
     branchHasNit &&
         sale.invoiceStatus.isBlank() &&
         sale.status == SaleStatus.COMPLETED &&
-        sale.salesChannel == SalesChannel.BAKERY &&
         sale.total > 0.0

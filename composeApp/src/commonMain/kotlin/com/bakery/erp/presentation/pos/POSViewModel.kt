@@ -551,12 +551,16 @@ class POSViewModel(
         val bakeryCart = snapshotCart.filter { it.isBakery }
         val restaurantCart = snapshotCart.filter { it.isRestaurant }
         val bakeryTotal = bakeryCart.sumOf { it.subtotal }
-        // Por ahora la factura cubre solo el pan: la cuenta del restaurante la puede estar
-        // facturando ComandaYa, y hasta que las dos apps se avisen (fase 4) meterla acá
-        // arriesga una doble factura del mismo consumo.
-        val invoiceRequest = invoice?.takeIf { bakeryCart.isNotEmpty() && canInvoice() }
+        // La factura cubre el pan y las cuentas del restaurante que ComandaYa no facturó. Las
+        // que sí facturó (en la mesa) quedan fuera: se verían dos veces ante la SAT.
+        val invoiceableRestaurant = invoiceableRestaurantIds(restaurantCart)
+        val invoiceRequest = invoice?.takeIf {
+            canInvoice() && (bakeryCart.isNotEmpty() || invoiceableRestaurant.isNotEmpty())
+        }
         if (invoiceRequest != null) {
-            felReceptorProblem(invoiceRequest, bakeryTotal - discountAmount)?.let { problem ->
+            val invoicedTotal = (if (bakeryCart.isNotEmpty()) bakeryTotal - discountAmount else 0.0) +
+                restaurantCart.filter { it.pendingSaleId in invoiceableRestaurant }.sumOf { it.subtotal }
+            felReceptorProblem(invoiceRequest, invoicedTotal)?.let { problem ->
                 _uiState.update { it.copy(error = problem) }; return
             }
         }
@@ -587,6 +591,7 @@ class POSViewModel(
                 // Primero lo del restaurante: su guarda de "ya la recibió otra caja" es la que
                 // puede fallar, y tiene que hacerlo antes de mover inventario del mostrador.
                 val collected = restaurantCart.map { line ->
+                    val invoiceThis = invoiceRequest != null && line.pendingSaleId in invoiceableRestaurant
                     saleRepository.collectPendingSale(
                         companyId = companyId,
                         saleId = line.pendingSaleId,
@@ -595,11 +600,17 @@ class POSViewModel(
                         registerName = session.registerName,
                         cashierId = currentUser.id,
                         cashierName = currentUser.displayName,
-                        checkout = payment
+                        checkout = if (!invoiceThis) payment else payment.copy(
+                            invoiceReceptorId = invoiceRequest!!.receptorId,
+                            invoiceReceptorName = invoiceRequest.receptorName
+                        )
                     )
                 }
+                // Las ventas que van en la factura de este cobro: las que quedaron SOLICITADA.
+                val collectedToInvoice = collected
+                    .filter { it.invoiceStatus == FelInvoiceStatus.SOLICITADA }.map { it.id }
 
-                if (bakeryCart.isEmpty()) return@runCatching collected.first()
+                if (bakeryCart.isEmpty()) return@runCatching collected.first() to collectedToInvoice
 
                 val sale = Sale(
                     branchId = branch.id,
@@ -703,8 +714,8 @@ class POSViewModel(
                         )
                     }
                 }
-                created
-            }.onSuccess { sale ->
+                created to (listOfNotNull(created.id.takeIf { invoiceRequest != null }) + collectedToInvoice)
+            }.onSuccess { (sale, invoiceSaleIds) ->
                 // El ticket y el acuse muestran el COBRO completo, no solo la venta de pan.
                 val checkoutSale = sale.copy(subtotal = total + discountAmount, discount = discountAmount,
                     total = total, tenderedAmount = effectiveTendered, changeAmount = change)
@@ -726,7 +737,7 @@ class POSViewModel(
                     ),
                     cashierName = currentUser.displayName
                 )
-                val invoiced = invoiceRequest != null && sale.invoiceStatus == FelInvoiceStatus.SOLICITADA
+                val invoiced = invoiceRequest != null && invoiceSaleIds.isNotEmpty()
                 _uiState.update {
                     it.copy(
                         isLoading = false,
@@ -735,10 +746,10 @@ class POSViewModel(
                         lastSaleSummary = LastSaleSummary(total, change, paymentMethod),
                         lastReceiptData = receipt,
                         recentCheckouts = (listOf(record) + it.recentCheckouts).take(MAX_RECENT_CHECKOUTS),
-                        invoiceProgress = if (invoiced) InvoiceProgress(sale.id, FelInvoiceStatus.SOLICITADA) else null
+                        invoiceProgress = if (invoiced) InvoiceProgress(invoiceSaleIds.first(), FelInvoiceStatus.SOLICITADA) else null
                     )
                 }
-                if (invoiced && invoiceRequest != null) certifyInvoice(companyId, sale.id, invoiceRequest)
+                if (invoiced && invoiceRequest != null) certifyInvoice(companyId, invoiceSaleIds, invoiceRequest)
             }.onFailure { err ->
                 _uiState.update { it.copy(isLoading = false, isCheckingOut = false, error = err.message) }
             }
@@ -945,6 +956,18 @@ class POSViewModel(
     /** La sucursal abierta tiene un NIT asignado. Que el NIT esté activo lo decide el servidor. */
     fun canInvoice(): Boolean = _uiState.value.branch?.felProfileId?.isNotBlank() == true
 
+    /**
+     * Cuentas del restaurante del carrito que se pueden facturar acá: las que ComandaYa no
+     * facturó. Se mira la lista viva de pendientes y no el carrito, porque el mesero puede
+     * facturarla en ComandaYa mientras la cuenta ya está en el carrito de la caja.
+     */
+    fun invoiceableRestaurantIds(restaurantCart: List<CartLine> = _uiState.value.cart.filter { it.isRestaurant }): Set<String> {
+        val pending = _uiState.value.pendingCollections.associateBy { it.id }
+        return restaurantCart.map { it.pendingSaleId }
+            .filter { id -> pending[id]?.invoiceStatus.isNullOrBlank() }
+            .toSet()
+    }
+
     /** El cobro sale con "Facturar" marcado en esta sucursal. */
     fun invoiceByDefault(): Boolean = canInvoice() && _uiState.value.branch?.invoiceByDefault == true
 
@@ -960,10 +983,12 @@ class POSViewModel(
      * está guardada con su factura pedida y el servidor la termina solo — el acuse lo dice y la
      * factura aparece después en el historial.
      */
-    private fun certifyInvoice(companyId: String, saleId: String, request: FelInvoiceRequest) {
+    private fun certifyInvoice(companyId: String, saleIds: List<String>, request: FelInvoiceRequest) {
+        // El progreso se ata a la primera venta del cobro: es la que el acuse conoce.
+        val saleId = saleIds.first()
         viewModelScope.launch {
             val progress = runCatching {
-                withTimeoutOrNull(INVOICE_WAIT_MS) { felRepository.certifySales(companyId, listOf(saleId), request) }
+                withTimeoutOrNull(INVOICE_WAIT_MS) { felRepository.certifySales(companyId, saleIds, request) }
             }.fold(
                 onSuccess = { r ->
                     if (r == null) InvoiceProgress(saleId, FelInvoiceStatus.PENDIENTE,

@@ -131,6 +131,18 @@ data class Sale(
      */
     val invoiceReceptorId: String = "",
     val invoiceReceptorName: String = "",
+    /**
+     * Cargo de domicilio de una cuenta de ComandaYa. No viene como línea: la factura lo agrega
+     * aparte, o saldría por menos de lo cobrado.
+     */
+    val externalDeliveryFee: Double = 0.0,
+    /** Factura que ComandaYa emitió para esta cuenta ([FelInvoiceStatus.EXTERNA]). */
+    val externalDteId: String = "",
+    /**
+     * Facturada en BakeOS Y en ComandaYa: el mismo consumo tiene dos facturas y hay que anular
+     * una. Lo marca el servidor al enterarse; no se corrige solo.
+     */
+    val invoiceConflict: Boolean = false,
     val createdAt: Long = 0L
 )
 

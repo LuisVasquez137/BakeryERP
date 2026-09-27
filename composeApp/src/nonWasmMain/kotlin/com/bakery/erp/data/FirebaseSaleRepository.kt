@@ -324,7 +324,15 @@ class FirebaseSaleRepository(
                 changeAmount = checkout.changeAmount,
                 billValues = checkout.billValues,
                 billCounts = checkout.billCounts
-            )
+            ).let { s ->
+                // Se pidió factura del cobro y ComandaYa no la facturó (sin estado): queda
+                // SOLICITADA en esta misma escritura, así el reintento del servidor la encuentra.
+                if (checkout.invoiceReceptorId.isNotBlank() && s.invoiceStatus.isBlank()) s.copy(
+                    invoiceStatus = com.bakery.erp.model.FelInvoiceStatus.SOLICITADA,
+                    invoiceReceptorId = checkout.invoiceReceptorId,
+                    invoiceReceptorName = checkout.invoiceReceptorName
+                ) else s
+            }
             set(ref, updated.toMap())
             updated
         }
@@ -505,6 +513,9 @@ class FirebaseSaleRepository(
         "invoiceUuid" to invoiceUuid,
         "invoiceReceptorId" to invoiceReceptorId,
         "invoiceReceptorName" to invoiceReceptorName,
+        "externalDeliveryFee" to externalDeliveryFee,
+        "externalDteId" to externalDteId,
+        "invoiceConflict" to invoiceConflict,
         "createdAt" to createdAt
     )
 
@@ -555,6 +566,10 @@ class FirebaseSaleRepository(
         invoiceUuid = runCatching { get<String?>("invoiceUuid") }.getOrNull() ?: "",
         invoiceReceptorId = runCatching { get<String?>("invoiceReceptorId") }.getOrNull() ?: "",
         invoiceReceptorName = runCatching { get<String?>("invoiceReceptorName") }.getOrNull() ?: "",
+        externalDeliveryFee = runCatching { get<Double?>("externalDeliveryFee") }.getOrNull()
+            ?: runCatching { get<Long?>("externalDeliveryFee")?.toDouble() }.getOrNull() ?: 0.0,
+        externalDteId = runCatching { get<String?>("externalDteId") }.getOrNull() ?: "",
+        invoiceConflict = runCatching { get<Boolean?>("invoiceConflict") }.getOrNull() ?: false,
         createdAt = readMillis("createdAt")
     )
 

@@ -40,10 +40,13 @@ import com.bakery.erp.util.fmtMoney
 class InvoiceOptions(
     /** "Facturar" sale marcado (configurado por sucursal). */
     val defaultOn: Boolean,
-    /** Lo que cubre la factura antes del descuento: solo el pan, no la cuenta del restaurante. */
-    val bakeryTotal: Double,
-    /** El carrito trae cuentas del restaurante, que quedan fuera de esta factura. */
-    val excludesRestaurant: Boolean,
+    /**
+     * Lo que cubre la factura antes del descuento de colaborador: el pan más las cuentas del
+     * restaurante que ComandaYa no facturó.
+     */
+    val invoiceableTotal: Double,
+    /** Alguna cuenta del carrito ya la facturó ComandaYa y queda fuera de esta factura. */
+    val excludesBilledRestaurant: Boolean,
     val lookupNit: suspend (String) -> Result<String?>
 )
 
@@ -97,7 +100,7 @@ fun InvoiceSection(state: InvoiceFormState, options: InvoiceOptions, invoicedTot
                 Column(Modifier.weight(1f)) {
                     Text("Facturar", fontWeight = FontWeight.SemiBold, color = BrandColors.TextSlate)
                     Text(
-                        if (options.excludesRestaurant) "Factura el pan (Q ${invoicedTotal.fmtMoney(2)}). La cuenta del restaurante se factura en ComandaYa."
+                        if (options.excludesBilledRestaurant) "Factura por Q ${invoicedTotal.fmtMoney(2)}. Lo ya facturado en ComandaYa queda fuera."
                         else "Factura electrónica por Q ${invoicedTotal.fmtMoney(2)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = BrandColors.MutedSlate
@@ -166,11 +169,17 @@ fun InvoiceSection(state: InvoiceFormState, options: InvoiceOptions, invoicedTot
 @Composable
 fun SaleInvoiceChip(sale: com.bakery.erp.model.Sale) {
     val status = sale.invoiceStatus
+    // Dos facturas del mismo consumo: es lo primero que tiene que verse, antes que el estado.
+    if (sale.invoiceConflict) {
+        com.bakery.erp.ui.theme.BrandChip("Doble factura: anular una", com.bakery.erp.ui.theme.ChipTone.DANGER)
+        return
+    }
     if (status.isBlank()) return
     val tone = when (status) {
         com.bakery.erp.model.FelInvoiceStatus.CERTIFICADO -> com.bakery.erp.ui.theme.ChipTone.SUCCESS
         com.bakery.erp.model.FelInvoiceStatus.RECHAZADO -> com.bakery.erp.ui.theme.ChipTone.DANGER
         com.bakery.erp.model.FelInvoiceStatus.ANULADO -> com.bakery.erp.ui.theme.ChipTone.NEUTRAL
+        com.bakery.erp.model.FelInvoiceStatus.EXTERNA -> com.bakery.erp.ui.theme.ChipTone.INFO
         // Pendiente o todavía en camino: pide ojos, pero se resuelve solo.
         else -> com.bakery.erp.ui.theme.ChipTone.ATTENTION
     }

@@ -1897,8 +1897,8 @@ defecto").
   final o NIT con consulta a la SAT (`felConsultarNit`); si la SAT no contesta, el nombre se
   escribe a mano en vez de dejar al cliente sin factura. **Desde Q2,500 no se acepta CF**
   (`FEL_CF_LIMIT`, `felReceptorProblem` en `model/FelInvoice.kt`, tests en `FelInvoiceTest`).
-- **La factura cubre solo el pan.** La cuenta del restaurante del carrito queda fuera hasta la
-  fase 4: ComandaYa la puede estar facturando y meterla acá arriesga doble factura.
+- La factura cubre el pan **y las cuentas del restaurante que ComandaYa no facturó** (ver
+  "Fase 4 mínima" abajo).
 - **La venta nace `invoiceStatus = SOLICITADA`** con el receptor adentro, en la misma escritura
   que la crea. Si la llamada a `felCertificarVenta` se pierde (tablet sin internet justo al
   cobrar), el servidor nunca se enteraría: `felReintentarPendientes` barre las SOLICITADA de
@@ -1955,11 +1955,35 @@ venta**: no devuelve dinero ni inventario, y el diálogo lo dice. BakeOS todaví
   que el cobro del POS también usa: el reimpreso dice lo mismo que el original. La primera vez
   en el aparato abre el selector de térmica, igual que el cobro.
 - **"Facturar esta venta"**: para el pan que salió sin factura (el cliente la pidió después, o
-  se olvidó marcarla). `felCanInvoiceLater` decide: sin factura previa, COMPLETED, canal
-  BAKERY, sucursal con NIT. **La cuenta del restaurante no**: la factura ComandaYa. Pide
+  se olvidó marcarla). `felCanInvoiceLater` decide: sin factura previa, COMPLETED, sucursal con
+  NIT. Incluye cuentas del restaurante: la que ComandaYa facturó trae `EXTERNA` y no pasa. Pide
   `OPERATE_POS`, el mismo permiso que facturar al cobrar. Se emite con la fecha de hoy.
 
-**Pendiente**: fase 4 (ComandaYa), Fase 4 (puente con ComandaYa y crédito compartido; y arreglar que
+**Fase 4 mínima (hecha): el restaurante en la misma factura, sin avisarle nada a ComandaYa.**
+Se descartó la fase 4 completa (BakeOS → ComandaYa y el saldo compartido de DTEs): dos
+proyectos Firebase, despliegues en las dos apps, ~2 días para una sola empresa. Regla de
+operación: **donde paga el cliente, ahí se factura** — en la mesa, ComandaYa; en el mostrador
+junto con el pan, BakeOS.
+- **El puente de ComandaYa ya mandaba `billed`/`dteId`** y reenvía la orden cuando la factura
+  después de cobrarla; BakeOS los ignoraba. Ahora `ingestExternalSale` escribe
+  `invoiceStatus = "EXTERNA"` + `externalDteId`, y el servidor deja fuera de la factura las
+  cuentas EXTERNA (no rechaza el documento entero: facturarla en la mesa mientras está en el
+  carrito dejaría sin factura también el pan, y cada reintento chocaría con ella).
+- **Bug corregido en `ingestExternalSale`**: hacía `set()` sin merge, y cualquier reenvío (p. ej.
+  facturar en ComandaYa una orden ya cobrada) devolvía a PENDING_COLLECTION una cuenta ya
+  recibida en caja —reaparecía en el POS para cobrarse dos veces— y le borraba gaveta, cobro y
+  factura. Ahora una cuenta COMPLETED no se reescribe: de un reenvío solo se acepta enterarse de
+  que ComandaYa la facturó. Si BakeOS ya la había facturado queda `invoiceConflict = true` (chip
+  rojo "Doble factura: anular una") en vez de pisar nada. Una cancelación posterior a recibirla
+  solo se registra en el log: el dinero ya está en una gaveta.
+- `externalDeliveryFee`: el domicilio no viaja como línea; `lineasDeVenta` lo agrega como
+  "Servicio a domicilio", o la factura salía por menos de lo cobrado. Si el detalle no cuadra
+  con el total de las ventas queda un warning en el log.
+- La cuenta del restaurante queda SOLICITADA al recibirse en el cobro
+  (`CheckoutPayment.invoiceReceptorId/Name` → `collectPendingSale`), igual que el pan.
+- **Lo que no se hizo**: el saldo de DTEs que muestra ComandaYa no descuenta los que emite BakeOS
+  (Digifact cobra igual; el real está en su portal). Las cuentas corrompidas por el bug antes
+  del arreglo no se pueden detectar después: el reenvío borró la gaveta que las recibió., Fase 4 (puente con ComandaYa y crédito compartido; y arreglar que
 `ingestExternalSale` hace `set` sin merge y reabre una venta ya recibida en caja).
 
 ### Empleados

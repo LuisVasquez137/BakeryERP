@@ -50,11 +50,22 @@ class FelInvoiceLaterTest {
     }
 
     @Test
-    fun `no se factura desde el historial lo que ya tiene factura, el restaurante ni una sucursal sin NIT`() {
+    fun `la cuenta del restaurante se factura si ComandaYa no la facturo`() {
+        assertTrue(felCanInvoiceLater(sale.copy(salesChannel = SalesChannel.RESTAURANT), true))
+        assertFalse(felCanInvoiceLater(
+            sale.copy(salesChannel = SalesChannel.RESTAURANT, invoiceStatus = FelInvoiceStatus.EXTERNA), true
+        ))
+        // Todavía con el mesero: primero se recibe en caja.
+        assertFalse(felCanInvoiceLater(
+            sale.copy(salesChannel = SalesChannel.RESTAURANT, status = SaleStatus.PENDING_COLLECTION), true
+        ))
+    }
+
+    @Test
+    fun `no se factura desde el historial lo que ya tiene factura ni una sucursal sin NIT`() {
         assertFalse(felCanInvoiceLater(sale, branchHasNit = false))
         assertFalse(felCanInvoiceLater(sale.copy(invoiceStatus = FelInvoiceStatus.CERTIFICADO), true))
         assertFalse(felCanInvoiceLater(sale.copy(invoiceStatus = FelInvoiceStatus.PENDIENTE), true))
-        assertFalse(felCanInvoiceLater(sale.copy(salesChannel = SalesChannel.RESTAURANT), true))
         assertFalse(felCanInvoiceLater(sale.copy(status = SaleStatus.VOIDED), true))
         assertFalse(felCanInvoiceLater(sale.copy(total = 0.0), true))
     }

@@ -96,8 +96,8 @@ fun PaymentDialog(
     val isCashShort = isCash && tenderedText.isNotEmpty() && tendered < total - 0.004
 
     val methods = SalePaymentMethod.all + listOfNotNull(SalePaymentMethod.CREDIT.takeIf { creditAccounts != null })
-    // La factura cubre solo el pan, con el descuento de colaborador ya aplicado.
-    val invoicedTotal = ((invoiceOptions?.bakeryTotal ?: 0.0) - discountAmount).coerceAtLeast(0.0)
+    // Lo facturable (pan + restaurante no facturado en ComandaYa), con el descuento de colaborador.
+    val invoicedTotal = ((invoiceOptions?.invoiceableTotal ?: 0.0) - discountAmount).coerceAtLeast(0.0)
     val invoice = if (invoiceOptions != null) invoiceForm.request() else null
     val invoiceReady = invoiceOptions == null || invoiceForm.problem(invoicedTotal) == null
     val canConfirm = invoiceReady && when (method) {
@@ -261,7 +261,7 @@ fun PaymentDialog(
                             InfoNote("Confirmá que la transferencia ya se acreditó antes de cobrar.")
                     }
 
-                    if (invoiceOptions != null && invoiceOptions.bakeryTotal > 0.0) {
+                    if (invoiceOptions != null && invoiceOptions.invoiceableTotal > 0.0) {
                         InvoiceSection(invoiceForm, invoiceOptions, invoicedTotal)
                     }
                 }

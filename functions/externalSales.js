@@ -25,6 +25,12 @@ const CONFIG_PATH = "config/comandayaIntegration";
 
 const PENDING_COLLECTION = "PENDING_COLLECTION";
 const CANCELLED_STATUS = "CANCELLED";
+const COMPLETED_STATUS = "COMPLETED";
+
+/** La cuenta ya se facturó en ComandaYa: BakeOS no la vuelve a facturar. */
+const INVOICE_EXTERNAL = "EXTERNA";
+/** Estados de una factura emitida (o en camino) por BakeOS. */
+const BAKEOS_INVOICE_STATES = ["SOLICITADA", "CERTIFICANDO", "CERTIFICADO", "PENDIENTE"];
 
 // La config cambia casi nunca y la instancia se reutiliza entre invocaciones: cachearla
 // evita una lectura por orden sin arriesgar quedarse pegado más de unos minutos.
@@ -232,6 +238,10 @@ exports.ingestExternalSale = onRequest(
     // El método del encabezado es el de mayor monto: es el que se muestra en una sola línea.
     const dominantMethod = payments.reduce((a, b) => (b.amount > a.amount ? b : a)).method;
 
+    // ComandaYa manda `billed`/`dteId` en cada envío, y reenvía la orden cuando la factura
+    // después de cobrarla: así BakeOS se entera y no la factura otra vez.
+    const billedExternally = payload.billed === true;
+
     const sale = {
       id: externalId,
       branchId,
@@ -268,6 +278,11 @@ exports.ingestExternalSale = onRequest(
       externalTableLabel: payload.tableLabel || "",
       externalOrderNumber: String(payload.orderNumber || ""),
       externalOrderAt: Number(payload.orderCreatedAt) || 0,
+      // El cargo de domicilio no viaja como línea: la factura lo agrega aparte, o saldría
+      // por menos de lo que se cobró.
+      externalDeliveryFee: Number(payload.deliveryFee) || 0,
+      invoiceStatus: billedExternally ? INVOICE_EXTERNAL : "",
+      externalDteId: billedExternally ? String(payload.dteId || "") : "",
       createdAt: closedAt
     };
 
@@ -278,11 +293,34 @@ exports.ingestExternalSale = onRequest(
     };
 
     let previousLineCount = 0;
+    let skipped = "";
     try {
       await db.runTransaction(async (tx) => {
         const existing = await tx.get(saleRef);
         const prev = existing.exists ? existing.data() : null;
         previousLineCount = prev ? (prev.lineCount || 0) : 0;
+
+        // Ya recibida en caja: su dinero ya se sumó a una gaveta y la venta lleva quién la
+        // recibió, el cobro y quizá su factura. Reescribirla la devolvía a "pendiente de
+        // recibir" —reaparecía en el POS para cobrarse dos veces— y le borraba todo eso. Lo
+        // único que se acepta de un reenvío es enterarse de que ComandaYa la facturó.
+        if (prev && prev.status === COMPLETED_STATUS) {
+          skipped = "ya recibida en caja";
+          if (billedExternally && prev.invoiceStatus !== INVOICE_EXTERNAL) {
+            const bakeosInvoiced = BAKEOS_INVOICE_STATES.includes(prev.invoiceStatus);
+            tx.set(saleRef, bakeosInvoiced
+              // Facturada en los dos lados: no se pisa la de BakeOS, se deja la marca para
+              // que alguien anule una de las dos.
+              ? { externalDteId: String(payload.dteId || ""), invoiceConflict: true }
+              : { invoiceStatus: INVOICE_EXTERNAL, externalDteId: String(payload.dteId || "") },
+            { merge: true });
+            if (bakeosInvoiced) console.error(`ingestExternalSale: ${externalId} facturada en BakeOS Y en ComandaYa`);
+          }
+          if (isCancelled) {
+            console.error(`ingestExternalSale: ${externalId} se canceló en ComandaYa después de recibirse en caja`);
+          }
+          return;
+        }
 
         // Idempotencia real: se revierte exactamente lo que esta venta había sumado antes
         // (guardado en `appliedRollup`) y se aplica lo nuevo. Un reintento con los mismos
@@ -303,6 +341,11 @@ exports.ingestExternalSale = onRequest(
     } catch (e) {
       console.error(`ingestExternalSale: falló la transacción de ${externalId}`, e);
       return res.status(500).json({ ok: false, error: e.message });
+    }
+
+    if (skipped) {
+      console.log(`ingestExternalSale: ${externalId} sin cambios (${skipped})`);
+      return res.status(200).json({ ok: true, saleId: externalId, skipped });
     }
 
     // Las líneas van fuera de la transacción, con id determinista (`l0`, `l1`, …) para que

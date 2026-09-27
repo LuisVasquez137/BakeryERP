@@ -11,7 +11,14 @@ data class CheckoutPayment(
     val tenderedAmount: Double,
     val changeAmount: Double,
     val billValues: List<Double> = emptyList(),
-    val billCounts: List<Double> = emptyList()
+    val billCounts: List<Double> = emptyList(),
+    /**
+     * A quién facturar las cuentas del restaurante que entran en este cobro. Vacío = no se
+     * factura. Viaja acá para que la cuenta quede SOLICITADA en la misma escritura que la
+     * recibe en caja, igual que la venta de pan.
+     */
+    val invoiceReceptorId: String = "",
+    val invoiceReceptorName: String = ""
 )
 
 /**

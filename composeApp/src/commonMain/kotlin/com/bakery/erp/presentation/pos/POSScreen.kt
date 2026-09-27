@@ -613,12 +613,17 @@ fun POSScreen(
                     viewModel.confirmSale(companyId, it, method, tendered, bills, discountAccount = discount, invoice = invoice)
                 }
             },
-            invoiceOptions = if (viewModel.canInvoice()) InvoiceOptions(
-                defaultOn = viewModel.invoiceByDefault(),
-                bakeryTotal = state.cart.filter { l -> l.isBakery }.sumOf { l -> l.subtotal },
-                excludesRestaurant = state.cart.any { l -> l.isRestaurant },
-                lookupNit = { nit -> viewModel.lookupNit(companyId, nit) }
-            ) else null,
+            invoiceOptions = if (viewModel.canInvoice()) {
+                val billable = viewModel.invoiceableRestaurantIds()
+                val restaurant = state.cart.filter { l -> l.isRestaurant }
+                InvoiceOptions(
+                    defaultOn = viewModel.invoiceByDefault(),
+                    invoiceableTotal = state.cart.filter { l -> l.isBakery }.sumOf { l -> l.subtotal } +
+                        restaurant.filter { l -> l.pendingSaleId in billable }.sumOf { l -> l.subtotal },
+                    excludesBilledRestaurant = restaurant.any { l -> l.pendingSaleId !in billable },
+                    lookupNit = { nit -> viewModel.lookupNit(companyId, nit) }
+                )
+            } else null,
             discountAccounts = creditState?.accounts.orEmpty()
                 .filter { it.isEmployee && it.active && it.cashDiscountEligible },
             employeeDiscount = viewModel.employeeDiscountAmount(),

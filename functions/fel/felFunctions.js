@@ -91,7 +91,13 @@ async function lineasDeVenta(companyId, sale) {
   // ComandaYa) se reparte entre sus líneas: la SAT lo pide por item, no global.
   const yaPorLinea = lines.reduce((a, l) => a + l.discount, 0);
   const pendiente = Math.max(0, (Number(sale.discount) || 0) - yaPorLinea);
-  return pendiente > 0.004 ? prorateDiscount(lines, pendiente) : lines;
+  const conDescuento = pendiente > 0.004 ? prorateDiscount(lines, pendiente) : lines;
+  // El domicilio de una cuenta del restaurante no viene como línea y no lleva el descuento
+  // de la comida: sin esta línea la factura sale por menos de lo cobrado.
+  const domicilio = Number(sale.externalDeliveryFee) || 0;
+  return domicilio > 0.004
+    ? [...conDescuento, { description: "Servicio a domicilio", qty: 1, unitPrice: domicilio, discount: 0 }]
+    : conDescuento;
 }
 
 /**
@@ -118,7 +124,7 @@ async function certificarVentas({ companyId, saleIds, receptor: receptorPedido, 
     }
   }
 
-  const ventas = [];
+  let ventas = [];
   for (const id of ids) {
     const s = await firestore.doc(`companies/${companyId}/sales/${id}`).get();
     if (!s.exists) throw new HttpsError("not-found", `La venta ${id} no existe.`);
@@ -130,6 +136,18 @@ async function certificarVentas({ companyId, saleIds, receptor: receptorPedido, 
   }
   if (ventas.some((v) => v.status === "VOIDED" || v.status === "CANCELLED")) {
     throw new HttpsError("failed-precondition", "No se puede facturar una venta anulada.");
+  }
+  // Una cuenta que ComandaYa ya facturó queda fuera, y se factura el resto del cobro. Pasa si
+  // la facturan en la mesa mientras está en el carrito de la caja: rechazar el documento
+  // entero dejaría sin factura también el pan, y cada reintento chocaría con la misma cuenta.
+  const enComandaYa = ventas.filter((v) => v.invoiceStatus === "EXTERNA");
+  if (enComandaYa.length) {
+    if (enComandaYa.length === ventas.length) {
+      throw new HttpsError("failed-precondition", "Esta cuenta ya se facturó en ComandaYa.");
+    }
+    const fuera = new Set(enComandaYa.map((v) => v.id));
+    ventas = ventas.filter((v) => !fuera.has(v.id));
+    ids = ids.filter((id) => !fuera.has(id));
   }
   // Cada vez que se vuelve a facturar un cobro (la anterior se anuló o la rechazaron) sube la
   // versión: cambia el id del DTE y la referencia interna, porque las viejas ya se usaron.
@@ -228,6 +246,13 @@ async function certificarVentas({ companyId, saleIds, receptor: receptorPedido, 
       observaciones: numeros.length ? `Orden ${numeros.join(", ")}` : `Venta ${ids[0].slice(-8)}`,
       descripcionUnica: dte.sinDetalle ? "Venta de productos de panadería y alimentos" : null,
     });
+
+    // La factura tiene que decir lo que se cobró. Si el detalle no cuadra con los totales
+    // (una cuenta de ComandaYa con un cargo que no viajó), queda en el registro para revisarlo.
+    const cobrado = ventas.reduce((a, v) => a + (Number(v.total) || 0), 0);
+    if (Math.abs(cobrado - granTotal) > 0.01) {
+      console.warn(`FEL ${companyId}/${dteId}: la factura suma Q${granTotal} y las ventas Q${cobrado.toFixed(2)}`);
+    }
 
     const digifact = await clienteParaPerfil(companyId, profileId);
     let resp = await digifact.certificarDocumento(emisor.nit, xml);
