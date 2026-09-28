@@ -723,6 +723,7 @@ fun POSScreen(
                 btPickerOpen = true
             },
             invoice = state.invoiceProgress,
+            printedAt = state.printedAt,
             onDismiss = { viewModel.dismissLastSale() }
         )
     }
@@ -1405,129 +1406,10 @@ private fun CartPanel(
     }
 }
 
-@Composable
-private fun SaleSuccessDialog(
-    total: Double,
-    change: Double,
-    paymentLabel: String,
-    isPrinting: Boolean,
-    isPrintingAvailable: Boolean,
-    savedPrinterName: String?,
-    onPrint: () -> Unit,
-    onChangePrinter: () -> Unit,
-    invoice: InvoiceProgress? = null,
-    onDismiss: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = {
-            Icon(
-                Icons.Default.CheckCircle, null,
-                tint = Color(0xFF2E7D32),
-                modifier = Modifier.size(48.dp)
-            )
-        },
-        title = {
-            Text(
-                "Venta cobrada",
-                fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
-            )
-        },
-        text = {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(
-                    "Q ${total.fmtMoney(2)}",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(paymentLabel, style = MaterialTheme.typography.labelMedium,
-                     color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (change > 0.0) {
-                    Spacer(Modifier.height(12.dp))
-                    Surface(
-                        color = MaterialTheme.colorScheme.tertiaryContainer,
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text("Vuelto", style = MaterialTheme.typography.labelMedium,
-                                 color = MaterialTheme.colorScheme.onTertiaryContainer)
-                            Text(
-                                "Q ${change.fmtMoney(2)}",
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = MaterialTheme.colorScheme.onTertiaryContainer
-                            )
-                        }
-                    }
-                }
-                if (invoice != null) {
-                    Spacer(Modifier.height(12.dp))
-                    InvoiceStatusBanner(invoice)
-                }
-                if (isPrintingAvailable && savedPrinterName != null) {
-                    Spacer(Modifier.height(10.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "Impresora: $savedPrinterName",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        TextButton(
-                            onClick = onChangePrinter,
-                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
-                        ) {
-                            Text("Cambiar", style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            Button(onClick = onDismiss) {
-                Text("Listo", fontWeight = FontWeight.SemiBold)
-            }
-        },
-        dismissButton = {
-            if (isPrintingAvailable) {
-                TextButton(
-                    onClick = onPrint,
-                    enabled = !isPrinting
-                ) {
-                    if (isPrinting) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text("Imprimiendo…")
-                    } else {
-                        Icon(Icons.Default.Print, null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            if (invoice?.status == com.bakery.erp.model.FelInvoiceStatus.CERTIFICADO) "Imprimir factura"
-                            else "Imprimir ticket"
-                        )
-                    }
-                }
-            }
-        }
-    )
-}
 
 /** Cómo va la factura en el acuse del cobro. La venta ya está guardada pase lo que pase. */
 @Composable
-private fun InvoiceStatusBanner(invoice: InvoiceProgress) {
+internal fun InvoiceStatusBanner(invoice: InvoiceProgress) {
     val status = invoice.status
     val (bg, ink) = com.bakery.erp.ui.theme.chipColors(
         when (status) {

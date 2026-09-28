@@ -15,6 +15,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalance
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CreditCard
@@ -50,6 +51,10 @@ private val SuccessContainer = Color(0xFFE6F4EA)
  * sobre una tarjeta grande, los montos típicos ("Exacto", el billete redondo siguiente) evitan
  * teclear, y el vuelto aparece en grande apenas se sabe cuánto dieron. Los billetes que se
  * tocan quedan registrados para "Último cobro".
+ *
+ * En pantalla ancha (tablet horizontal) va en dos paneles: a la izquierda cómo paga, a la
+ * derecha lo del cliente —factura arriba, anticipo, descuento— y el botón de cobrar. En una
+ * columna angosta la factura quedaba al fondo y había que desplazarse para llenarla.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -118,6 +123,8 @@ fun PaymentDialog(
         SalePaymentMethod.CREDIT -> creditReady && total > 0
         else -> total > 0
     })
+    val showInvoice = invoiceOptions != null && invoiceOptions.invoiceableTotal > 0.0
+    val hasExtras = (deposits != null && !isCredit) || (isCash && discountAccounts.isNotEmpty() && employeeDiscount > 0.0)
 
     fun confirm() {
         val c = credit
@@ -125,213 +132,233 @@ fun PaymentDialog(
         else onConfirm(method, if (isCash) tendered else total, if (isCash) bills else emptyMap(), invoice)
     }
 
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(
-            shape = RoundedCornerShape(20.dp),
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp,
-            modifier = Modifier.fillMaxWidth(0.94f).widthIn(max = 560.dp).heightIn(max = 760.dp)
+    // ── Piezas: las mismas en uno o dos paneles ───────────────────────────────
+
+    val header: @Composable () -> Unit = {
+        Box(
+            Modifier.fillMaxWidth().background(BrandColors.Primary).padding(horizontal = 20.dp, vertical = 14.dp)
         ) {
             Column {
-                // ── Total ─────────────────────────────────────────────
-                Box(
-                    Modifier.fillMaxWidth()
-                        .background(BrandColors.Primary, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
-                        .padding(horizontal = 20.dp, vertical = 16.dp)
-                ) {
-                    Column {
-                        Text("Total a cobrar", color = Color.White.copy(alpha = 0.8f),
-                            style = MaterialTheme.typography.labelLarge)
-                        AnimatedContent(
-                            targetState = total,
-                            transitionSpec = { fadeIn() togetherWith fadeOut() },
-                            label = "total"
-                        ) { t ->
-                            Text("Q ${t.fmtMoney(2)}", color = Color.White, fontWeight = FontWeight.ExtraBold,
-                                style = MaterialTheme.typography.displaySmall)
-                        }
-                        if (depositApplied > 0.004) {
-                            Text(
-                                "Total Q ${saleTotal.fmtMoney(2)} · Anticipo ${deposit?.folio.orEmpty()} −Q ${depositApplied.fmtMoney(2)}",
-                                color = Color.White, style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                        if (discountAmount > 0) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Q ${baseTotal.fmtMoney(2)}", color = Color.White.copy(alpha = 0.7f),
-                                    textDecoration = TextDecoration.LineThrough,
-                                    style = MaterialTheme.typography.bodySmall)
-                                Spacer(Modifier.width(8.dp))
-                                Text("Descuento colaborador −Q ${discountAmount.fmtMoney(2)}",
-                                    color = Color.White, style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-                    }
-                    IconButton(onClick = onDismiss, modifier = Modifier.align(Alignment.TopEnd)) {
-                        Icon(Icons.Default.Close, "Cancelar", tint = Color.White)
+                Text("Total a cobrar", color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.labelLarge)
+                AnimatedContent(targetState = total, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "total") { t ->
+                    Text("Q ${t.fmtMoney(2)}", color = Color.White, fontWeight = FontWeight.ExtraBold,
+                        style = MaterialTheme.typography.displaySmall)
+                }
+                // Lo que ya bajó el total, a la vista: de dónde sale el número de arriba.
+                if (depositApplied > 0.004 || discountAmount > 0) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        HeaderChip("Venta Q ${baseTotal.fmtMoney(2)}")
+                        if (discountAmount > 0) HeaderChip("Colaborador −Q ${discountAmount.fmtMoney(2)}")
+                        if (depositApplied > 0.004) HeaderChip("Anticipo ${deposit?.folio.orEmpty()} −Q ${depositApplied.fmtMoney(2)}")
                     }
                 }
+            }
+            IconButton(onClick = onDismiss, modifier = Modifier.align(Alignment.TopEnd)) {
+                Icon(Icons.Default.Close, "Cancelar", tint = Color.White)
+            }
+        }
+    }
 
-                // ── Cuerpo ────────────────────────────────────────────
-                Column(
-                    Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())
-                        .padding(horizontal = 20.dp, vertical = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        methods.forEach { m ->
-                            MethodCard(
-                                label = SalePaymentMethod.label(m),
-                                icon = methodIcon(m),
-                                selected = method == m,
-                                onClick = { method = m },
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
+    val methodsRow: @Composable () -> Unit = {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            methods.forEach { m ->
+                MethodCard(label = SalePaymentMethod.label(m), icon = methodIcon(m), selected = method == m,
+                    onClick = { method = m }, modifier = Modifier.weight(1f))
+            }
+        }
+    }
+
+    // Cómo paga: lo que cambia con el método elegido.
+    val paymentBody: @Composable () -> Unit = {
+        if (coveredByDeposit) {
+            InfoNote("El anticipo cubre todo: no hay nada que cobrar.")
+        } else when {
+            isCredit && creditAccounts != null -> {
+                InfoNote("No entra dinero: se carga a la cuenta y se cobra cuando venga a pagar.")
+                CreditChargeSelector(accounts = creditAccounts, selection = credit, onChange = { credit = it })
+            }
+            isCash -> {
+                OutlinedTextField(
+                    value = tenderedText,
+                    onValueChange = {
+                        tenderedText = it.filter { c -> c.isDigit() || c == '.' }
+                        // Tecleado a mano: los billetes marcados ya no dicen cuánto dio.
+                        bills = emptyMap()
+                    },
+                    prefix = { Text("Q ") },
+                    label = { Text("Le dieron") },
+                    singleLine = true,
+                    isError = isCashShort,
+                    textStyle = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                // Montos típicos: lo exacto y los billetes redondos que alcanzan.
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    QuickAmount("Exacto", selected = tenderedText.isNotEmpty() && tendered == total && bills.isEmpty()) {
+                        tenderedText = total.fmt(2); bills = emptyMap()
                     }
-
-                    if (deposits != null && !isCredit) {
-                        val d = deposit
-                        if (d == null) {
-                            OutlinedButton(onClick = { depositPickerOpen = true }, modifier = Modifier.fillMaxWidth()) {
-                                Text("Aplicar anticipo de cliente")
-                            }
-                        } else {
-                            Surface(shape = RoundedCornerShape(12.dp), color = BrandColors.AccentSoft) {
-                                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically) {
-                                    Column(Modifier.weight(1f)) {
-                                        Text("Anticipo ${d.folio} · ${d.customerName}", fontWeight = FontWeight.SemiBold,
-                                            color = BrandColors.Primary)
-                                        Text(
-                                            if (d.remaining > depositApplied + 0.004)
-                                                "Se aplican Q ${depositApplied.fmtMoney(2)}; le quedan Q ${(d.remaining - depositApplied).fmtMoney(2)}"
-                                            else "Se aplican Q ${depositApplied.fmtMoney(2)}",
-                                            style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate
-                                        )
-                                    }
-                                    TextButton(onClick = { deposit = null; onDepositChange(null) }) { Text("Quitar") }
-                                }
-                            }
+                    suggestedAmounts(total).forEach { amount ->
+                        QuickAmount("Q ${amount}", selected = tenderedText.isNotEmpty() && tendered == amount.toDouble()) {
+                            tenderedText = amount.toDouble().fmt(2)
+                            // Si el monto ES un billete, se sabe con qué pagaron.
+                            bills = if (amount in BILL_DENOMINATIONS) mapOf(amount to 1) else emptyMap()
                         }
-                    }
-                    if (coveredByDeposit) {
-                        InfoNote("El anticipo cubre todo: no hay nada que cobrar.")
-                    } else when {
-                        isCredit && creditAccounts != null -> {
-                            InfoNote("No entra dinero: se carga a la cuenta y se cobra cuando venga a pagar.")
-                            CreditChargeSelector(accounts = creditAccounts, selection = credit, onChange = { credit = it })
-                        }
-                        isCash -> {
-                            if (discountAccounts.isNotEmpty() && employeeDiscount > 0.0) {
-                                val d = discountAccount
-                                if (d == null) {
-                                    OutlinedButton(
-                                        onClick = { discountPickerOpen = true },
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) { Text("¿Es un colaborador? Descuento de Q ${employeeDiscount.fmtMoney(2)}") }
-                                } else {
-                                    Surface(shape = RoundedCornerShape(12.dp), color = BrandColors.AccentSoft) {
-                                        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                                            verticalAlignment = Alignment.CenterVertically) {
-                                            Text("Descuento para ${d.name}", fontWeight = FontWeight.SemiBold,
-                                                color = BrandColors.Primary, modifier = Modifier.weight(1f))
-                                            TextButton(onClick = { discountAccount = null; onDiscountChange(null) }) {
-                                                Text("Quitar")
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            OutlinedTextField(
-                                value = tenderedText,
-                                onValueChange = {
-                                    tenderedText = it.filter { c -> c.isDigit() || c == '.' }
-                                    // Tecleado a mano: los billetes marcados ya no dicen cuánto dio.
-                                    bills = emptyMap()
-                                },
-                                prefix = { Text("Q ") },
-                                label = { Text("Le dieron") },
-                                singleLine = true,
-                                isError = isCashShort,
-                                textStyle = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                                modifier = Modifier.fillMaxWidth()
-                            )
-
-                            // Montos típicos: lo exacto y los billetes redondos que alcanzan.
-                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                QuickAmount("Exacto", selected = tenderedText.isNotEmpty() && tendered == total && bills.isEmpty()) {
-                                    tenderedText = total.fmt(2); bills = emptyMap()
-                                }
-                                suggestedAmounts(total).forEach { amount ->
-                                    QuickAmount("Q ${amount}", selected = tenderedText.isNotEmpty() && tendered == amount.toDouble()) {
-                                        tenderedText = amount.toDouble().fmt(2)
-                                        // Si el monto ES un billete, se sabe con qué pagaron.
-                                        bills = if (amount in BILL_DENOMINATIONS) mapOf(amount to 1) else emptyMap()
-                                    }
-                                }
-                            }
-
-                            Text("Billetes recibidos", style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                BILL_DENOMINATIONS.forEach { v ->
-                                    BillButton(value = v, count = bills[v] ?: 0) {
-                                        val current = tenderedText.toDoubleOrNull() ?: 0.0
-                                        // Si ya había un monto tecleado sin billetes, los billetes
-                                        // no alcanzan a describirlo: se deja de llevar la cuenta.
-                                        val trackable = bills.isNotEmpty() || tenderedText.isEmpty()
-                                        tenderedText = (current + v).fmt(2)
-                                        bills = if (trackable) bills + (v to ((bills[v] ?: 0) + 1)) else emptyMap()
-                                    }
-                                }
-                                if (tenderedText.isNotEmpty()) {
-                                    TextButton(onClick = { tenderedText = ""; bills = emptyMap() }) { Text("Borrar") }
-                                }
-                            }
-
-                            ChangePanel(
-                                hasAmount = tenderedText.isNotEmpty(),
-                                short = isCashShort,
-                                missing = (total - tendered).coerceAtLeast(0.0),
-                                change = change
-                            )
-                        }
-                        method == SalePaymentMethod.CARD ->
-                            InfoNote("Pasá la tarjeta y confirmá cuando el voucher salga aprobado.")
-                        else ->
-                            InfoNote("Confirmá que la transferencia ya se acreditó antes de cobrar.")
-                    }
-
-                    if (invoiceOptions != null && invoiceOptions.invoiceableTotal > 0.0) {
-                        InvoiceSection(invoiceForm, invoiceOptions, invoicedTotal)
                     }
                 }
+                Text("Billetes recibidos", style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    BILL_DENOMINATIONS.forEach { v ->
+                        BillButton(value = v, count = bills[v] ?: 0) {
+                            val current = tenderedText.toDoubleOrNull() ?: 0.0
+                            // Si ya había un monto tecleado sin billetes, los billetes no alcanzan
+                            // a describirlo: se deja de llevar la cuenta.
+                            val trackable = bills.isNotEmpty() || tenderedText.isEmpty()
+                            tenderedText = (current + v).fmt(2)
+                            bills = if (trackable) bills + (v to ((bills[v] ?: 0) + 1)) else emptyMap()
+                        }
+                    }
+                    if (tenderedText.isNotEmpty()) {
+                        TextButton(onClick = { tenderedText = ""; bills = emptyMap() }) { Text("Borrar") }
+                    }
+                }
+                ChangePanel(
+                    hasAmount = tenderedText.isNotEmpty(),
+                    short = isCashShort,
+                    missing = (total - tendered).coerceAtLeast(0.0),
+                    change = change
+                )
+            }
+            method == SalePaymentMethod.CARD -> InfoNote("Pasá la tarjeta y confirmá cuando el voucher salga aprobado.")
+            else -> InfoNote("Confirmá que la transferencia ya se acreditó antes de cobrar.")
+        }
+    }
 
-                // ── Acción ────────────────────────────────────────────
-                HorizontalDivider()
-                Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = onDismiss) { Text("Cancelar") }
-                    Spacer(Modifier.width(8.dp))
-                    Button(
-                        onClick = { confirm() },
-                        enabled = canConfirm,
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.weight(1f).height(56.dp)
-                    ) {
-                        Text(
-                            when {
-                                coveredByDeposit -> "Entregar (pagado con anticipo)"
-                                isCredit -> "Cargar Q ${total.fmtMoney(2)} a la cuenta"
-                                else -> "Cobrar Q ${total.fmtMoney(2)}"
-                            },
-                            style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold
-                        )
+    // Del cliente: anticipo y descuento de colaborador.
+    val extras: @Composable () -> Unit = {
+        if (deposits != null && !isCredit) {
+            val d = deposit
+            if (d == null) {
+                ExtraButton("Aplicar anticipo de cliente", Icons.Default.PersonOutline) { depositPickerOpen = true }
+            } else {
+                AppliedExtra(
+                    title = "Anticipo ${d.folio} · ${d.customerName}",
+                    detail = if (d.remaining > depositApplied + 0.004)
+                        "Se aplican Q ${depositApplied.fmtMoney(2)}; le quedan Q ${(d.remaining - depositApplied).fmtMoney(2)}"
+                    else "Se aplican Q ${depositApplied.fmtMoney(2)}",
+                    onRemove = { deposit = null; onDepositChange(null) }
+                )
+            }
+        }
+        if (isCash && discountAccounts.isNotEmpty() && employeeDiscount > 0.0) {
+            val d = discountAccount
+            if (d == null) {
+                ExtraButton("¿Es un colaborador? Descuento de Q ${employeeDiscount.fmtMoney(2)}", Icons.Default.PersonOutline) {
+                    discountPickerOpen = true
+                }
+            } else {
+                AppliedExtra(
+                    title = "Descuento para ${d.name}",
+                    detail = "−Q ${discountAmount.fmtMoney(2)}",
+                    onRemove = { discountAccount = null; onDiscountChange(null) }
+                )
+            }
+        }
+    }
+
+    val confirmButton: @Composable (Modifier) -> Unit = { m ->
+        Button(
+            onClick = { confirm() },
+            enabled = canConfirm,
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = BrandColors.Primary),
+            modifier = m.height(58.dp)
+        ) {
+            Text(
+                when {
+                    coveredByDeposit -> "Entregar (pagado con anticipo)"
+                    isCredit -> "Cargar Q ${total.fmtMoney(2)} a la cuenta"
+                    else -> "Cobrar Q ${total.fmtMoney(2)}"
+                },
+                style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold
+            )
+        }
+    }
+
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            // Tablet horizontal: dos paneles. La factura dejó de quedar al fondo de una columna
+            // angosta — ahora está arriba del panel del cliente, visible sin desplazarse.
+            val wide = maxWidth >= 840.dp
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 6.dp,
+                modifier = if (wide) Modifier.fillMaxWidth(0.94f).widthIn(max = 1180.dp).fillMaxHeight(0.94f).imePadding()
+                else Modifier.fillMaxWidth(0.94f).widthIn(max = 560.dp).heightIn(max = 760.dp).imePadding()
+            ) {
+                Column {
+                    header()
+                    if (wide) {
+                        Row(Modifier.weight(1f)) {
+                            // ── Izquierda: cómo paga ──
+                            Column(
+                                Modifier.weight(1.15f).fillMaxHeight().verticalScroll(rememberScrollState())
+                                    .padding(20.dp),
+                                verticalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                SectionLabel("Forma de pago")
+                                methodsRow()
+                                paymentBody()
+                            }
+                            // ── Derecha: del cliente, y el botón de cobrar ──
+                            Column(
+                                Modifier.weight(1f).fillMaxHeight().background(BrandColors.Ivory)
+                            ) {
+                                Column(
+                                    Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp),
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    if (showInvoice) {
+                                        SectionLabel("Factura")
+                                        InvoiceSection(invoiceForm, invoiceOptions!!, invoicedTotal)
+                                    }
+                                    if (hasExtras) {
+                                        SectionLabel("Cliente")
+                                        extras()
+                                    }
+                                    if (!showInvoice && !hasExtras) {
+                                        InfoNote("Sin factura ni anticipos para esta venta.")
+                                    }
+                                }
+                                HorizontalDivider()
+                                Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    TextButton(onClick = onDismiss) { Text("Cancelar") }
+                                    Spacer(Modifier.width(8.dp))
+                                    confirmButton(Modifier.weight(1f))
+                                }
+                            }
+                        }
+                    } else {
+                        Column(
+                            Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())
+                                .padding(horizontal = 20.dp, vertical = 16.dp),
+                            verticalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            methodsRow()
+                            // La factura sube: se decide antes de ponerse a contar billetes.
+                            if (showInvoice) InvoiceSection(invoiceForm, invoiceOptions!!, invoicedTotal)
+                            extras()
+                            paymentBody()
+                        }
+                        HorizontalDivider()
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(onClick = onDismiss) { Text("Cancelar") }
+                            Spacer(Modifier.width(8.dp))
+                            confirmButton(Modifier.weight(1f))
+                        }
                     }
                 }
             }
@@ -363,6 +390,54 @@ fun PaymentDialog(
             confirmButton = {},
             dismissButton = { TextButton(onClick = { discountPickerOpen = false }) { Text("Cancelar") } }
         )
+    }
+}
+
+@Composable
+private fun SectionLabel(text: String) {
+    Text(text.uppercase(), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold,
+        color = BrandColors.MutedSlate)
+}
+
+@Composable
+private fun HeaderChip(text: String) {
+    Surface(shape = RoundedCornerShape(50), color = Color.White.copy(alpha = 0.18f)) {
+        Text(text, color = Color.White, style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp))
+    }
+}
+
+/** Acción opcional del cliente (anticipo, descuento): una fila tocable, no un botón que grite. */
+@Composable
+private fun ExtraButton(text: String, icon: ImageVector, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        color = Color.White,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, null, tint = BrandColors.Primary)
+            Spacer(Modifier.width(10.dp))
+            Text(text, color = BrandColors.TextSlate, modifier = Modifier.weight(1f))
+            Icon(Icons.Default.Add, null, tint = BrandColors.MutedSlate)
+        }
+    }
+}
+
+@Composable
+private fun AppliedExtra(title: String, detail: String, onRemove: () -> Unit) {
+    Surface(shape = RoundedCornerShape(12.dp), color = BrandColors.AccentSoft, modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.CheckCircle, null, tint = BrandColors.Primary)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, fontWeight = FontWeight.SemiBold, color = BrandColors.Primary)
+                Text(detail, style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate)
+            }
+            TextButton(onClick = onRemove) { Text("Quitar") }
+        }
     }
 }
 

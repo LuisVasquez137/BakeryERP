@@ -1,5 +1,22 @@
 package com.bakery.erp.presentation.pos
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.input.ImeAction
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -81,98 +98,132 @@ fun InvoiceSection(state: InvoiceFormState, options: InvoiceOptions, invoicedTot
     }
     val cleaned = cleanNit(state.nit)
     val nitOk = isValidGuatemalaNit(cleaned)
-    LaunchedEffect(cleaned, nitOk) {
-        if (!state.withNit || !nitOk) return@LaunchedEffect
-        state.looking = true
-        state.lookupNote = null
-        options.lookupNit(cleaned)
-            .onSuccess { found ->
-                if (found != null) state.name = found
-                else state.lookupNote = "La SAT no tiene registrado ese NIT. Revisalo con el cliente."
-            }
-            // Sin conexión con la SAT el nombre se escribe a mano: no se deja al cliente sin factura.
-            .onFailure { state.lookupNote = "No se pudo consultar la SAT. Escribí el nombre como sale en su NIT." }
-        state.looking = false
+    val scope = rememberCoroutineScope()
+    // La SAT se consulta cuando la cajera lo pide, no a cada tecla: buscar a medio escribir
+    // gastaba consultas y cambiaba el nombre mientras todavía se tecleaba.
+    fun lookup() {
+        if (!nitOk || state.looking) return
+        scope.launch {
+            state.looking = true
+            state.lookupNote = null
+            options.lookupNit(cleaned)
+                .onSuccess { found ->
+                    if (found != null) state.name = found
+                    else state.lookupNote = "La SAT no tiene registrado ese NIT. Revisalo con el cliente."
+                }
+                // Sin conexión con la SAT el nombre se escribe a mano: no se deja al cliente sin factura.
+                .onFailure { state.lookupNote = "No se pudo consultar la SAT. Escribí el nombre como sale en su NIT." }
+            state.looking = false
+        }
     }
 
-    Surface(shape = RoundedCornerShape(12.dp), color = BrandColors.PrimaryContainer.copy(alpha = 0.45f)) {
-        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = if (state.enabled) Color.White else BrandColors.PrimaryContainer.copy(alpha = 0.45f),
+        border = if (state.enabled) BorderStroke(1.5.dp, BrandColors.Primary) else null
+    ) {
+        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.AutoMirrored.Filled.ReceiptLong, null, tint = BrandColors.Primary)
+                Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("Facturar", fontWeight = FontWeight.SemiBold, color = BrandColors.TextSlate)
+                    Text("Factura electrónica", fontWeight = FontWeight.SemiBold, color = BrandColors.TextSlate)
                     Text(
-                        if (options.excludesBilledRestaurant) "Factura por Q ${invoicedTotal.fmtMoney(2)}. Lo ya facturado en ComandaYa queda fuera."
-                        else "Factura electrónica por Q ${invoicedTotal.fmtMoney(2)}",
+                        if (options.excludesBilledRestaurant) "Q ${invoicedTotal.fmtMoney(2)} · lo ya facturado en ComandaYa queda fuera"
+                        else "Q ${invoicedTotal.fmtMoney(2)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = BrandColors.MutedSlate
                     )
                 }
                 Switch(checked = state.enabled, onCheckedChange = { state.enabled = it })
             }
-            if (!state.enabled) return@Column
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(
-                    selected = !state.withNit,
-                    onClick = { if (!mustIdentify) state.withNit = false },
-                    enabled = !mustIdentify,
-                    label = { Text("Consumidor final") }
-                )
-                FilterChip(selected = state.withNit, onClick = { state.withNit = true }, label = { Text("Con NIT") })
-            }
-            if (mustIdentify) {
-                Text(
-                    "Desde Q ${FEL_CF_LIMIT.toInt()} la SAT pide el NIT del cliente.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = BrandColors.AccentDeep
-                )
-            }
-            if (state.withNit) {
-                OutlinedTextField(
-                    value = state.nit,
-                    onValueChange = { v ->
-                        state.nit = v.filter { it.isDigit() || it == 'k' || it == 'K' || it == '-' }
-                        state.name = ""
-                        state.lookupNote = null
-                    },
-                    label = { Text("NIT del cliente") },
-                    singleLine = true,
-                    isError = cleaned.length >= 2 && !nitOk,
-                    supportingText = when {
-                        cleaned.length >= 2 && !nitOk -> { { Text("El dígito verificador no cuadra") } }
-                        else -> null
-                    },
-                    trailingIcon = if (state.looking) {
-                        { CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) }
-                    } else null,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, capitalization = KeyboardCapitalization.Characters),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                if (nitOk) {
-                    OutlinedTextField(
-                        value = state.name,
-                        onValueChange = { state.name = it },
-                        label = { Text("Nombre en la factura") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
-                        modifier = Modifier.fillMaxWidth()
-                    )
+            AnimatedVisibility(visible = state.enabled) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = !state.withNit,
+                            onClick = { if (!mustIdentify) state.withNit = false },
+                            enabled = !mustIdentify,
+                            label = { Text("Consumidor final") }
+                        )
+                        FilterChip(selected = state.withNit, onClick = { state.withNit = true }, label = { Text("Con NIT") })
+                    }
+                    if (mustIdentify) {
+                        Text(
+                            "Desde Q ${FEL_CF_LIMIT.toInt()} la SAT pide el NIT del cliente.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = BrandColors.AccentDeep
+                        )
+                    }
+                    if (state.withNit) {
+                        // NIT corto con su botón al lado; el nombre, que es largo, en su propia línea.
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = state.nit,
+                                onValueChange = { v ->
+                                    state.nit = v.filter { it.isDigit() || it == 'k' || it == 'K' || it == '-' }.uppercase()
+                                    state.name = ""
+                                    state.lookupNote = null
+                                },
+                                label = { Text("NIT") },
+                                placeholder = { Text("1234567-8") },
+                                singleLine = true,
+                                isError = cleaned.length >= 2 && !nitOk,
+                                supportingText = if (cleaned.length >= 2 && !nitOk) {
+                                    { Text("El dígito verificador no cuadra") }
+                                } else null,
+                                // Ascii: teclado con la fila de números y las letras (para la K).
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Ascii,
+                                    capitalization = KeyboardCapitalization.Characters,
+                                    imeAction = ImeAction.Search
+                                ),
+                                keyboardActions = KeyboardActions(onSearch = { lookup() }),
+                                modifier = Modifier.widthIn(max = 220.dp).weight(1f, fill = false)
+                            )
+                            Button(
+                                onClick = { lookup() },
+                                enabled = nitOk && !state.looking,
+                                colors = ButtonDefaults.buttonColors(containerColor = BrandColors.Primary),
+                                modifier = Modifier.height(52.dp)
+                            ) {
+                                if (state.looking) {
+                                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
+                                } else {
+                                    Icon(Icons.Default.Search, null, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Buscar")
+                                }
+                            }
+                        }
+                        if (nitOk) {
+                            OutlinedTextField(
+                                value = state.name,
+                                onValueChange = { state.name = it },
+                                label = { Text("Nombre en la factura") },
+                                placeholder = { Text("Tocá Buscar, o escribilo") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        state.lookupNote?.let {
+                            Text(it, style = MaterialTheme.typography.bodySmall, color = BrandColors.AccentDeep)
+                        }
+                    }
+                    // El cliente no quiere que la factura liste lo que consumió.
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Sin detalle", color = BrandColors.TextSlate)
+                            Text(
+                                "Una sola línea: \"Servicio de alimentos y/o bebidas\"",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = BrandColors.MutedSlate
+                            )
+                        }
+                        Switch(checked = state.withoutDetail, onCheckedChange = { state.withoutDetail = it })
+                    }
                 }
-                state.lookupNote?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = BrandColors.AccentDeep)
-                }
-            }
-            // El cliente no quiere que la factura liste lo que consumió.
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Sin detalle", color = BrandColors.TextSlate)
-                    Text(
-                        "Una sola línea: \"Servicio de alimentos y/o bebidas\"",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = BrandColors.MutedSlate
-                    )
-                }
-                Switch(checked = state.withoutDetail, onCheckedChange = { state.withoutDetail = it })
             }
         }
     }

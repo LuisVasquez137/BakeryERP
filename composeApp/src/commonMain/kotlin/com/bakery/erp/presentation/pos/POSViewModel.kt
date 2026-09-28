@@ -148,7 +148,9 @@ data class POSUiState(
     /** Cambia cada vez que se guarda un anticipo: la pantalla cierra el diálogo al verlo. */
     val depositSavedAt: Long = 0L,
     /** Sucursales que venden: dónde puede recoger el cliente su encargo. */
-    val pickupBranches: List<Branch> = emptyList()
+    val pickupBranches: List<Branch> = emptyList(),
+    /** Cuándo terminó de imprimirse el último ticket: el acuse muestra "Ticket impreso". */
+    val printedAt: Long = 0L
 )
 
 /**
@@ -1246,14 +1248,21 @@ class POSViewModel(
     /** Dispara la impresión del último ticket. Reporta errores vía `error` en el state. */
     fun printLastReceipt() {
         val data = _uiState.value.lastReceiptData ?: return
+        if (_uiState.value.isPrinting) return
         viewModelScope.launch {
             _uiState.update { it.copy(isPrinting = true) }
-            receiptPrinter.print(data)
+            val started = Clock.System.now().toEpochMilliseconds()
+            val result = receiptPrinter.print(data)
+            // El aviso de "Imprimiendo" dura al menos un momento: la térmica responde en medio
+            // segundo y un parpadeo no se alcanza a leer — parecía que el botón no hacía nada.
+            val elapsed = Clock.System.now().toEpochMilliseconds() - started
+            if (elapsed < MIN_PRINTING_FEEDBACK_MS) kotlinx.coroutines.delay(MIN_PRINTING_FEEDBACK_MS - elapsed)
+            result
                 .onFailure { e ->
                     _uiState.update { it.copy(isPrinting = false, error = e.message ?: "Error al imprimir") }
                 }
                 .onSuccess {
-                    _uiState.update { it.copy(isPrinting = false) }
+                    _uiState.update { it.copy(isPrinting = false, printedAt = Clock.System.now().toEpochMilliseconds()) }
                 }
         }
     }
@@ -1384,6 +1393,9 @@ private const val POPULARITY_DAYS = 30
 
 /** Cuántos cobros guarda "Último cobro" para ir hacia atrás. */
 private const val MAX_RECENT_CHECKOUTS = 10
+
+/** Cuánto se muestra, como mínimo, el aviso de "Imprimiendo ticket". */
+private const val MIN_PRINTING_FEEDBACK_MS = 1_600L
 
 /** Clave de la venta de pan en el reparto del anticipo (las del restaurante van por su id). */
 private const val BAKERY_SALE_KEY = "__bakery__"

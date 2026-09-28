@@ -1746,6 +1746,21 @@ tocó la cajera — por eso es más exacto que obligar a elegir.
 en caché por sucursal y día en `POSViewModel`) y cada grupo de precio sale ahí como una ficha
 más (`GroupTile`), que pregunta cuántos.
 
+### POS: diálogo de cobro (`PaymentDialog`)
+
+- **En pantalla ancha (≥840dp, tablet horizontal) va en dos paneles**: izquierda "cómo paga"
+  (método, le dieron, montos rápidos, billetes, vuelto) y derecha "del cliente" (factura
+  ARRIBA, anticipo, descuento de colaborador) con el botón de cobrar al pie. En una columna de
+  560dp la factura quedaba al fondo y había que desplazarse para llenarla. En teléfono sigue
+  en una columna, con la factura justo después del método.
+- **El NIT se consulta con el botón "Buscar"** (o la tecla buscar del teclado), no a cada tecla:
+  buscar a medio escribir gastaba consultas y cambiaba el nombre mientras se tecleaba. Teclado
+  `KeyboardType.Ascii` (fila de números + letras, por la K). Campo angosto con el botón al lado.
+- **Acuse animado** (`SaleSuccessDialog.kt`): el ✓ entra con rebote y el vuelto cuenta hasta su
+  valor. Imprimir muestra "Imprimiendo ticket…" con barra al menos `MIN_PRINTING_FEEDBACK_MS`
+  (1.6 s: la térmica responde en medio segundo y un parpadeo no se leía) y después "Ticket
+  impreso" (`POSUiState.printedAt`).
+
 ### POS: un cobro, varias ventas (cuenta del restaurante en el carrito) + "Último cobro"
 
 Una cuenta de ComandaYa pendiente se puede **cobrar ahora** (lo de siempre: el dinero entra a
