@@ -330,7 +330,8 @@ class FirebaseSaleRepository(
                 if (checkout.invoiceReceptorId.isNotBlank() && s.invoiceStatus.isBlank()) s.copy(
                     invoiceStatus = com.bakery.erp.model.FelInvoiceStatus.SOLICITADA,
                     invoiceReceptorId = checkout.invoiceReceptorId,
-                    invoiceReceptorName = checkout.invoiceReceptorName
+                    invoiceReceptorName = checkout.invoiceReceptorName,
+                    invoiceWithoutDetail = checkout.invoiceWithoutDetail
                 ) else s
             }
             set(ref, updated.toMap())
@@ -513,6 +514,7 @@ class FirebaseSaleRepository(
         "invoiceUuid" to invoiceUuid,
         "invoiceReceptorId" to invoiceReceptorId,
         "invoiceReceptorName" to invoiceReceptorName,
+        "invoiceWithoutDetail" to invoiceWithoutDetail,
         "externalDeliveryFee" to externalDeliveryFee,
         "externalDteId" to externalDteId,
         "invoiceConflict" to invoiceConflict,
@@ -566,6 +568,7 @@ class FirebaseSaleRepository(
         invoiceUuid = runCatching { get<String?>("invoiceUuid") }.getOrNull() ?: "",
         invoiceReceptorId = runCatching { get<String?>("invoiceReceptorId") }.getOrNull() ?: "",
         invoiceReceptorName = runCatching { get<String?>("invoiceReceptorName") }.getOrNull() ?: "",
+        invoiceWithoutDetail = runCatching { get<Boolean?>("invoiceWithoutDetail") }.getOrNull() ?: false,
         externalDeliveryFee = runCatching { get<Double?>("externalDeliveryFee") }.getOrNull()
             ?: runCatching { get<Long?>("externalDeliveryFee")?.toDouble() }.getOrNull() ?: 0.0,
         externalDteId = runCatching { get<String?>("externalDteId") }.getOrNull() ?: "",

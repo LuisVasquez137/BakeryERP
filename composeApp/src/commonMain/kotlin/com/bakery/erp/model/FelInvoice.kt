@@ -52,7 +52,12 @@ fun felRequiresIdentifiedBuyer(invoicedTotal: Double): Boolean = invoicedTotal >
 data class FelInvoiceRequest(
     /** "CF" o el NIT limpio. */
     val receptorId: String = FEL_CONSUMIDOR_FINAL,
-    val receptorName: String = "CONSUMIDOR FINAL"
+    val receptorName: String = "CONSUMIDOR FINAL",
+    /**
+     * Factura "sin detalle": una sola línea ("Servicio de alimentos y/o bebidas") por el total,
+     * sin listar lo consumido. Lo pide el cliente; la SAT la acepta igual.
+     */
+    val withoutDetail: Boolean = false
 ) {
     val isConsumidorFinal get() = receptorId == FEL_CONSUMIDOR_FINAL
 }
@@ -89,7 +94,9 @@ data class FelCertifyResult(
     val emisorTradeName: String = "",
     val emisorAddress: String = "",
     val phrases: List<String> = emptyList(),
-    val environment: String = ""
+    val environment: String = "",
+    /** Se certificó sin detalle: el ticket imprime esta única línea en vez de los productos. */
+    val withoutDetailDescription: String = ""
 )
 
 /** Certificador, tal como aparece en la representación gráfica oficial de Digifact. */

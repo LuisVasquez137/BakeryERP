@@ -1910,6 +1910,13 @@ defecto").
 - Los campos de factura van en `Sale.toMap()`: `collectPendingSale` reescribe la venta con
   `set()` y sin ellos recibir una cuenta le borraría la factura.
 - Historial y detalle de venta muestran `SaleInvoiceChip`.
+- **Sin detalle** (switch en `InvoiceSection`): una sola línea "Servicio de alimentos y/o
+  bebidas" por el total, el mismo texto que ComandaYa (`DESCRIPCION_SIN_DETALLE`). Viaja en la
+  venta (`Sale.invoiceWithoutDetail`, `CheckoutPayment.invoiceWithoutDetail`) para que el
+  barrido de SOLICITADA la respete; el DTE guarda `descripcionSinDetalle` y el ticket imprime
+  esa línea en vez de los productos (`ReceiptInvoice.singleLineDescription`).
+- **El ticket con factura no imprime "Recibido" ni "Vuelto"**: es el documento del cliente, no
+  el del cobro. El ticket sin factura los sigue llevando.
 
 **Fase 3b (hecha, sin probar impresa): ticket con la factura.** `ReceiptData.invoice`
 (`ReceiptInvoice`, armado por `receiptInvoiceFrom` desde la respuesta de la función) lleva lo

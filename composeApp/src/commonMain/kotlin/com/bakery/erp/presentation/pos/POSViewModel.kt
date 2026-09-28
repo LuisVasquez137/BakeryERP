@@ -602,7 +602,8 @@ class POSViewModel(
                         cashierName = currentUser.displayName,
                         checkout = if (!invoiceThis) payment else payment.copy(
                             invoiceReceptorId = invoiceRequest!!.receptorId,
-                            invoiceReceptorName = invoiceRequest.receptorName
+                            invoiceReceptorName = invoiceRequest.receptorName,
+                            invoiceWithoutDetail = invoiceRequest.withoutDetail
                         )
                     )
                 }
@@ -643,7 +644,8 @@ class POSViewModel(
                     // sigue se pierde, el reintento del servidor la encuentra igual.
                     invoiceStatus = if (invoiceRequest != null) FelInvoiceStatus.SOLICITADA else "",
                     invoiceReceptorId = invoiceRequest?.receptorId.orEmpty(),
-                    invoiceReceptorName = invoiceRequest?.receptorName.orEmpty()
+                    invoiceReceptorName = invoiceRequest?.receptorName.orEmpty(),
+                    invoiceWithoutDetail = invoiceRequest?.withoutDetail == true
                 )
                 val lines = bakeryCart.map { line ->
                     if (line.isGroup) {

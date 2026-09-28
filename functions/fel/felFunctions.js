@@ -52,6 +52,14 @@ const ESTADO = {
   ANULADO: "ANULADO",
 };
 const LOCK_MS = 3 * 60 * 1000;
+
+/**
+ * Descripción de la factura "sin detalle": una sola línea por el total, sin listar lo consumido.
+ * El mismo texto que ComandaYa, así las facturas de Sabreopan dicen lo mismo salgan de donde
+ * salgan. La SAT no valida el contenido, pero una descripción que no dice nada le complica la
+ * deducción al comprador.
+ */
+const DESCRIPCION_SIN_DETALLE = "Servicio de alimentos y/o bebidas";
 const MAX_INTENTOS = 12;
 
 const db = () => getFirestore();
@@ -108,7 +116,8 @@ async function lineasDeVenta(companyId, sale) {
  * Nunca deja ventas a medias: o el DTE queda CERTIFICADO, o queda PENDIENTE/RECHAZADO
  * con el motivo, y las ventas dicen lo mismo.
  */
-async function certificarVentas({ companyId, saleIds, receptor: receptorPedido, sinDetalle, userId, reemitir = false }) {
+async function certificarVentas({ companyId, saleIds, receptor: receptorPedido, sinDetalle: sinDetallePedido, userId, reemitir = false }) {
+  let sinDetalle = sinDetallePedido;
   let receptor = receptorPedido;
   const firestore = db();
   let ids = [...new Set((saleIds || []).map(String).filter(Boolean))];
@@ -182,6 +191,10 @@ async function certificarVentas({ companyId, saleIds, receptor: receptorPedido, 
     });
   }
 
+  // Sin detalle: lo que diga la llamada, o si no viene (barrido de SOLICITADA) lo que la caja
+  // dejó escrito en la venta.
+  if (sinDetalle === undefined || sinDetalle === null) sinDetalle = ventas.some((v) => v.invoiceWithoutDetail === true);
+
   // Sin receptor en la llamada (reintento, barrido de SOLICITADA) manda el que la caja dejó
   // escrito en la venta al cobrar: el cliente pidió factura a su NIT y así tiene que salir.
   if (!receptor?.id) {
@@ -247,7 +260,7 @@ async function certificarVentas({ companyId, saleIds, receptor: receptorPedido, 
       lines,
       referenciaInterna: ref,
       observaciones: numeros.length ? `Orden ${numeros.join(", ")}` : `Venta ${ids[0].slice(-8)}`,
-      descripcionUnica: dte.sinDetalle ? "Venta de productos de panadería y alimentos" : null,
+      descripcionUnica: dte.sinDetalle ? DESCRIPCION_SIN_DETALLE : null,
     });
 
     // La factura tiene que decir lo que se cobró. Si el detalle no cuadra con los totales
@@ -288,6 +301,8 @@ async function certificarVentas({ companyId, saleIds, receptor: receptorPedido, 
       fechaCertificacion: Date.now(),
       fechaEmision,
       version,
+      // El ticket imprime lo mismo que certificó la SAT: una sola línea si fue sin detalle.
+      descripcionSinDetalle: dte.sinDetalle ? DESCRIPCION_SIN_DETALLE : "",
       granTotal,
       totalIVA,
       frases,
@@ -381,6 +396,8 @@ function respuestaDe(d) {
     emisorDireccion: d.emisorDireccion || "",
     frases: d.frases || [],
     ambiente: d.ambiente || "",
+    sinDetalle: !!d.sinDetalle,
+    descripcionSinDetalle: d.descripcionSinDetalle || (d.sinDetalle ? DESCRIPCION_SIN_DETALLE : ""),
   };
 }
 
@@ -561,7 +578,7 @@ async function certificarSolicitadasHuerfanas() {
     }
     for (const saleIds of grupos.values()) {
       try {
-        await certificarVentas({ companyId: empresa.id, saleIds, receptor: null, sinDetalle: false, userId: "" });
+        await certificarVentas({ companyId: empresa.id, saleIds, receptor: null, sinDetalle: undefined, userId: "" });
       } catch (e) {
         console.warn(`FEL solicitada ${empresa.id}/${saleIds.join(",")}:`, e.message);
       }

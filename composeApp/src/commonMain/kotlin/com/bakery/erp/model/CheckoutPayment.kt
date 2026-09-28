@@ -18,7 +18,8 @@ data class CheckoutPayment(
      * recibe en caja, igual que la venta de pan.
      */
     val invoiceReceptorId: String = "",
-    val invoiceReceptorName: String = ""
+    val invoiceReceptorName: String = "",
+    val invoiceWithoutDetail: Boolean = false
 )
 
 /**

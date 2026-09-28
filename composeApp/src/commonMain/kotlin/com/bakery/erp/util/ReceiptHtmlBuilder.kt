@@ -27,11 +27,12 @@ fun buildReceiptHtml(data: ReceiptData): String {
         """<div class="row"><span>Descuento</span><span>-Q${data.discount.fmt(2)}</span></div>"""
     } else ""
 
-    val changeRow = if (data.changeAmount > 0.0) {
+    // En la factura no va cuánto dio ni el vuelto: es el documento del cliente, no el del cobro.
+    val changeRow = if (data.invoice == null && data.changeAmount > 0.0) {
         """<div class="row"><span>Vuelto</span><span>Q${data.changeAmount.fmt(2)}</span></div>"""
     } else ""
 
-    val tenderedRow = if (data.tenderedAmount > 0.0 && data.tenderedAmount != data.total) {
+    val tenderedRow = if (data.invoice == null && data.tenderedAmount > 0.0 && data.tenderedAmount != data.total) {
         """<div class="row"><span>Recibido</span><span>Q${data.tenderedAmount.fmt(2)}</span></div>"""
     } else ""
 
@@ -112,7 +113,10 @@ fun buildReceiptHtml(data: ReceiptData): String {
       <div>Fecha: ${escapeHtml(data.dateLabel)}</div>
       <div>Venta: ${escapeHtml(data.saleId)}</div>
       <div class="sep"></div>
-      <table>$lineRows</table>
+      <table>${data.invoice?.singleLineDescription?.let { d ->
+        // Sin detalle: la única línea que certificó la SAT, por lo facturado.
+        """<tr><td class="name">${escapeHtml(d)}</td><td class="amount">Q${data.invoice.invoicedTotal.fmt(2)}</td></tr>"""
+      } ?: lineRows}</table>
       <div class="sep"></div>
       <div class="row"><span>Subtotal</span><span>Q${data.subtotal.fmt(2)}</span></div>
       $discountRow

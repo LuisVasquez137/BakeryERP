@@ -60,11 +60,12 @@ class InvoiceFormState(defaultOn: Boolean) {
     var looking by mutableStateOf(false)
     /** Aviso de la consulta a la SAT ("no aparece", "sin conexión"). */
     var lookupNote by mutableStateOf<String?>(null)
+    var withoutDetail by mutableStateOf(false)
 
     fun request(): FelInvoiceRequest? = when {
         !enabled -> null
-        withNit -> FelInvoiceRequest(cleanNit(nit), name.trim().uppercase())
-        else -> FelInvoiceRequest()
+        withNit -> FelInvoiceRequest(cleanNit(nit), name.trim().uppercase(), withoutDetail)
+        else -> FelInvoiceRequest(withoutDetail = withoutDetail)
     }
 
     fun problem(invoicedTotal: Double): String? = request()?.let { felReceptorProblem(it, invoicedTotal) }
@@ -160,6 +161,18 @@ fun InvoiceSection(state: InvoiceFormState, options: InvoiceOptions, invoicedTot
                 state.lookupNote?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = BrandColors.AccentDeep)
                 }
+            }
+            // El cliente no quiere que la factura liste lo que consumió.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Sin detalle", color = BrandColors.TextSlate)
+                    Text(
+                        "Una sola línea: \"Servicio de alimentos y/o bebidas\"",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = BrandColors.MutedSlate
+                    )
+                }
+                Switch(checked = state.withoutDetail, onCheckedChange = { state.withoutDetail = it })
             }
         }
     }

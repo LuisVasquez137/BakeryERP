@@ -79,8 +79,17 @@ fun buildEscPosReceipt(data: ReceiptData, paperWidthMm: Int): ByteArray {
     line("Venta: ${data.saleId}")
     separator()
 
-    // Líneas — nombre a la izquierda, subtotal a la derecha
-    data.lines.forEach { l ->
+    // Líneas — nombre a la izquierda, subtotal a la derecha. Sin detalle, la factura certificó una
+    // sola línea y el ticket tiene que decir lo mismo.
+    val single = invoice?.singleLineDescription
+    if (single != null) {
+        val priceStr = "Q${invoice.invoicedTotal.fmt(2)}"
+        val rows = wrapToWidth(single, cols - priceStr.length - 1)
+        rows.forEachIndexed { i, r ->
+            line(if (i == rows.lastIndex) r + " ".repeat((cols - r.length - priceStr.length).coerceAtLeast(1)) + priceStr else r)
+        }
+    }
+    if (single == null) data.lines.forEach { l ->
         val priceStr = "Q${l.subtotal.fmt(2)}"
         val nameMax = cols - priceStr.length - 1
         val displayName = l.name.take(nameMax)
@@ -108,10 +117,11 @@ fun buildEscPosReceipt(data: ReceiptData, paperWidthMm: Int): ByteArray {
     separator()
 
     line("Pago: ${data.paymentMethodLabel}")
-    if (data.tenderedAmount > 0.0 && data.tenderedAmount != data.total) {
+    // En la factura no va cuánto dio ni el vuelto: es el documento del cliente, no el del cobro.
+    if (invoice == null && data.tenderedAmount > 0.0 && data.tenderedAmount != data.total) {
         line(rightLabel(cols, "Recibido", "Q${data.tenderedAmount.fmt(2)}"))
     }
-    if (data.changeAmount > 0.0) {
+    if (invoice == null && data.changeAmount > 0.0) {
         line(rightLabel(cols, "Vuelto", "Q${data.changeAmount.fmt(2)}"))
     }
     separator()

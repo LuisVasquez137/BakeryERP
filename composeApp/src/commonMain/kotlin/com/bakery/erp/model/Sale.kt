@@ -131,6 +131,8 @@ data class Sale(
      */
     val invoiceReceptorId: String = "",
     val invoiceReceptorName: String = "",
+    /** La factura pedida es "sin detalle". Viaja con la venta por la misma razón que el receptor. */
+    val invoiceWithoutDetail: Boolean = false,
     /**
      * Cargo de domicilio de una cuenta de ComandaYa. No viene como línea: la factura lo agrega
      * aparte, o saldría por menos de lo cobrado.

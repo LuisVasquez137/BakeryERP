@@ -99,7 +99,8 @@ class FirebaseFelRepository(
                 companyId = companyId,
                 saleIds = saleIds,
                 receptor = ReceptorPayload(id = request.receptorId, nombre = request.receptorName),
-                reemitir = reissue
+                reemitir = reissue,
+                sinDetalle = request.withoutDetail
             )
         )
         val r = result.data<CertifyResponse>()
@@ -110,7 +111,8 @@ class FirebaseFelRepository(
             receptorId = r.receptorId, receptorName = r.receptorNombre,
             emisorNit = r.emisorNit, emisorName = r.emisorNombre,
             emisorTradeName = r.emisorNombreComercial, emisorAddress = r.emisorDireccion,
-            phrases = r.frases, environment = r.ambiente
+            phrases = r.frases, environment = r.ambiente,
+            withoutDetailDescription = if (r.sinDetalle) r.descripcionSinDetalle else ""
         )
     }
 
@@ -135,7 +137,9 @@ class FirebaseFelRepository(
             emisorNit = str("emisorNit"), emisorName = str("emisorNombre"),
             emisorTradeName = str("emisorNombreComercial"), emisorAddress = str("emisorDireccion"),
             phrases = runCatching { d.get<List<String>?>("frases") }.getOrNull().orEmpty(),
-            environment = str("ambiente")
+            environment = str("ambiente"),
+            withoutDetailDescription = if (runCatching { d.get<Boolean?>("sinDetalle") }.getOrNull() == true)
+                str("descripcionSinDetalle").ifBlank { "Servicio de alimentos y/o bebidas" } else ""
         )
     }
 
@@ -207,7 +211,8 @@ private data class CertifyRequest(
     val companyId: String,
     val saleIds: List<String>,
     val receptor: ReceptorPayload,
-    val reemitir: Boolean = false
+    val reemitir: Boolean = false,
+    val sinDetalle: Boolean = false
 )
 
 @Serializable
@@ -237,7 +242,9 @@ private data class CertifyResponse(
     val emisorNombreComercial: String = "",
     val emisorDireccion: String = "",
     val frases: List<String> = emptyList(),
-    val ambiente: String = ""
+    val ambiente: String = "",
+    val sinDetalle: Boolean = false,
+    val descripcionSinDetalle: String = ""
 )
 
 @Serializable

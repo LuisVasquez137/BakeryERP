@@ -45,7 +45,12 @@ data class ReceiptInvoice(
     /** Null si faltan datos para armarla: no se imprime un QR que no verifica nada. */
     val verificationUrl: String?,
     /** Certificado en el ambiente de pruebas: sin validez fiscal, y el ticket lo dice. */
-    val isTest: Boolean = false
+    val isTest: Boolean = false,
+    /**
+     * Factura sin detalle: el ticket imprime esta sola línea por [invoicedTotal] en vez de los
+     * productos. Es lo que certificó la SAT, y la representación gráfica tiene que decir lo mismo.
+     */
+    val singleLineDescription: String? = null
 )
 
 /** Arma el bloque fiscal del ticket desde la respuesta de la Cloud Function. */
@@ -65,7 +70,8 @@ fun receiptInvoiceFrom(result: FelCertifyResult, certifiedAtLabel: String) = Rec
     invoicedTotal = result.total,
     phrases = felPhrasesFor(result),
     verificationUrl = felVerificationUrl(result.uuid, result.emisorNit, result.receptorId, result.total),
-    isTest = result.environment.equals("TEST", ignoreCase = true)
+    isTest = result.environment.equals("TEST", ignoreCase = true),
+    singleLineDescription = result.withoutDetailDescription.ifBlank { null }
 )
 
 data class ReceiptLine(

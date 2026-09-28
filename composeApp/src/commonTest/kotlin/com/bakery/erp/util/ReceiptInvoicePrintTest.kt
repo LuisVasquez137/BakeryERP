@@ -94,6 +94,35 @@ class ReceiptInvoicePrintTest {
     }
 
     @Test
+    fun `la factura no imprime cuanto dio ni el vuelto, el ticket sin factura si`() {
+        for (mm in listOf(58, 80)) {
+            val conFactura = visibleLines(buildEscPosReceipt(receipt(), mm))
+            assertFalse(conFactura.any { it.startsWith("Recibido") || it.startsWith("Vuelto") })
+            val sinFactura = visibleLines(buildEscPosReceipt(receipt().copy(invoice = null), mm))
+            assertTrue(sinFactura.any { it.startsWith("Vuelto") })
+        }
+        val html = buildReceiptHtml(receipt())
+        assertFalse(html.contains("Vuelto") || html.contains("Recibido"))
+    }
+
+    @Test
+    fun `sin detalle imprime la unica linea certificada y no los productos`() {
+        val sinDetalle = receipt().copy(
+            invoice = receiptInvoiceFrom(certified.copy(withoutDetailDescription = "Servicio de alimentos y/o bebidas"), "25/09/2026 14:35")
+        )
+        for (mm in listOf(58, 80)) {
+            val cols = if (mm >= 76) 48 else 32
+            val lines = visibleLines(buildEscPosReceipt(sinDetalle, mm))
+            assertFalse(lines.any { it.startsWith("Pan de Q0.50") }, "[$mm] no debe listar productos")
+            assertTrue(lines.any { it.endsWith("Q1.90") && it.contains("bebidas") }, "[$mm] falta la línea única")
+            lines.forEach { assertTrue(it.length <= cols, "[$mm] '$it'") }
+        }
+        val html = buildReceiptHtml(sinDetalle)
+        assertTrue(html.contains("Servicio de alimentos y/o bebidas"))
+        assertFalse(html.contains("Pan de Q0.50"))
+    }
+
+    @Test
     fun `el largo del QR nunca deja un 0x0A en pL`() {
         // 7 caracteres → pL = 10: se le agrega un & para correrlo.
         val qr = escPosQr("1234567", 5)
