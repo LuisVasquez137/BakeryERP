@@ -7,7 +7,7 @@ import com.bakery.erp.model.SalePaymentMethod
 
 /**
  * Comprobante del anticipo: reemplaza al papel donde se anotaba "ya pagó". Lo que importa es
- * el FOLIO, grande —es por lo que se busca al entregar— y que diga que no es factura: la
+ * el FOLIO, grande —es por lo que se busca al entregar— y que diga que no es un documento fiscal: la
  * factura sale el día de la entrega, por el total.
  */
 fun buildCustomerDepositDocument(
@@ -59,7 +59,7 @@ internal fun depositEscPos(deposit: CustomerDeposit, companyName: String, receiv
     wrapped("${deposit.branchName} · ${deposit.registerName} · ${deposit.receivedByUserName}")
     sep()
     center()
-    wrapped("Este comprobante no es factura. La factura se emite al entregar el encargo, por el total.")
+    wrapped("Este comprobante no es una factura ni un documento fiscal. Preséntelo al recoger su encargo: demuestra el anticipo que dejó.")
     left()
     raw(0x1B, 0x64, 0x04)
     raw(0x1D, 0x56, 0x00)
@@ -97,7 +97,7 @@ private fun depositHtml(d: CustomerDeposit, companyName: String, receivedAtLabel
       <div class="sep"></div>
       <div class="small">Recibido: ${esc(receivedAtLabel)}<br>${esc(d.branchName)} · ${esc(d.registerName)} · ${esc(d.receivedByUserName)}</div>
       <div class="sep"></div>
-      <div class="c small">Este comprobante no es factura. La factura se emite al entregar el encargo, por el total.</div>
+      <div class="c small">Este comprobante no es una factura ni un documento fiscal. Preséntelo al recoger su encargo: demuestra el anticipo que dejó.</div>
     </body></html>
     """.trimIndent()
 }

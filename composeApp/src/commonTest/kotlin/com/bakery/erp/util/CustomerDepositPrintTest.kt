@@ -44,7 +44,7 @@ class CustomerDepositPrintTest {
         val doc = buildCustomerDepositDocument(deposit, "Sabro Pan", "28/09/2026 10:15")
         assertTrue(doc.html.contains("ANT-0042"))
         assertTrue(doc.html.contains("Q1250.00"))
-        assertTrue(doc.html.contains("no es factura"))
+        assertTrue(doc.html.contains("no es una factura ni un documento fiscal"))
         val thermal = doc.escPosByWidthMm.getValue(58).decodeToString()
         assertTrue(thermal.contains("ANT-0042") && thermal.contains("Q1250.00"))
     }
