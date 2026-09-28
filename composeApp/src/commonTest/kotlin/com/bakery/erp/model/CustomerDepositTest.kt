@@ -1,6 +1,7 @@
 package com.bakery.erp.model
 
 import kotlin.test.Test
+import kotlinx.datetime.toInstant
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -18,6 +19,29 @@ class CustomerDepositTest {
         assertEquals(50.0, deposit.copy(appliedAmount = 100.0).remaining)
         assertEquals(0.0, deposit.copy(appliedAmount = 100.0, refundedAmount = 50.0).remaining)
         assertFalse(deposit.copy(appliedAmount = 150.0).isOpen)
+    }
+
+    @Test
+    fun `el encargo del catalogo se describe y se valora`() {
+        val items = listOf(
+            CustomerDepositItem("p1", "Pastel tres leches", 1.0, 250.0),
+            CustomerDepositItem("p2", "Pirujo", 24.0, 1.0)
+        )
+        assertEquals("1 Pastel tres leches, 24 Pirujo", depositItemsDescription(items))
+        assertEquals(274.0, depositItemsTotal(items))
+    }
+
+    @Test
+    fun `la entrega se lee como hoy, manana o la fecha`() {
+        val tz = kotlinx.datetime.TimeZone.of("America/Guatemala")
+        // 2026-09-28 lunes 09:00 en Guatemala = 15:00 UTC.
+        fun at(month: Int, d: Int, h: Int, m: Int) =
+            kotlinx.datetime.LocalDateTime(2026, month, d, h, m).toInstant(tz).toEpochMilliseconds()
+        val now = at(9, 28, 9, 0)
+        assertEquals("Hoy 4:30 PM", deliveryDayLabel(at(9, 28, 16, 30), now, tz))
+        assertEquals("Mañana 10:00 AM", deliveryDayLabel(at(9, 29, 10, 0), now, tz))
+        assertEquals("sáb 03/10 12:15 PM", deliveryDayLabel(at(10, 3, 12, 15), now, tz))
+        assertEquals("", deliveryDayLabel(0L, now, tz))
     }
 
     @Test

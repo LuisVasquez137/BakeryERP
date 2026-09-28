@@ -159,14 +159,17 @@ fun POSScreen(
     LaunchedEffect(depositReceiveOpen) {
         if (depositReceiveOpen) viewModel.loadDepositOrders(companyId)
     }
-    // Comprobante listo (recién recibido o reimpresión): se imprime y, si venía de recibirlo,
-    // se cierra el diálogo y se recarga la caja, porque el efectivo esperado cambió.
-    LaunchedEffect(state.depositToPrint) {
-        val d = state.depositToPrint ?: return@LaunchedEffect
-        if (depositReceiveOpen) {
+    // Anticipo guardado (con o sin impresión): se cierra el diálogo y se recarga la caja, porque
+    // el efectivo esperado cambió.
+    LaunchedEffect(state.depositSavedAt) {
+        if (state.depositSavedAt > 0L && depositReceiveOpen) {
             depositReceiveOpen = false
             viewModel.load(companyId, sessionId)
         }
+    }
+    // Comprobante por imprimir: recién recibido con "Guardar e imprimir", o una reimpresión.
+    LaunchedEffect(state.depositToPrint) {
+        val d = state.depositToPrint ?: return@LaunchedEffect
         documentPrinter?.takeIf { it.isAvailable }?.print(
             com.bakery.erp.util.buildCustomerDepositDocument(d, viewModel.receiptCompanyName(), formatReceiptTimestamp(d.receivedAt))
         )?.onFailure { e -> snackbar.showSnackbar("No se pudo imprimir el comprobante: ${e.message}") }
@@ -849,8 +852,9 @@ fun POSScreen(
         ReceiveDepositDialog(
             isSaving = state.isDepositBusy,
             onDismiss = { depositReceiveOpen = false },
-            onConfirm = { input -> user?.let { viewModel.receiveDeposit(companyId, it, input) } },
-            orders = state.depositOrders
+            onConfirm = { input, print -> user?.let { viewModel.receiveDeposit(companyId, it, input, print) } },
+            orders = state.depositOrders,
+            products = state.products
         )
     }
 

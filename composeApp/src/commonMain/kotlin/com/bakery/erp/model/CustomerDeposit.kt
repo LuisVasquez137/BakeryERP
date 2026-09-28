@@ -1,6 +1,8 @@
 package com.bakery.erp.model
 
 import kotlin.math.min
+import kotlinx.datetime.daysUntil
+import kotlinx.datetime.toLocalDateTime
 import kotlin.math.round
 
 /**
@@ -27,8 +29,21 @@ data class CustomerDeposit(
     val customerPhone: String = "",
     /** Qué encargó ("3 docenas de pirujo", "pastel de chocolate", "almuerzo para 10"). */
     val description: String = "",
-    /** Para cuándo, como lo dijo el cliente. Texto: "sábado 10 am" es un dato válido. */
+    /**
+     * Cuándo se entrega, fecha y hora exactas (epoch millis). Es un dato y no un texto porque de
+     * él cuelgan los recordatorios: "sábado 10 am" no se puede ordenar ni avisar. 0 = sin fecha
+     * (anticipos anteriores, que solo traían [deliveryLabel]).
+     */
+    val deliveryAt: Long = 0L,
+    /** Texto de la entrega. Se arma de [deliveryAt]; en anticipos viejos es lo que se tecleó. */
     val deliveryLabel: String = "",
+    /**
+     * Qué encargó, del catálogo. Vacío en un encargo del restaurante: los platillos viven en
+     * ComandaYa y BakeOS no los conoce, así que ahí el encargo es [description] en texto.
+     */
+    val items: List<CustomerDepositItem> = emptyList(),
+    /** Encargo del restaurante (comida): se describe en texto, no con el catálogo. */
+    val isRestaurant: Boolean = false,
     val amount: Double = 0.0,
     /** CASH | CARD | TRANSFER. Solo el efectivo entra a la gaveta como movimiento. */
     val method: String = SalePaymentMethod.CASH,
@@ -61,6 +76,49 @@ data class CustomerDeposit(
     /** Lo que todavía se puede aplicar o devolver. */
     val remaining: Double get() = roundMoney(amount - appliedAmount - refundedAmount).coerceAtLeast(0.0)
     val isOpen: Boolean get() = status == CustomerDepositStatus.OPEN && remaining > 0.004
+}
+
+/** Un producto del catálogo dentro de un encargo. El precio es el de hoy: sirve de referencia. */
+data class CustomerDepositItem(
+    val productId: String = "",
+    val productName: String = "",
+    val quantity: Double = 0.0,
+    val unitPrice: Double = 0.0
+) {
+    val subtotal: Double get() = roundMoney(quantity * unitPrice)
+}
+
+/** "2 Pastel tres leches, 3 Docena de pirujo": el encargo en una línea. */
+fun depositItemsDescription(items: List<CustomerDepositItem>): String =
+    items.joinToString(", ") { i ->
+        val q = if (i.quantity % 1.0 == 0.0) i.quantity.toLong().toString() else i.quantity.toString()
+        "$q ${i.productName}"
+    }
+
+/** Lo que costaría el encargo a precio de hoy: referencia para el anticipo, no un cobro. */
+fun depositItemsTotal(items: List<CustomerDepositItem>): Double = roundMoney(items.sumOf { it.subtotal })
+
+private val WEEKDAYS = listOf("lun", "mar", "mié", "jue", "vie", "sáb", "dom")
+
+/**
+ * "Hoy 10:30 AM", "Mañana 4:00 PM", "sáb 12/10 10:30 AM". Lo relativo va primero porque es
+ * lo que la cajera necesita leer rápido: qué se entrega hoy.
+ */
+fun deliveryDayLabel(deliveryAt: Long, nowMillis: Long, timeZone: kotlinx.datetime.TimeZone): String {
+    if (deliveryAt <= 0L) return ""
+    val at = kotlin.time.Instant.fromEpochMilliseconds(deliveryAt).toLocalDateTime(timeZone)
+    val today = kotlin.time.Instant.fromEpochMilliseconds(nowMillis).toLocalDateTime(timeZone).date
+    val days = today.daysUntil(at.date)
+    val day = when (days) {
+        0 -> "Hoy"
+        1 -> "Mañana"
+        -1 -> "Ayer"
+        else -> "${WEEKDAYS[at.date.dayOfWeek.ordinal]} ${at.date.dayOfMonth.toString().padStart(2, '0')}/" +
+            at.date.monthNumber.toString().padStart(2, '0')
+    }
+    val h12 = when { at.hour == 0 -> 12; at.hour > 12 -> at.hour - 12; else -> at.hour }
+    val ampm = if (at.hour < 12) "AM" else "PM"
+    return "$day $h12:${at.minute.toString().padStart(2, '0')} $ampm"
 }
 
 object CustomerDepositStatus {

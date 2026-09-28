@@ -1835,6 +1835,13 @@ El cliente deja un encargo (pan, un pastel, comida del restaurante) con anticipo
 completo, y lo recoge otro día en **cualquier caja o sucursal**. El anticipo es dinero que entra
 a una gaveta hoy pero **todavía no es venta** (si cancela, se devuelve):
 
+- **El diálogo de recibir es pantalla completa** (`ReceiveDepositDialog`): un AlertDialog de alto
+  fijo dejaba los campos de abajo tapados por el teclado. Encargo **del catálogo** (productos con
+  cantidad, `CustomerDepositItem` en arreglos paralelos, total a precio de hoy como referencia) o
+  **del restaurante** (texto: los platillos viven en ComandaYa). Entrega con **calendario + reloj**
+  → `deliveryAt` (epoch millis), base de los recordatorios; `deliveryDayLabel` la muestra como
+  "Hoy 4:30 PM" y los pendientes se ordenan por entrega. Botones "Solo guardar" y "Guardar e
+  imprimir" (sin impresora se guarda igual y se reimprime después).
 - **Recibir** (menú de la caja abierta → "Anticipo de cliente"): `companies/{c}/customerDeposits`
   con folio correlativo `ANT-0042` asignado en transacción (`counters/customerDeposits`). El
   efectivo entra como `CashMovement` DEPOSIT con `sourceDepositId` — el cuadre de ESA caja lo

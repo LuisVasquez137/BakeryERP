@@ -144,7 +144,9 @@ data class POSUiState(
     /** Comprobante por imprimir (recién recibido o reimpresión). La pantalla lo manda y lo limpia. */
     val depositToPrint: com.bakery.erp.model.CustomerDeposit? = null,
     /** Pedidos de clientes con saldo, para ligarles el anticipo al recibirlo. */
-    val depositOrders: List<com.bakery.erp.model.CustomerOrder> = emptyList()
+    val depositOrders: List<com.bakery.erp.model.CustomerOrder> = emptyList(),
+    /** Cambia cada vez que se guarda un anticipo: la pantalla cierra el diálogo al verlo. */
+    val depositSavedAt: Long = 0L
 )
 
 /**
@@ -905,7 +907,7 @@ class POSViewModel(
      * cuadre de ESTA caja lo explica) y NO como venta: la venta ocurre al entregar el encargo.
      * Si es de un pedido, queda registrado como pago del pedido.
      */
-    fun receiveDeposit(companyId: String, currentUser: User, input: DepositInput) {
+    fun receiveDeposit(companyId: String, currentUser: User, input: DepositInput, print: Boolean = true) {
         val session = _uiState.value.session ?: return
         val branch = _uiState.value.branch ?: return
         if (_uiState.value.isDepositBusy || input.amount <= 0.0) return
@@ -917,6 +919,9 @@ class POSViewModel(
                     customerPhone = input.customerPhone,
                     description = input.description,
                     deliveryLabel = input.deliveryLabel,
+                    deliveryAt = input.deliveryAt,
+                    items = input.items,
+                    isRestaurant = input.isRestaurant,
                     amount = money(input.amount),
                     method = input.method,
                     branchId = branch.id,
@@ -965,7 +970,10 @@ class POSViewModel(
                 _uiState.update {
                     it.copy(
                         isDepositBusy = false,
-                        depositToPrint = saved,
+                        // "Solo guardar" (sin impresora, o el cliente no lo quiere): se reimprime
+                        // después desde "Anticipos pendientes".
+                        depositToPrint = if (print) saved else null,
+                        depositSavedAt = Clock.System.now().toEpochMilliseconds(),
                         openDeposits = listOf(saved) + it.openDeposits,
                         notice = "Anticipo ${saved.folio} recibido: Q ${saved.amount.fmtMoney(2)}"
                     )

@@ -42,7 +42,9 @@ class FirebaseCustomerDepositRepository(
         col(companyId).where { "status" equalTo CustomerDepositStatus.OPEN }.get().documents
             .map { it.toDeposit() }
             .filter { it.isOpen }
-            .sortedByDescending { it.receivedAt }
+            // Lo que se entrega primero, primero: es lo que hay que preparar. Sin fecha, al final.
+            .sortedWith(compareBy<CustomerDeposit> { if (it.deliveryAt > 0) it.deliveryAt else Long.MAX_VALUE }
+                .thenByDescending { it.receivedAt })
 
     override suspend fun get(companyId: String, id: String): CustomerDeposit? =
         runCatching { col(companyId).document(id).get() }.getOrNull()
@@ -114,6 +116,13 @@ class FirebaseCustomerDepositRepository(
         "customerPhone" to customerPhone,
         "description" to description,
         "deliveryLabel" to deliveryLabel,
+        "deliveryAt" to deliveryAt,
+        "isRestaurant" to isRestaurant,
+        // Arreglos paralelos: GitLive no serializa listas de objetos.
+        "itemProductIds" to items.map { it.productId },
+        "itemNames" to items.map { it.productName },
+        "itemQuantities" to items.map { it.quantity },
+        "itemUnitPrices" to items.map { it.unitPrice },
         "amount" to amount,
         "method" to method,
         "branchId" to branchId,
@@ -148,6 +157,22 @@ class FirebaseCustomerDepositRepository(
             customerPhone = str("customerPhone"),
             description = str("description"),
             deliveryLabel = str("deliveryLabel"),
+            deliveryAt = num("deliveryAt").toLong(),
+            isRestaurant = runCatching { get<Boolean?>("isRestaurant") }.getOrNull() ?: false,
+            items = run {
+                val ids = runCatching { get<List<String>?>("itemProductIds") }.getOrNull().orEmpty()
+                val names = runCatching { get<List<String>?>("itemNames") }.getOrNull().orEmpty()
+                val qtys = runCatching { get<List<Double>?>("itemQuantities") }.getOrNull().orEmpty()
+                val prices = runCatching { get<List<Double>?>("itemUnitPrices") }.getOrNull().orEmpty()
+                names.indices.map { i ->
+                    com.bakery.erp.model.CustomerDepositItem(
+                        productId = ids.getOrElse(i) { "" },
+                        productName = names[i],
+                        quantity = qtys.getOrElse(i) { 0.0 },
+                        unitPrice = prices.getOrElse(i) { 0.0 }
+                    )
+                }
+            },
             amount = num("amount"),
             method = str("method").ifBlank { SalePaymentMethod.CASH },
             branchId = str("branchId"),
