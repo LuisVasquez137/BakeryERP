@@ -1981,9 +1981,28 @@ junto con el pan, BakeOS.
   con el total de las ventas queda un warning en el log.
 - La cuenta del restaurante queda SOLICITADA al recibirse en el cobro
   (`CheckoutPayment.invoiceReceptorId/Name` → `collectPendingSale`), igual que el pan.
-- **Lo que no se hizo**: el saldo de DTEs que muestra ComandaYa no descuenta los que emite BakeOS
-  (Digifact cobra igual; el real está en su portal). Las cuentas corrompidas por el bug antes
-  del arreglo no se pueden detectar después: el reenvío borró la gaveta que las recibió., Fase 4 (puente con ComandaYa y crédito compartido; y arreglar que
+- **Operación decidida (2026-09-27)**: en Sabreopan todo se marca "Pagado" en ComandaYa y **se
+  cobra y factura en BakeOS**. Para que nadie facture allá por error basta con dejar en 0 el
+  `dteCreditsBalance` del restaurante: ComandaYa ya bloquea la facturación sin saldo.
+- **Cuenta adicional** (`functions/externalAddendum.js`, tests en `externalAddendum.test.js`): si
+  ComandaYa reenvía con más monto una cuenta ya recibida en caja (reabrieron la orden para un
+  postre), entra una venta `{externalId}_ad{n}` PENDING_COLLECTION con solo lo nuevo, mesa
+  "… · adicional". La original guarda `accountedTotal`/`accountedItems` (lista, no mapa: un
+  nombre con punto rompería la clave; las cuentas previas lo reconstruyen de sus líneas) y un
+  reenvío idéntico no crea otro. El monto manda sobre las líneas: descuento o renglón de
+  "Ajuste" para que cuadre. Si el total BAJÓ se loguea como devolución a revisar. Suma al
+  resumen del día sin contar transacción (`applied.transactions = 0`).
+- **Contador de DTEs de ComandaYa**: cada DTE de producción de la empresa conectada se avisa al
+  endpoint `registrarDteBakeos` de ComandaYa (en su `sabreopanBridge.js`, id de restaurante
+  literal), que suma `FelProfiles.dtesConsumidos` del NIT —el que refleja el portal de Partners
+  de Digifact— sin tocar `dteCreditsBalance` (saldo del SaaS). Idempotente por uuid
+  (`Restaurants/{r}/bakeosDtes/{uuid}`). Autentica con la misma clave del puente
+  (`COMANDAYA_INGEST_KEY` = `BAKEOS_INGEST_KEY` de ComandaYa). `comandayaReportado = false` se
+  escribe junto con la factura certificada y `felReintentarPendientes` reintenta (anuladas
+  incluidas: también gastaron su DTE). Solo certificaciones cuentan; las anulaciones no suman.
+  `tools/fel-backfill-comandaya.js` marca los DTEs emitidos antes de esto.
+- **Lo que no se hizo**: las cuentas corrompidas por el bug de `set()` antes del arreglo no se
+  pueden detectar después: el reenvío borró la gaveta que las recibió., Fase 4 (puente con ComandaYa y crédito compartido; y arreglar que
 `ingestExternalSale` hace `set` sin merge y reabre una venta ya recibida en caja).
 
 ### Empleados
