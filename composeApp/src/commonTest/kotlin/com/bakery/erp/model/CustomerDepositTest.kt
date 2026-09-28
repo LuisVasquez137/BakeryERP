@@ -45,6 +45,21 @@ class CustomerDepositTest {
     }
 
     @Test
+    fun `la fecha larga lleva el dia de la semana`() {
+        assertEquals("Miércoles 30/09/2026", longDateLabel(kotlinx.datetime.LocalDate(2026, 9, 30)))
+        assertEquals("Sábado 03/10/2026", longDateLabel(kotlinx.datetime.LocalDate(2026, 10, 3)))
+    }
+
+    @Test
+    fun `no se acepta una entrega que ya paso`() {
+        val now = 1_000_000L
+        assertEquals(null, depositDeliveryProblem(now + 60_000, now))
+        assertEquals("Esa fecha y hora de entrega ya pasaron.", depositDeliveryProblem(now - 1, now))
+        assertEquals("Esa fecha y hora de entrega ya pasaron.", depositDeliveryProblem(now, now))
+        assertEquals("Falta la fecha y hora de entrega.", depositDeliveryProblem(0L, now))
+    }
+
+    @Test
     fun `folio correlativo`() {
         assertEquals("ANT-0042", customerDepositFolio(42))
         assertEquals("ANT-12345", customerDepositFolio(12345))

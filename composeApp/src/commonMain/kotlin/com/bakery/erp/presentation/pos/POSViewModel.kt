@@ -911,6 +911,10 @@ class POSViewModel(
         val session = _uiState.value.session ?: return
         val branch = _uiState.value.branch ?: return
         if (_uiState.value.isDepositBusy || input.amount <= 0.0) return
+        // Otra vez acá y no solo en el diálogo: pudo quedar abierto mientras la hora pasaba.
+        com.bakery.erp.model.depositDeliveryProblem(input.deliveryAt, Clock.System.now().toEpochMilliseconds())?.let { problem ->
+            _uiState.update { it.copy(error = problem) }; return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isDepositBusy = true, error = null) }
             runCatching {

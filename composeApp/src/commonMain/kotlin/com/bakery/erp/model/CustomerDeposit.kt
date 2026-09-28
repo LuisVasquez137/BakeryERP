@@ -121,6 +121,23 @@ fun deliveryDayLabel(deliveryAt: Long, nowMillis: Long, timeZone: kotlinx.dateti
     return "$day $h12:${at.minute.toString().padStart(2, '0')} $ampm"
 }
 
+private val WEEKDAYS_LONG = listOf("Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo")
+
+/** "Miércoles 10/12/2026": la fecha elegida con su día, para no confundir la semana. */
+fun longDateLabel(date: kotlinx.datetime.LocalDate): String =
+    "${WEEKDAYS_LONG[date.dayOfWeek.ordinal]} ${date.dayOfMonth.toString().padStart(2, '0')}/" +
+        "${date.monthNumber.toString().padStart(2, '0')}/${date.year}"
+
+/**
+ * Qué impide aceptar esta entrega, o null si está bien. No se da anticipo para algo que ya
+ * tenía que entregarse: ni un día pasado, ni hoy a una hora que ya pasó.
+ */
+fun depositDeliveryProblem(deliveryAt: Long, nowMillis: Long): String? = when {
+    deliveryAt <= 0L -> "Falta la fecha y hora de entrega."
+    deliveryAt <= nowMillis -> "Esa fecha y hora de entrega ya pasaron."
+    else -> null
+}
+
 object CustomerDepositStatus {
     const val OPEN = "OPEN"
     /** Aplicado completo a ventas. */

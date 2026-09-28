@@ -1842,6 +1842,14 @@ a una gaveta hoy pero **todavía no es venta** (si cancela, se devuelve):
   → `deliveryAt` (epoch millis), base de los recordatorios; `deliveryDayLabel` la muestra como
   "Hoy 4:30 PM" y los pendientes se ordenan por entrega. Botones "Solo guardar" y "Guardar e
   imprimir" (sin impresora se guarda igual y se reimprime después).
+- **En pantalla ancha (≥720dp, tablet horizontal) va en dos columnas que se desplazan por
+  separado** (cliente + encargo | entrega + anticipo) y los botones suben a la barra de arriba:
+  con el teclado ocupando media pantalla, una columna a lo ancho dejaba ver solo el campo que se
+  llenaba. Nombre y teléfono en una línea desde 480dp. Secciones en tarjetas (`FormSection`).
+- **No se acepta una entrega pasada** (`depositDeliveryProblem`): el calendario no ofrece días
+  anteriores (`SelectableDates`) y hoy a una hora ya pasada se marca en rojo y no deja guardar;
+  `receiveDeposit` lo revalida (el diálogo pudo quedar abierto mientras la hora pasaba). La fecha
+  se lee "Miércoles 30/09/2026" (`longDateLabel`).
 - **Recibir** (menú de la caja abierta → "Anticipo de cliente"): `companies/{c}/customerDeposits`
   con folio correlativo `ANT-0042` asignado en transacción (`counters/customerDeposits`). El
   efectivo entra como `CashMovement` DEPOSIT con `sourceDepositId` — el cuadre de ESA caja lo

@@ -1,6 +1,15 @@
 package com.bakery.erp.presentation.pos
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.SelectableDates
+import com.bakery.erp.model.depositDeliveryProblem
+import com.bakery.erp.model.longDateLabel
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
@@ -107,8 +116,9 @@ internal fun orderDeliveryLabel(order: com.bakery.erp.model.CustomerOrder): Stri
  * restaurante), cuándo exacto y cuánto. El folio lo pone el sistema y va en el comprobante.
  *
  * Pantalla completa y no un AlertDialog: con el teclado abierto, un diálogo de alto fijo dejaba
- * los campos de abajo tapados y sin forma de bajar. Acá el contenido se desplaza y los botones
- * quedan siempre visibles.
+ * los campos de abajo tapados. En pantalla ancha (tablet horizontal) va en dos columnas que se
+ * desplazan por separado y los botones suben a la barra de arriba: con el teclado ocupando media
+ * pantalla, una sola columna a lo ancho dejaba ver apenas el campo que se estaba llenando.
  */
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -139,16 +149,26 @@ fun ReceiveDepositDialog(
     var method by remember { mutableStateOf(SalePaymentMethod.CASH) }
 
     val tz = TimeZone.currentSystemDefault()
+    val nowMillis = kotlin.time.Clock.System.now().toEpochMilliseconds()
+    val selectedDate = dateUtcMillis?.let { kotlin.time.Instant.fromEpochMilliseconds(it).toLocalDateTime(TimeZone.UTC).date }
     val deliveryAt: Long = run {
-        val d = dateUtcMillis ?: return@run 0L
+        val date = selectedDate ?: return@run 0L
         val (h, m) = time ?: return@run 0L
-        val date = kotlin.time.Instant.fromEpochMilliseconds(d).toLocalDateTime(TimeZone.UTC).date
         LocalDateTime(date, LocalTime(h, m)).toInstant(tz).toEpochMilliseconds()
     }
+    // Solo se reclama cuando ya se eligieron las dos: antes, "falta" lo dice el resumen.
+    val deliveryProblem = if (selectedDate != null && time != null) depositDeliveryProblem(deliveryAt, nowMillis) else null
     val amount = amountText.toDoubleOrNull() ?: 0.0
     val itemsTotal = depositItemsTotal(items)
     val hasWhat = if (isRestaurant) restaurantText.isNotBlank() else items.isNotEmpty() || order != null
-    val ready = name.isNotBlank() && hasWhat && amount > 0.0 && deliveryAt > 0L && !isSaving
+    val deliveryOk = deliveryAt > 0L && deliveryProblem == null
+    val ready = name.isNotBlank() && hasWhat && amount > 0.0 && deliveryOk && !isSaving
+    val missing = listOfNotNull(
+        "cliente".takeIf { name.isBlank() },
+        "qué encargó".takeIf { !hasWhat },
+        "fecha y hora de entrega".takeIf { deliveryAt <= 0L },
+        "monto".takeIf { amount <= 0.0 }
+    )
 
     fun build() = DepositInput(
         customerName = name.trim(),
@@ -160,9 +180,7 @@ fun ReceiveDepositDialog(
         },
         // Etiqueta fija (no relativa): "Hoy" deja de ser cierto mañana.
         deliveryLabel = kotlin.time.Instant.fromEpochMilliseconds(deliveryAt).toLocalDateTime(tz).let { at ->
-            val h12 = when { at.hour == 0 -> 12; at.hour > 12 -> at.hour - 12; else -> at.hour }
-            "${at.dayOfMonth.toString().padStart(2, '0')}/${at.monthNumber.toString().padStart(2, '0')}/${at.year} " +
-                "$h12:${at.minute.toString().padStart(2, '0')} ${if (at.hour < 12) "AM" else "PM"}"
+            "${longDateLabel(at.date)} ${time12(at.hour, at.minute)}"
         },
         amount = amount,
         method = method,
@@ -173,164 +191,209 @@ fun ReceiveDepositDialog(
         isRestaurant = isRestaurant
     )
 
+    // ── Secciones: las mismas en una o dos columnas ──────────────────────────
+    val customerSection: @Composable (Boolean) -> Unit = { wide ->
+        FormSection("Cliente") {
+            val o = order
+            if (o != null) {
+                Surface(shape = RoundedCornerShape(10.dp), color = BrandColors.PrimaryContainer) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Pedido: ${o.depositLabel(orderDeliveryLabel(o))}", fontWeight = FontWeight.SemiBold,
+                                color = BrandColors.Primary)
+                            Text("Total Q ${o.totalAmount.fmtMoney(2)} · debe Q ${o.balanceAmount.fmtMoney(2)}",
+                                style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate)
+                        }
+                        TextButton(onClick = { order = null }) { Text("Quitar") }
+                    }
+                }
+            } else if (orders.isNotEmpty()) {
+                TextButton(onClick = { orderPickerOpen = true }) { Text("Ligar a un pedido de cliente (pastel, encargo)") }
+            }
+            // Nombre y teléfono en una línea cuando hay ancho: son dos datos cortos.
+            val nameField: @Composable (Modifier) -> Unit = { m ->
+                OutlinedTextField(name, { name = it }, label = { Text("Nombre") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Next),
+                    modifier = m)
+            }
+            val phoneField: @Composable (Modifier) -> Unit = { m ->
+                OutlinedTextField(phone, { phone = it.filter { c -> c.isDigit() || c == '-' || c == ' ' } },
+                    label = { Text("Teléfono (opcional)") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone, imeAction = ImeAction.Done),
+                    modifier = m)
+            }
+            if (wide) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    nameField(Modifier.weight(1.4f))
+                    phoneField(Modifier.weight(1f))
+                }
+            } else {
+                nameField(Modifier.fillMaxWidth())
+                phoneField(Modifier.fillMaxWidth())
+            }
+        }
+    }
+
+    val orderSection: @Composable () -> Unit = {
+        FormSection("Encargo") {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = !isRestaurant, onClick = { isRestaurant = false }, label = { Text("Del catálogo") })
+                FilterChip(selected = isRestaurant, onClick = { isRestaurant = true }, label = { Text("Del restaurante") })
+            }
+            if (isRestaurant) {
+                // Los platillos viven en ComandaYa: acá no hay catálogo que elegir.
+                OutlinedTextField(restaurantText, { restaurantText = it }, label = { Text("Descripción") },
+                    placeholder = { Text("Almuerzo para 10: pollo, arroz, refrescos") },
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                    modifier = Modifier.fillMaxWidth())
+            } else {
+                items.forEachIndexed { index, item ->
+                    DepositItemRow(
+                        item = item,
+                        onQuantity = { q -> items = items.toMutableList().also { it[index] = item.copy(quantity = q) } },
+                        onRemove = { items = items.filterIndexed { i, _ -> i != index } }
+                    )
+                }
+                OutlinedButton(onClick = { productPickerOpen = true }, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.Add, null)
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (items.isEmpty()) "Elegir del catálogo" else "Agregar otro producto")
+                }
+                if (items.isNotEmpty()) {
+                    Text("Total del encargo: Q ${itemsTotal.fmtMoney(2)} (precio de hoy)",
+                        style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate)
+                }
+            }
+        }
+    }
+
+    val deliverySection: @Composable () -> Unit = {
+        FormSection("Entrega") {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { datePickerOpen = true }, modifier = Modifier.weight(1.5f)) {
+                    Text(selectedDate?.let { longDateLabel(it) } ?: "Elegir fecha", maxLines = 1)
+                }
+                OutlinedButton(onClick = { timePickerOpen = true }, modifier = Modifier.weight(1f)) {
+                    Text(time?.let { (h, m) -> time12(h, m) } ?: "Elegir hora", maxLines = 1)
+                }
+            }
+            when {
+                deliveryProblem != null ->
+                    Text(deliveryProblem, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                deliveryAt > 0L ->
+                    Text(deliveryDayLabel(deliveryAt, nowMillis, tz), style = MaterialTheme.typography.bodySmall,
+                        color = BrandColors.Primary)
+            }
+        }
+    }
+
+    val paymentSection: @Composable () -> Unit = {
+        FormSection("Anticipo") {
+            OutlinedTextField(amountText, { amountText = it.filter { c -> c.isDigit() || c == '.' } },
+                label = { Text("Monto") }, prefix = { Text("Q ") }, singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+                modifier = Modifier.fillMaxWidth())
+            if (!isRestaurant && itemsTotal > 0.0) {
+                TextButton(onClick = { amountText = itemsTotal.fmt(2) }) { Text("Pagó todo: Q ${itemsTotal.fmtMoney(2)}") }
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                SalePaymentMethod.all.forEach { m ->
+                    FilterChip(selected = method == m, onClick = { method = m }, label = { Text(SalePaymentMethod.label(m)) })
+                }
+            }
+            if (method != SalePaymentMethod.CASH) {
+                Text("Con tarjeta o transferencia no entra efectivo a la gaveta: queda solo en el anticipo.",
+                    style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate)
+            }
+        }
+    }
+
+    val actions: @Composable (onDark: Boolean) -> Unit = { onDark ->
+        // Sin impresora (o si el cliente no lo quiere), se guarda igual: el folio queda en
+        // "Anticipos pendientes" y se reimprime después.
+        OutlinedButton(
+            onClick = { onConfirm(build(), false) }, enabled = ready,
+            colors = if (onDark) ButtonDefaults.outlinedButtonColors(contentColor = Color.White) else ButtonDefaults.outlinedButtonColors()
+        ) { Text("Solo guardar") }
+        Button(
+            onClick = { onConfirm(build(), true) }, enabled = ready,
+            colors = if (onDark) ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = BrandColors.Primary)
+            else ButtonDefaults.buttonColors(containerColor = BrandColors.Primary)
+        ) { Text(if (isSaving) "Guardando…" else "Guardar e imprimir") }
+    }
+
     Dialog(
         onDismissRequest = { if (!isSaving) onDismiss() },
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
-            Column(Modifier.fillMaxSize().imePadding()) {
-                // ── Encabezado ──
-                Row(
-                    Modifier.fillMaxWidth().background(BrandColors.Primary).padding(horizontal = 8.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = onDismiss, enabled = !isSaving) {
-                        Icon(Icons.Default.Close, "Cancelar", tint = Color.White)
+        Surface(Modifier.fillMaxSize(), color = BrandColors.Ivory) {
+            BoxWithConstraints(Modifier.fillMaxSize().imePadding()) {
+                val wide = maxWidth >= 720.dp
+                // Nombre y teléfono lado a lado ya en un teléfono grande o tablet vertical.
+                val pairFields = maxWidth >= 480.dp
+                Column(Modifier.fillMaxSize()) {
+                    // ── Barra: título, y en pantalla ancha también los botones ──
+                    Row(
+                        Modifier.fillMaxWidth().background(BrandColors.Primary).padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        IconButton(onClick = onDismiss, enabled = !isSaving) { Icon(Icons.Default.Close, "Cancelar", tint = Color.White) }
+                        Text("Nuevo anticipo", color = Color.White, style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        if (wide) {
+                            if (!ready && missing.isNotEmpty()) {
+                                Text("Falta: ${missing.joinToString(", ")}", color = Color.White.copy(alpha = 0.85f),
+                                    style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                            }
+                            actions(true)
+                        }
                     }
-                    Text("Nuevo anticipo", color = Color.White, style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold)
-                }
 
-                // ── Campos: se desplazan, el teclado no los tapa ──
-                Column(
-                    Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Text(
-                        "Entra a esta caja pero no cuenta como venta hasta que se entrega el encargo.",
-                        style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate
-                    )
-                    val o = order
-                    if (o != null) {
-                        Surface(shape = RoundedCornerShape(12.dp), color = BrandColors.PrimaryContainer) {
-                            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f)) {
-                                    Text("Pedido: ${o.depositLabel(orderDeliveryLabel(o))}", fontWeight = FontWeight.SemiBold,
-                                        color = BrandColors.Primary)
-                                    Text("Total Q ${o.totalAmount.fmtMoney(2)} · debe Q ${o.balanceAmount.fmtMoney(2)}",
-                                        style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate)
-                                }
-                                TextButton(onClick = { order = null }) { Text("Quitar") }
+                    if (wide) {
+                        // Dos columnas que se desplazan por separado: con el teclado abierto se ve
+                        // la columna donde se escribe y la otra sigue a la vista.
+                        Row(
+                            Modifier.weight(1f).fillMaxWidth().widthIn(max = 1200.dp).padding(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            Column(
+                                Modifier.weight(1.15f).fillMaxHeight().verticalScroll(rememberScrollState()).padding(vertical = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                customerSection(true)
+                                orderSection()
+                            }
+                            Column(
+                                Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()).padding(vertical = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                deliverySection()
+                                paymentSection()
                             }
                         }
-                    } else if (orders.isNotEmpty()) {
-                        OutlinedButton(onClick = { orderPickerOpen = true }, modifier = Modifier.fillMaxWidth()) {
-                            Text("Ligar a un pedido de cliente (pastel, encargo)")
-                        }
-                    }
-
-                    OutlinedTextField(name, { name = it }, label = { Text("Cliente") }, singleLine = true,
-                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Next),
-                        modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(phone, { phone = it.filter { c -> c.isDigit() || c == '-' || c == ' ' } },
-                        label = { Text("Teléfono (opcional)") }, singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone, imeAction = ImeAction.Done),
-                        modifier = Modifier.fillMaxWidth())
-
-                    // ── Qué encargó ──
-                    Text("¿Qué encargó?", fontWeight = FontWeight.SemiBold, color = BrandColors.TextSlate)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(selected = !isRestaurant, onClick = { isRestaurant = false }, label = { Text("Del catálogo") })
-                        FilterChip(selected = isRestaurant, onClick = { isRestaurant = true }, label = { Text("Del restaurante") })
-                    }
-                    if (isRestaurant) {
-                        // Los platillos viven en ComandaYa: acá no hay catálogo que elegir.
-                        OutlinedTextField(restaurantText, { restaurantText = it }, label = { Text("Descripción") },
-                            placeholder = { Text("Almuerzo para 10: pollo, arroz, refrescos") },
-                            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                            modifier = Modifier.fillMaxWidth())
                     } else {
-                        items.forEachIndexed { index, item ->
-                            DepositItemRow(
-                                item = item,
-                                onQuantity = { q -> items = items.toMutableList().also { it[index] = item.copy(quantity = q) } },
-                                onRemove = { items = items.filterIndexed { i, _ -> i != index } }
-                            )
+                        Column(
+                            Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            customerSection(pairFields)
+                            orderSection()
+                            deliverySection()
+                            paymentSection()
+                            if (!ready && missing.isNotEmpty()) {
+                                Text("Falta: ${missing.joinToString(", ")}", style = MaterialTheme.typography.bodySmall,
+                                    color = BrandColors.AccentDeep)
+                            }
                         }
-                        OutlinedButton(onClick = { productPickerOpen = true }, modifier = Modifier.fillMaxWidth()) {
-                            Text(if (items.isEmpty()) "Elegir del catálogo" else "Agregar otro producto")
-                        }
-                        if (items.isNotEmpty()) {
-                            Text("Total del encargo: Q ${itemsTotal.fmtMoney(2)} (precio de hoy)",
-                                style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate)
-                        }
+                        HorizontalDivider()
+                        Row(
+                            Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)
+                                .navigationBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)
+                        ) { actions(false) }
                     }
-
-                    // ── Cuándo ──
-                    Text("Entrega", fontWeight = FontWeight.SemiBold, color = BrandColors.TextSlate)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { datePickerOpen = true }, modifier = Modifier.weight(1f)) {
-                            Text(dateUtcMillis?.let {
-                                val d = kotlin.time.Instant.fromEpochMilliseconds(it).toLocalDateTime(TimeZone.UTC).date
-                                "${d.dayOfMonth.toString().padStart(2, '0')}/${d.monthNumber.toString().padStart(2, '0')}/${d.year}"
-                            } ?: "Elegir fecha")
-                        }
-                        OutlinedButton(onClick = { timePickerOpen = true }, modifier = Modifier.weight(1f)) {
-                            Text(time?.let { (h, m) ->
-                                val h12 = when { h == 0 -> 12; h > 12 -> h - 12; else -> h }
-                                "$h12:${m.toString().padStart(2, '0')} ${if (h < 12) "AM" else "PM"}"
-                            } ?: "Elegir hora")
-                        }
-                    }
-                    if (deliveryAt > 0L) {
-                        Text(deliveryDayLabel(deliveryAt, kotlin.time.Clock.System.now().toEpochMilliseconds(), tz),
-                            style = MaterialTheme.typography.bodySmall, color = BrandColors.Primary)
-                    }
-
-                    // ── Cuánto ──
-                    OutlinedTextField(amountText, { amountText = it.filter { c -> c.isDigit() || c == '.' } },
-                        label = { Text("Monto del anticipo") }, prefix = { Text("Q ") }, singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
-                        modifier = Modifier.fillMaxWidth())
-                    if (!isRestaurant && itemsTotal > 0.0) {
-                        TextButton(onClick = { amountText = itemsTotal.fmt(2) }) {
-                            Text("Pagó todo: Q ${itemsTotal.fmtMoney(2)}")
-                        }
-                    }
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        SalePaymentMethod.all.forEach { m ->
-                            FilterChip(selected = method == m, onClick = { method = m },
-                                label = { Text(SalePaymentMethod.label(m)) })
-                        }
-                    }
-                    if (method != SalePaymentMethod.CASH) {
-                        Text(
-                            "Con tarjeta o transferencia no entra efectivo a la gaveta: queda solo en el anticipo.",
-                            style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate
-                        )
-                    }
-                    if (!ready && !isSaving) {
-                        val missing = listOfNotNull(
-                            "cliente".takeIf { name.isBlank() },
-                            "qué encargó".takeIf { !hasWhat },
-                            "fecha y hora de entrega".takeIf { deliveryAt <= 0L },
-                            "monto".takeIf { amount <= 0.0 }
-                        )
-                        if (missing.isNotEmpty()) {
-                            Text("Falta: ${missing.joinToString(", ")}", style = MaterialTheme.typography.bodySmall,
-                                color = BrandColors.AccentDeep)
-                        }
-                    }
-                }
-
-                // ── Acciones: fijas abajo ──
-                HorizontalDivider()
-                Row(
-                    Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp, vertical = 10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    // Sin impresora (o si el cliente no lo quiere), se guarda igual: el folio queda
-                    // en "Anticipos pendientes" y se puede reimprimir después.
-                    OutlinedButton(onClick = { onConfirm(build(), false) }, enabled = ready, modifier = Modifier.weight(1f)) {
-                        Text("Solo guardar")
-                    }
-                    Button(
-                        onClick = { onConfirm(build(), true) },
-                        enabled = ready,
-                        colors = ButtonDefaults.buttonColors(containerColor = BrandColors.Primary),
-                        modifier = Modifier.weight(1f)
-                    ) { Text(if (isSaving) "Guardando…" else "Guardar e imprimir") }
                 }
             }
         }
@@ -350,7 +413,16 @@ fun ReceiveDepositDialog(
     }
 
     if (datePickerOpen) {
-        val dpState = rememberDatePickerState(initialSelectedDateMillis = dateUtcMillis)
+        // No se ofrecen días pasados: un encargo para ayer no existe.
+        val today = kotlin.time.Instant.fromEpochMilliseconds(nowMillis).toLocalDateTime(tz).date
+        val todayUtc = LocalDateTime(today, LocalTime(0, 0)).toInstant(TimeZone.UTC).toEpochMilliseconds()
+        val dpState = rememberDatePickerState(
+            initialSelectedDateMillis = dateUtcMillis,
+            selectableDates = object : SelectableDates {
+                override fun isSelectableDate(utcTimeMillis: Long) = utcTimeMillis >= todayUtc
+                override fun isSelectableYear(year: Int) = year >= today.year
+            }
+        )
         DatePickerDialog(
             onDismissRequest = { datePickerOpen = false },
             confirmButton = {
@@ -417,6 +489,24 @@ fun ReceiveDepositDialog(
             confirmButton = {},
             dismissButton = { TextButton(onClick = { orderPickerOpen = false }) { Text("Cancelar") } }
         )
+    }
+}
+
+/** "4:30 PM" */
+private fun time12(hour: Int, minute: Int): String {
+    val h12 = when { hour == 0 -> 12; hour > 12 -> hour - 12; else -> hour }
+    return "$h12:${minute.toString().padStart(2, '0')} ${if (hour < 12) "AM" else "PM"}"
+}
+
+/** Tarjeta con título: agrupa los campos para que el formulario se lea por partes. */
+@Composable
+private fun FormSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Surface(shape = RoundedCornerShape(14.dp), color = Color.White, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
+                color = BrandColors.Primary)
+            content()
+        }
     }
 }
 
