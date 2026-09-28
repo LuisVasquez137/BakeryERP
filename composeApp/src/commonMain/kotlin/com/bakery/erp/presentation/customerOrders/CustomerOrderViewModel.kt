@@ -33,6 +33,8 @@ data class CustomerOrderUiState(
     val orders: List<CustomerOrder> = emptyList(),
     val selectedOrder: CustomerOrder? = null,
     val selectedOrderLines: List<CustomerOrderLine> = emptyList(),
+    /** Pagos del pedido (anticipos recibidos en caja, saldo al entregar, devoluciones). */
+    val selectedOrderPayments: List<com.bakery.erp.model.CustomerOrderPayment> = emptyList(),
     val lotForSelectedOrder: ProductionLot? = null,
 
     // Form dependencies
@@ -104,6 +106,9 @@ class CustomerOrderViewModel(
             runCatching {
                 val order = orderRepo.getOrder(companyId, orderId)
                 val lines = orderRepo.getOrderLines(companyId, orderId)
+                val payments = runCatching { orderRepo.getOrderPayments(companyId, orderId) }.getOrNull().orEmpty()
+                    .sortedBy { it.receivedAt }
+                _uiState.value = _uiState.value.copy(selectedOrderPayments = payments)
                 val lot = order?.let {
                     if (it.producingBranchId.isNotEmpty() && it.deliveryDate > 0L) {
                         productionRepo.getActiveLotForBranchDateShift(

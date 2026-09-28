@@ -265,9 +265,6 @@ private fun FormBody(
     var depositBase by rememberSaveable {
         mutableStateOf(existing?.depositBaseAmount?.takeIf { it > 0 }?.toString() ?: "")
     }
-    var advancePaid by rememberSaveable {
-        mutableStateOf(existing?.advancePaidAmount?.takeIf { it > 0 }?.toString() ?: "")
-    }
 
     var notes by rememberSaveable { mutableStateOf(existing?.notes ?: "") }
 
@@ -281,7 +278,10 @@ private fun FormBody(
         (riceSheet.toDoubleOrNull() ?: 0.0) +
         (fountainRent.toDoubleOrNull() ?: 0.0) +
         (extrasAmount.toDoubleOrNull() ?: 0.0)
-    val advance = advancePaid.toDoubleOrNull() ?: 0.0
+    // Lo abonado ya no se teclea: sale de los pagos registrados en caja (anticipos ligados al
+    // pedido). Escribirlo acá era el papel en la app — un número sin dinero detrás en ninguna
+    // gaveta. Se conserva lo que el pedido ya traía.
+    val advance = existing?.advancePaidAmount ?: 0.0
     val balance = (total - advance).coerceAtLeast(0.0)
 
     Column(
@@ -542,10 +542,14 @@ private fun FormBody(
                     )
                 }
                 Spacer(Modifier.size(6.dp))
-                OutlinedTextField(
-                    value = advancePaid, onValueChange = { advancePaid = it.filterDecimal() },
-                    label = { Text("Anticipo recibido") },
-                    singleLine = true, modifier = Modifier.fillMaxWidth()
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Anticipos cobrados", color = MutedText, style = MaterialTheme.typography.bodySmall)
+                    Text("Q ${formatMoney(advance)}", style = MaterialTheme.typography.bodyMedium)
+                }
+                Text(
+                    "El anticipo se recibe en la caja: Punto de Venta → Anticipo de cliente → Ligar a un pedido. " +
+                        "Así el dinero queda en una gaveta y el cliente se lleva su comprobante.",
+                    color = MutedText, style = MaterialTheme.typography.bodySmall
                 )
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("Saldo pendiente", color = MutedText, style = MaterialTheme.typography.bodySmall)

@@ -131,7 +131,9 @@ class FirebaseCustomerDepositRepository(
         "refundedAt" to refundedAt,
         "refundedByUserName" to refundedByUserName,
         "refundReason" to refundReason,
-        "notes" to notes
+        "notes" to notes,
+        "customerOrderId" to customerOrderId,
+        "customerOrderLabel" to customerOrderLabel
     )
 
     private fun DocumentSnapshot.toDeposit(): CustomerDeposit {
@@ -163,7 +165,9 @@ class FirebaseCustomerDepositRepository(
             refundedAt = num("refundedAt").toLong(),
             refundedByUserName = str("refundedByUserName"),
             refundReason = str("refundReason"),
-            notes = str("notes")
+            notes = str("notes"),
+            customerOrderId = str("customerOrderId"),
+            customerOrderLabel = str("customerOrderLabel")
         )
     }
 

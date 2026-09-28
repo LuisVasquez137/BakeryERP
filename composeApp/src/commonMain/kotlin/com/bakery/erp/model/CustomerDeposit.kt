@@ -48,7 +48,15 @@ data class CustomerDeposit(
     val refundedAt: Long = 0L,
     val refundedByUserName: String = "",
     val refundReason: String = "",
-    val notes: String = ""
+    val notes: String = "",
+    /**
+     * Pedido de cliente (pastel, encargo especial) al que pertenece. Vacío = anticipo suelto
+     * (pan, comida del restaurante). Ligado, recibirlo registra el pago en el pedido y aplicarlo
+     * al entregar cierra el pedido.
+     */
+    val customerOrderId: String = "",
+    /** "Pastel · 12/10 · Juan Pérez": lo que se muestra sin abrir el pedido. */
+    val customerOrderLabel: String = ""
 ) {
     /** Lo que todavía se puede aplicar o devolver. */
     val remaining: Double get() = roundMoney(amount - appliedAmount - refundedAmount).coerceAtLeast(0.0)

@@ -155,6 +155,10 @@ fun POSScreen(
     LaunchedEffect(paymentOpen, depositsListOpen) {
         if (paymentOpen || depositsListOpen) viewModel.loadOpenDeposits(companyId)
     }
+    // Pedidos con saldo, para ligarles el anticipo (pasteles, encargos especiales).
+    LaunchedEffect(depositReceiveOpen) {
+        if (depositReceiveOpen) viewModel.loadDepositOrders(companyId)
+    }
     // Comprobante listo (recién recibido o reimpresión): se imprime y, si venía de recibirlo,
     // se cierra el diálogo y se recarga la caja, porque el efectivo esperado cambió.
     LaunchedEffect(state.depositToPrint) {
@@ -845,7 +849,8 @@ fun POSScreen(
         ReceiveDepositDialog(
             isSaving = state.isDepositBusy,
             onDismiss = { depositReceiveOpen = false },
-            onConfirm = { input -> user?.let { viewModel.receiveDeposit(companyId, it, input) } }
+            onConfirm = { input -> user?.let { viewModel.receiveDeposit(companyId, it, input) } },
+            orders = state.depositOrders
         )
     }
 

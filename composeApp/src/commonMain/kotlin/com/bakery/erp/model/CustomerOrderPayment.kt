@@ -26,6 +26,9 @@ data class CustomerOrderPayment(
     val receivedByUserName: String = "",
     val receivedAt: Long = 0L,
     val notes: String = "",
+    /** Anticipo de caja que lo originó ([CustomerDeposit]): el dinero entró por ahí. */
+    val depositId: String = "",
+    val depositFolio: String = "",
 )
 
 object CustomerOrderPaymentType {

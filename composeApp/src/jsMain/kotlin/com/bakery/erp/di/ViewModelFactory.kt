@@ -178,7 +178,7 @@ actual fun createAppViewModels(): AppViewModels {
             saleRepo, posCategoryRepo, cashSessionRepo, productRepoJs,
             finishedStockRepo, ingredientRepo, priceListRepo, branchRepo,
             JsReceiptPrinter(), authRepo, creditRepo, felRepo,
-            com.bakery.erp.data.FirebaseCustomerDepositRepository(firestore)
+            com.bakery.erp.data.FirebaseCustomerDepositRepository(firestore), customerOrderRepo
         ),
         cashSession = CashSessionViewModel(cashSessionRepo, cashRegisterRepo, branchRepo, dailyCloseRepo, purchaseRepo),
         saleHistory = SaleHistoryViewModel(saleRepo, cashSessionRepo, branchRepo, felRepo, JsReceiptPrinter(), authRepo),

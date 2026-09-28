@@ -39,7 +39,11 @@ import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.CustomerDeposit
 import com.bakery.erp.model.SalePaymentMethod
 import com.bakery.erp.model.matches
+import com.bakery.erp.model.depositDescription
+import com.bakery.erp.model.depositLabel
+import kotlinx.datetime.toLocalDateTime
 import com.bakery.erp.ui.theme.BrandColors
+import com.bakery.erp.util.fmt
 import com.bakery.erp.util.fmtMoney
 
 /** Lo que se teclea al recibir un anticipo. */
@@ -49,8 +53,20 @@ data class DepositInput(
     val description: String,
     val deliveryLabel: String,
     val amount: Double,
-    val method: String
+    val method: String,
+    /** Pedido de cliente al que se liga (pastel, encargo especial). Vacío = anticipo suelto. */
+    val orderId: String = "",
+    val orderLabel: String = ""
 )
+
+/** "12/10 · 10:30 AM": la entrega del pedido tal como se ve en el anticipo. */
+internal fun orderDeliveryLabel(order: com.bakery.erp.model.CustomerOrder): String {
+    if (order.deliveryDate <= 0L) return order.deliveryTime
+    val d = kotlin.time.Instant.fromEpochMilliseconds(order.deliveryDate)
+        .toLocalDateTime(kotlinx.datetime.TimeZone.currentSystemDefault())
+    val date = "${d.dayOfMonth.toString().padStart(2, '0')}/${d.monthNumber.toString().padStart(2, '0')}"
+    return listOf(date, order.deliveryTime).filter { it.isNotBlank() }.joinToString(" · ")
+}
 
 /**
  * Recibir un anticipo en la caja abierta. Lo mínimo para encontrarlo el día de la entrega —
@@ -61,8 +77,12 @@ data class DepositInput(
 fun ReceiveDepositDialog(
     isSaving: Boolean,
     onDismiss: () -> Unit,
-    onConfirm: (DepositInput) -> Unit
+    onConfirm: (DepositInput) -> Unit,
+    /** Pedidos con saldo para ligar el anticipo. Vacío = no se ofrece. */
+    orders: List<com.bakery.erp.model.CustomerOrder> = emptyList()
 ) {
+    var order by remember { mutableStateOf<com.bakery.erp.model.CustomerOrder?>(null) }
+    var orderPickerOpen by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf("") }
     var phone by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
@@ -85,6 +105,23 @@ fun ReceiveDepositDialog(
                         "Se imprime un comprobante con folio para el cliente.",
                     style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate
                 )
+                val o = order
+                if (o != null) {
+                    Surface(shape = RoundedCornerShape(12.dp), color = BrandColors.PrimaryContainer) {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Pedido: ${o.depositLabel(orderDeliveryLabel(o))}", fontWeight = FontWeight.SemiBold,
+                                    color = BrandColors.Primary)
+                                Text("Total Q ${o.totalAmount.fmtMoney(2)} · debe Q ${o.balanceAmount.fmtMoney(2)}",
+                                    style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate)
+                            }
+                            TextButton(onClick = { order = null }) { Text("Quitar") }
+                        }
+                    }
+                } else if (orders.isNotEmpty()) {
+                    TextButton(onClick = { orderPickerOpen = true }) { Text("Ligar a un pedido de cliente (pastel, encargo)") }
+                }
                 OutlinedTextField(name, { name = it }, label = { Text("Cliente") }, singleLine = true,
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
                     modifier = Modifier.fillMaxWidth())
@@ -119,12 +156,59 @@ fun ReceiveDepositDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onConfirm(DepositInput(name.trim(), phone.trim(), description.trim(), delivery.trim(), amount, method)) },
+                onClick = {
+                    val o = order
+                    onConfirm(DepositInput(
+                        name.trim(), phone.trim(), description.trim(), delivery.trim(), amount, method,
+                        orderId = o?.id.orEmpty(),
+                        orderLabel = o?.let { it.depositLabel(orderDeliveryLabel(it)) }.orEmpty()
+                    ))
+                },
                 enabled = ready
             ) { Text(if (isSaving) "Guardando…" else "Recibir Q ${amount.fmtMoney(2)}") }
         },
         dismissButton = { TextButton(onClick = onDismiss, enabled = !isSaving) { Text("Cancelar") } }
     )
+
+    if (orderPickerOpen) {
+        var query by remember { mutableStateOf("") }
+        val q = query.trim().lowercase()
+        val found = orders.filter { q.isEmpty() || it.customerName.lowercase().contains(q) || it.customerPhone.contains(q) }
+        AlertDialog(
+            onDismissRequest = { orderPickerOpen = false },
+            title = { Text("Ligar a un pedido") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(query, { query = it }, label = { Text("Cliente o teléfono") },
+                        singleLine = true, modifier = Modifier.fillMaxWidth())
+                    LazyColumn(Modifier.heightIn(max = 360.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(found, key = { it.id }) { o ->
+                            Surface(shape = RoundedCornerShape(10.dp), color = BrandColors.Sand,
+                                modifier = Modifier.fillMaxWidth().clickable {
+                                    // Lo que ya se sabe del pedido no se vuelve a teclear.
+                                    order = o
+                                    name = o.customerName
+                                    phone = o.customerPhone
+                                    description = o.depositDescription()
+                                    delivery = orderDeliveryLabel(o)
+                                    if (amountText.isBlank()) amountText = o.balanceAmount.fmt(2)
+                                    orderPickerOpen = false
+                                }) {
+                                Column(Modifier.padding(10.dp)) {
+                                    Text(o.depositLabel(orderDeliveryLabel(o)), fontWeight = FontWeight.SemiBold,
+                                        color = BrandColors.TextSlate)
+                                    Text("Total Q ${o.totalAmount.fmtMoney(2)} · debe Q ${o.balanceAmount.fmtMoney(2)} · ${com.bakery.erp.model.CustomerOrderStatus.label(o.status)}",
+                                        style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { orderPickerOpen = false }) { Text("Cancelar") } }
+        )
+    }
 }
 
 /** Elegir el anticipo del cliente al cobrar: se busca por folio, nombre o teléfono. */
@@ -238,6 +322,9 @@ private fun DepositRow(d: CustomerDeposit, modifier: Modifier) {
             Column(Modifier.weight(1f)) {
                 Text("${d.folio} · ${d.customerName}", fontWeight = FontWeight.SemiBold, color = BrandColors.TextSlate)
                 Text(d.description, style = MaterialTheme.typography.bodySmall, color = BrandColors.TextSlate)
+                if (d.customerOrderLabel.isNotBlank()) {
+                    Text("Pedido: ${d.customerOrderLabel}", style = MaterialTheme.typography.bodySmall, color = BrandColors.Primary)
+                }
                 Text(
                     listOfNotNull(
                         d.deliveryLabel.takeIf { it.isNotBlank() }?.let { "Entrega: $it" },

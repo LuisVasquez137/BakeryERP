@@ -148,6 +148,7 @@ fun CustomerOrderDetailScreen(
                     order = order,
                     lines = lines,
                     lot = lot,
+                    payments = state.selectedOrderPayments,
                     canManage = canManage,
                     onConfirm = { showConfirm = true },
                     onCancel = { showCancel = true }
@@ -223,6 +224,7 @@ private fun DetailContent(
     order: CustomerOrder,
     lines: List<CustomerOrderLine>,
     lot: ProductionLot?,
+    payments: List<com.bakery.erp.model.CustomerOrderPayment>,
     canManage: Boolean,
     onConfirm: () -> Unit,
     onCancel: () -> Unit
@@ -386,6 +388,35 @@ private fun DetailContent(
                 DetailRow("Saldo pendiente", "Q ${formatMoney(order.balanceAmount)}", emphasize = true)
             if (order.depositBaseAmount > 0.0)
                 DetailRow("Depósito de base", "Q ${formatMoney(order.depositBaseAmount)}")
+        }
+
+        // Pagos: de dónde sale "Anticipos cobrados". Cada anticipo recibido en caja lleva su
+        // folio, que es lo que el cliente trae en su comprobante.
+        if (payments.isNotEmpty() ||
+            (order.balanceAmount > 0.0 && order.status != CustomerOrderStatus.CANCELLED)
+        ) {
+            InfoCard("Pagos") {
+                payments.forEach { p ->
+                    DetailRow(
+                        listOf(
+                            com.bakery.erp.model.CustomerOrderPaymentType.label(p.type),
+                            p.depositFolio,
+                            com.bakery.erp.model.CustomerOrderPaymentMethod.label(p.method)
+                        ).filter { it.isNotBlank() }.joinToString(" · "),
+                        (if (p.amount < 0) "−" else "") + "Q ${formatMoney(kotlin.math.abs(p.amount))}"
+                    )
+                    if (p.notes.isNotBlank() && p.depositFolio.isBlank()) {
+                        Text(p.notes, style = MaterialTheme.typography.bodySmall, color = MutedText)
+                    }
+                }
+                if (order.balanceAmount > 0.0 && order.status != CustomerOrderStatus.CANCELLED) {
+                    Text(
+                        "Para cobrar un anticipo: Punto de Venta → Anticipo de cliente → Ligar a un pedido. " +
+                            "Al entregar, se aplica el anticipo en el cobro y el pedido queda entregado.",
+                        style = MaterialTheme.typography.bodySmall, color = MutedText
+                    )
+                }
+            }
         }
 
         if (order.notes.isNotEmpty()) {

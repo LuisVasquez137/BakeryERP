@@ -1861,8 +1861,19 @@ a una gaveta hoy pero **todavía no es venta** (si cancela, se devuelve):
   Regla de operación: anotar el folio en la nota de la orden de ComandaYa.
 - El ticket de la venta muestra "Anticipo ANT-0042 −Q" y "Pagado hoy". Lógica pura con tests en
   `CustomerDepositTest` y `CustomerDepositPrintTest`.
-- **Pendiente**: ligar el anticipo a un `CustomerOrder` (pasteles) — ese módulo tiene modelo de
-  anticipos (`CustomerOrderPayment`) que ninguna pantalla usa.
+- **Ligado a un pedido de cliente** (`CustomerDeposit.customerOrderId/Label`): al recibirlo, "Ligar
+  a un pedido" prellena cliente, encargo, entrega y el saldo (`acceptsDeposit`, `depositLabel`,
+  `depositDescription` en `model/CustomerOrderDeposit.kt`, tests en `CustomerOrderDepositTest`) y
+  registra un `CustomerOrderPayment` ADVANCE con `depositId/depositFolio` — el pedido recalcula
+  abonado y saldo. Al entregar y aplicarlo en el cobro, `completeOrderOnDelivery` registra el
+  saldo pagado hoy como BALANCE (con `saleId`), liga la venta de pan (`linkedCustomerOrderId`) y
+  marca el pedido DELIVERED si ya no debe. Devolverlo registra un pago negativo. Todo esto es no
+  crítico: si falla, el dinero ya quedó bien y se avisa.
+- **El pedido ya no acepta "Anticipo recibido" tecleado**: era el papel en la app, un número sin
+  dinero en ninguna gaveta. El formulario conserva lo que el pedido traía y el detalle lista los
+  pagos con su folio. `recordPayment` convierte el anticipo escrito a mano de un pedido viejo en
+  un pago "anotado a mano" antes del primer pago real (`legacyAdvanceToMigrate`), porque el
+  recálculo suma pagos y lo borraría.
 
 ### Facturación electrónica (FEL Guatemala, Digifact) — en construcción
 

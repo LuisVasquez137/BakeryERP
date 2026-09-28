@@ -278,6 +278,20 @@ class FirebaseCustomerOrderRepository(
         payment: CustomerOrderPayment
     ) {
         val order = getOrder(companyId, orderId) ?: error("Pedido no encontrado: $orderId")
+        // Un anticipo escrito a mano en el pedido (antes de que pasara por caja) no tiene pago
+        // detrás; el recálculo de abajo suma pagos y lo borraría. Se deja constancia primero.
+        val legacy = com.bakery.erp.model.legacyAdvanceToMigrate(order, getOrderPayments(companyId, orderId))
+        if (legacy > 0.0) {
+            val legacyRef = paymentsCol(companyId, orderId).document
+            legacyRef.set(CustomerOrderPayment(
+                id = legacyRef.id,
+                orderId = orderId,
+                type = CustomerOrderPaymentType.ADVANCE,
+                amount = legacy,
+                receivedAt = order.createdAt,
+                notes = "Anticipo anotado a mano en el pedido (antes de pasar por caja)"
+            ).toMap())
+        }
         val docRef = if (payment.id.isEmpty()) paymentsCol(companyId, orderId).document
                      else paymentsCol(companyId, orderId).document(payment.id)
         val now = Clock.System.now().toEpochMilliseconds()
@@ -463,7 +477,9 @@ class FirebaseCustomerOrderRepository(
         "receivedByUserId" to receivedByUserId,
         "receivedByUserName" to receivedByUserName,
         "receivedAt" to receivedAt,
-        "notes" to notes
+        "notes" to notes,
+        "depositId" to depositId,
+        "depositFolio" to depositFolio
     )
 
     @Suppress("UNCHECKED_CAST")
@@ -555,7 +571,9 @@ class FirebaseCustomerOrderRepository(
         receivedByUserId = get<String?>("receivedByUserId") ?: "",
         receivedByUserName = get<String?>("receivedByUserName") ?: "",
         receivedAt = readMillis("receivedAt"),
-        notes = get<String?>("notes") ?: ""
+        notes = get<String?>("notes") ?: "",
+        depositId = runCatching { get<String?>("depositId") }.getOrNull() ?: "",
+        depositFolio = runCatching { get<String?>("depositFolio") }.getOrNull() ?: ""
     )
 
     private fun DocumentSnapshot.readDouble(field: String): Double =

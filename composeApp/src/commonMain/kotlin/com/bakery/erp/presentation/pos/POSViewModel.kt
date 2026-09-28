@@ -52,6 +52,7 @@ import com.bakery.erp.model.FelCertifyResult
 import com.bakery.erp.model.FelInvoiceRequest
 import com.bakery.erp.model.FelInvoiceStatus
 import com.bakery.erp.model.felReceptorProblem
+import com.bakery.erp.model.acceptsDeposit
 
 /**
  * Línea del carrito antes de confirmar la venta. Vive solo en memoria del ViewModel.
@@ -141,7 +142,9 @@ data class POSUiState(
     val openDeposits: List<com.bakery.erp.model.CustomerDeposit> = emptyList(),
     val isDepositBusy: Boolean = false,
     /** Comprobante por imprimir (recién recibido o reimpresión). La pantalla lo manda y lo limpia. */
-    val depositToPrint: com.bakery.erp.model.CustomerDeposit? = null
+    val depositToPrint: com.bakery.erp.model.CustomerDeposit? = null,
+    /** Pedidos de clientes con saldo, para ligarles el anticipo al recibirlo. */
+    val depositOrders: List<com.bakery.erp.model.CustomerOrder> = emptyList()
 )
 
 /**
@@ -186,7 +189,9 @@ class POSViewModel(
     /** Facturación electrónica: certificar al cobrar y consultar NIT. */
     private val felRepository: com.bakery.erp.domain.FelRepository,
     /** Anticipos de clientes: recibir, aplicar al cobrar y devolver. */
-    private val depositRepository: com.bakery.erp.domain.CustomerDepositRepository
+    private val depositRepository: com.bakery.erp.domain.CustomerDepositRepository,
+    /** Pedidos de clientes (pasteles): el anticipo ligado se registra como pago del pedido. */
+    private val customerOrderRepository: com.bakery.erp.domain.CustomerOrderRepository
 ) : ViewModel() {
 
     private var organizationName: String = ""
@@ -688,6 +693,7 @@ class POSViewModel(
                     depositId = if (bakeryDeposit > 0.004) depositToApply?.id.orEmpty() else "",
                     depositFolio = if (bakeryDeposit > 0.004) depositToApply?.folio.orEmpty() else "",
                     depositAmount = bakeryDeposit,
+                    linkedCustomerOrderId = depositToApply?.customerOrderId?.takeIf { bakeryDeposit > 0.004 }.orEmpty(),
                     // Con anticipo, la caja solo suma el saldo (ver createSale).
                     paymentBreakdown = com.bakery.erp.model.paymentBreakdownWithDeposit(
                         money(bakeryTotal - discountAmount), bakeryDeposit, saleMethod
@@ -765,6 +771,9 @@ class POSViewModel(
                 }
                 created to (listOfNotNull(created.id.takeIf { invoiceRequest != null }) + collectedToInvoice)
             }.onSuccess { (sale, invoiceSaleIds) ->
+                if (depositToApply != null && depositApplied > 0.004 && depositToApply.customerOrderId.isNotBlank()) {
+                    completeOrderOnDelivery(companyId, currentUser, depositToApply, due, saleMethod, sale.id)
+                }
                 if (depositToApply != null && depositApplied > 0.004) {
                     // Constancia de qué ventas pagó. No crítico: cada venta ya lleva el folio.
                     viewModelScope.launch {
@@ -831,9 +840,70 @@ class POSViewModel(
         }
     }
 
+    /** Pedidos de clientes que todavía aceptan anticipo (con saldo, no entregados ni cancelados). */
+    fun loadDepositOrders(companyId: String) {
+        viewModelScope.launch {
+            val now = Clock.System.now().toEpochMilliseconds()
+            val day = 24L * 3600 * 1000
+            runCatching { customerOrderRepository.getOrdersInRange(companyId, now - 30 * day, now + 365 * day) }
+                .onSuccess { list ->
+                    _uiState.update { s ->
+                        s.copy(depositOrders = list.filter { it.acceptsDeposit() }.sortedBy { it.deliveryDate })
+                    }
+                }
+        }
+    }
+
+    /**
+     * Entregado con su anticipo aplicado: el pedido registra lo que se pagó hoy (el saldo) y,
+     * si ya no debe nada, queda entregado. No crítico para el cobro, que ya está escrito: si
+     * falla, se avisa para marcarlo a mano desde el pedido.
+     */
+    private fun completeOrderOnDelivery(
+        companyId: String,
+        currentUser: User,
+        deposit: com.bakery.erp.model.CustomerDeposit,
+        paidToday: Double,
+        method: String,
+        saleId: String
+    ) {
+        val session = _uiState.value.session
+        val branch = _uiState.value.branch
+        viewModelScope.launch {
+            runCatching {
+                val orderId = deposit.customerOrderId
+                if (paidToday > 0.004) {
+                    customerOrderRepository.recordPayment(companyId, orderId, com.bakery.erp.model.CustomerOrderPayment(
+                        type = com.bakery.erp.model.CustomerOrderPaymentType.BALANCE,
+                        amount = paidToday,
+                        method = method,
+                        saleId = saleId,
+                        cashSessionId = session?.id.orEmpty(),
+                        branchId = branch?.id.orEmpty(),
+                        receivedByUserId = currentUser.id,
+                        receivedByUserName = currentUser.displayName,
+                        notes = "Saldo al entregar · anticipo ${deposit.folio}",
+                        depositId = deposit.id,
+                        depositFolio = deposit.folio
+                    ))
+                }
+                val order = customerOrderRepository.getOrder(companyId, orderId)
+                if (order != null && order.balanceAmount <= 0.004 &&
+                    order.status != com.bakery.erp.model.CustomerOrderStatus.DELIVERED &&
+                    order.status != com.bakery.erp.model.CustomerOrderStatus.CANCELLED
+                ) {
+                    customerOrderRepository.updateOrderStatus(companyId, orderId, com.bakery.erp.model.CustomerOrderStatus.DELIVERED)
+                }
+            }.onFailure { e ->
+                _uiState.update { it.copy(error = "La venta quedó, pero no se pudo cerrar el pedido: ${e.message}") }
+            }
+        }
+    }
+
     /**
      * Recibe un anticipo en la caja abierta. El efectivo entra a la gaveta como movimiento (el
      * cuadre de ESTA caja lo explica) y NO como venta: la venta ocurre al entregar el encargo.
+     * Si es de un pedido, queda registrado como pago del pedido.
      */
     fun receiveDeposit(companyId: String, currentUser: User, input: DepositInput) {
         val session = _uiState.value.session ?: return
@@ -854,7 +924,9 @@ class POSViewModel(
                     sessionId = session.id,
                     registerName = session.registerName,
                     receivedByUserId = currentUser.id,
-                    receivedByUserName = currentUser.displayName
+                    receivedByUserName = currentUser.displayName,
+                    customerOrderId = input.orderId,
+                    customerOrderLabel = input.orderLabel
                 ))
                 // Tarjeta o transferencia no entran a la gaveta: quedan solo en el anticipo.
                 if (input.method == SalePaymentMethod.CASH) {
@@ -867,6 +939,26 @@ class POSViewModel(
                         createdByUserName = currentUser.displayName,
                         sourceDepositId = saved.id
                     ))
+                }
+                if (saved.customerOrderId.isNotBlank()) {
+                    // El pedido ve el anticipo como pago suyo (abonado y saldo se recalculan). Si
+                    // esto falla, el dinero ya está bien registrado: se avisa y el anticipo sigue.
+                    runCatching {
+                        customerOrderRepository.recordPayment(companyId, saved.customerOrderId, com.bakery.erp.model.CustomerOrderPayment(
+                            type = com.bakery.erp.model.CustomerOrderPaymentType.ADVANCE,
+                            amount = saved.amount,
+                            method = saved.method,
+                            cashSessionId = session.id,
+                            branchId = branch.id,
+                            receivedByUserId = currentUser.id,
+                            receivedByUserName = currentUser.displayName,
+                            notes = "Anticipo ${saved.folio}",
+                            depositId = saved.id,
+                            depositFolio = saved.folio
+                        ))
+                    }.onFailure { e ->
+                        _uiState.update { it.copy(error = "Anticipo ${saved.folio} recibido, pero no se registró en el pedido: ${e.message}") }
+                    }
                 }
                 saved
             }.onSuccess { saved ->
@@ -909,6 +1001,22 @@ class POSViewModel(
                     createdByUserName = currentUser.displayName,
                     sourceDepositId = deposit.id
                 ))
+                if (deposit.customerOrderId.isNotBlank()) {
+                    // Pago negativo: el pedido vuelve a deber lo devuelto.
+                    runCatching {
+                        customerOrderRepository.recordPayment(companyId, deposit.customerOrderId, com.bakery.erp.model.CustomerOrderPayment(
+                            type = com.bakery.erp.model.CustomerOrderPaymentType.ADVANCE,
+                            amount = -amount,
+                            method = com.bakery.erp.model.CustomerOrderPaymentMethod.CASH,
+                            cashSessionId = session.id,
+                            receivedByUserId = currentUser.id,
+                            receivedByUserName = currentUser.displayName,
+                            notes = "Devolución anticipo ${deposit.folio}: $reason",
+                            depositId = deposit.id,
+                            depositFolio = deposit.folio
+                        ))
+                    }
+                }
                 amount
             }.onSuccess { amount ->
                 _uiState.update {
