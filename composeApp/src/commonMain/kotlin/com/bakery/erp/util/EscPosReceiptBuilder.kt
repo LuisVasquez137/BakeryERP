@@ -111,6 +111,11 @@ fun buildEscPosReceipt(data: ReceiptData, paperWidthMm: Int): ByteArray {
     bigSize(false); bold(false)
     // La cuenta del restaurante del mismo cobro no entra en esta factura: el ticket tiene que
     // decir cuánto se facturó, o el total impreso y el de la SAT no coinciden.
+    // El anticipo ya se pagó otro día: se resta y se dice cuánto se pagó hoy.
+    if (data.depositAmount > 0.004) {
+        line(rightLabel(cols, "Anticipo ${data.depositFolio}", "-Q${data.depositAmount.fmt(2)}"))
+        line(rightLabel(cols, "Pagado hoy", "Q${(data.total - data.depositAmount).coerceAtLeast(0.0).fmt(2)}"))
+    }
     if (invoice != null && kotlin.math.abs(invoice.invoicedTotal - data.total) > 0.004) {
         line(rightLabel(cols, "Monto facturado", "Q${invoice.invoicedTotal.fmt(2)}"))
     }

@@ -1251,7 +1251,8 @@ fun AppNavigation(
                     viewModel = posViewModel,
                     cashSessionViewModel = cashSessionViewModel,
                     bluetoothPrinterManager = bluetoothPrinterManager,
-                    creditViewModel = creditViewModel
+                    creditViewModel = creditViewModel,
+                    documentPrinter = vms.documentPrinter
                 )
             }
         }

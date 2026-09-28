@@ -133,6 +133,10 @@ data class Sale(
     val invoiceReceptorName: String = "",
     /** La factura pedida es "sin detalle". Viaja con la venta por la misma razón que el receptor. */
     val invoiceWithoutDetail: Boolean = false,
+    /** Anticipo aplicado a esta venta ([CustomerDeposit]). El monto va también en el desglose. */
+    val depositId: String = "",
+    val depositFolio: String = "",
+    val depositAmount: Double = 0.0,
     /**
      * Cargo de domicilio de una cuenta de ComandaYa. No viene como línea: la factura lo agrega
      * aparte, o saldría por menos de lo cobrado.
@@ -192,12 +196,19 @@ object SalePaymentMethod {
      * de la gaveta (`expectedCashNow` solo mira `totalCashSales`), así que no descuadra caja.
      */
     const val CREDIT   = "CREDIT"
+    /**
+     * La parte de una venta que pagó un anticipo ([CustomerDeposit]) recibido otro día o en otra
+     * caja. No es un método que se elija: aparece en el desglose. No suma al efectivo esperado
+     * de la gaveta — ese dinero entró como movimiento en la caja donde se recibió.
+     */
+    const val CUSTOMER_DEPOSIT = "CUSTOMER_DEPOSIT"
 
     fun label(method: String) = when (method) {
         CASH     -> "Efectivo"
         CARD     -> "Tarjeta"
         TRANSFER -> "Transferencia"
         CREDIT   -> "Crédito"
+        CUSTOMER_DEPOSIT -> "Anticipo"
         else     -> "Desconocido"
     }
 

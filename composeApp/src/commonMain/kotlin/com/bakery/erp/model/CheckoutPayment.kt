@@ -19,7 +19,14 @@ data class CheckoutPayment(
      */
     val invoiceReceptorId: String = "",
     val invoiceReceptorName: String = "",
-    val invoiceWithoutDetail: Boolean = false
+    val invoiceWithoutDetail: Boolean = false,
+    /**
+     * Parte de ESTA cuenta que paga un anticipo del cliente. Se arma por cuenta (ver
+     * `planDepositApplication`): el anticipo se reparte entre las ventas del cobro.
+     */
+    val depositId: String = "",
+    val depositFolio: String = "",
+    val depositAmount: Double = 0.0
 )
 
 /**

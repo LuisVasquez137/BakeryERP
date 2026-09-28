@@ -136,7 +136,12 @@ data class POSUiState(
     /** Cuenta recién recibida — para el acuse; se limpia al cerrarlo. */
     val justCollected: Sale? = null,
     /** Factura de la venta recién cobrada, para el diálogo de éxito. Null = no se facturó. */
-    val invoiceProgress: InvoiceProgress? = null
+    val invoiceProgress: InvoiceProgress? = null,
+    /** Anticipos de clientes con saldo, de todas las sucursales (se cargan al abrir el cobro). */
+    val openDeposits: List<com.bakery.erp.model.CustomerDeposit> = emptyList(),
+    val isDepositBusy: Boolean = false,
+    /** Comprobante por imprimir (recién recibido o reimpresión). La pantalla lo manda y lo limpia. */
+    val depositToPrint: com.bakery.erp.model.CustomerDeposit? = null
 )
 
 /**
@@ -179,7 +184,9 @@ class POSViewModel(
     /** Ventas a crédito, abonos cobrados en caja y adelantos a colaboradores. */
     private val creditRepository: com.bakery.erp.domain.CreditRepository,
     /** Facturación electrónica: certificar al cobrar y consultar NIT. */
-    private val felRepository: com.bakery.erp.domain.FelRepository
+    private val felRepository: com.bakery.erp.domain.FelRepository,
+    /** Anticipos de clientes: recibir, aplicar al cobrar y devolver. */
+    private val depositRepository: com.bakery.erp.domain.CustomerDepositRepository
 ) : ViewModel() {
 
     private var organizationName: String = ""
@@ -508,7 +515,9 @@ class POSViewModel(
         /** Colaborador que compra pagando en efectivo y tiene descuento configurado. */
         discountAccount: com.bakery.erp.model.CreditAccount? = null,
         /** A quién facturar, o null si el cliente no pidió factura. */
-        invoice: FelInvoiceRequest? = null
+        invoice: FelInvoiceRequest? = null,
+        /** Anticipo del cliente que paga parte (o todo) de este cobro. */
+        deposit: com.bakery.erp.model.CustomerDeposit? = null
     ) {
         val state = _uiState.value
         val session = state.session ?: run {
@@ -540,11 +549,18 @@ class POSViewModel(
                 _uiState.update { it.copy(error = "Las cuentas del restaurante no se pueden cargar a crédito") }; return
             }
         }
-        val effectiveTendered = if (paymentMethod == SalePaymentMethod.CASH) tenderedAmount else total
-        if (effectiveTendered < total) {
+        // El anticipo paga primero; hoy solo se cobra el saldo. No se combina con fiado.
+        val depositToApply = deposit?.takeIf { !isCredit && it.isOpen }
+        val depositApplied = depositToApply?.let { money(minOf(it.remaining, total)) } ?: 0.0
+        val due = money(total - depositApplied)
+        val coveredByDeposit = depositApplied > 0.004 && due <= 0.004
+        // Todo pagado con anticipo: la venta no tiene otro método que mostrar.
+        val saleMethod = if (coveredByDeposit) SalePaymentMethod.CUSTOMER_DEPOSIT else paymentMethod
+        val effectiveTendered = if (paymentMethod == SalePaymentMethod.CASH && !coveredByDeposit) tenderedAmount else due
+        if (effectiveTendered < due - 0.004) {
             _uiState.update { it.copy(error = "Monto recibido menor al total") }; return
         }
-        val change = if (paymentMethod == SalePaymentMethod.CASH) effectiveTendered - total else 0.0
+        val change = if (paymentMethod == SalePaymentMethod.CASH) (effectiveTendered - due).coerceAtLeast(0.0) else 0.0
         val cashBills = if (paymentMethod == SalePaymentMethod.CASH) bills.filterValues { it > 0 } else emptyMap()
 
         val snapshotCart = state.cart
@@ -564,9 +580,15 @@ class POSViewModel(
                 _uiState.update { it.copy(error = problem) }; return
             }
         }
+        // Cuánto del anticipo va a cada venta: primero las cuentas del restaurante, después el pan.
+        val depositPlan = com.bakery.erp.model.planDepositApplication(
+            depositApplied,
+            restaurantCart.map { it.pendingSaleId to it.subtotal } +
+                listOfNotNull(if (bakeryCart.isNotEmpty()) BAKERY_SALE_KEY to money(bakeryTotal - discountAmount) else null)
+        )
         val payment = CheckoutPayment(
             checkoutId = newCheckoutId(),
-            method = paymentMethod,
+            method = saleMethod,
             checkoutTotal = total,
             tenderedAmount = effectiveTendered,
             changeAmount = change,
@@ -575,6 +597,10 @@ class POSViewModel(
         )
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, isCheckingOut = true, error = null) }
+            // Lo del anticipo que ya quedó escrito en alguna venta. Si el cobro se corta a medias,
+            // se libera solo el resto: lo que pagó una cuenta ya recibida es real.
+            var depositUsed = 0.0
+            var depositReserved = false
             runCatching {
                 // Revalidar la sesión contra Firestore antes de escribir: debe seguir OPEN y ser
                 // del cajero actual. Evita registrar ventas contra una sesión ya cerrada por un
@@ -588,10 +614,18 @@ class POSViewModel(
                     throw IllegalStateException("Esta sesión de caja pertenece a ${freshSession.cashierName}.")
                 }
 
+                // El anticipo se reserva ANTES de escribir ventas: si otra caja lo aplicó primero,
+                // el cobro se corta acá sin haber movido nada.
+                if (depositToApply != null && depositApplied > 0.004) {
+                    depositRepository.apply(companyId, depositToApply.id, depositApplied, branch.name)
+                    depositReserved = true
+                }
+
                 // Primero lo del restaurante: su guarda de "ya la recibió otra caja" es la que
                 // puede fallar, y tiene que hacerlo antes de mover inventario del mostrador.
                 val collected = restaurantCart.map { line ->
                     val invoiceThis = invoiceRequest != null && line.pendingSaleId in invoiceableRestaurant
+                    val depositHere = depositPlan[line.pendingSaleId] ?: 0.0
                     saleRepository.collectPendingSale(
                         companyId = companyId,
                         saleId = line.pendingSaleId,
@@ -600,12 +634,16 @@ class POSViewModel(
                         registerName = session.registerName,
                         cashierId = currentUser.id,
                         cashierName = currentUser.displayName,
-                        checkout = if (!invoiceThis) payment else payment.copy(
+                        checkout = (if (!invoiceThis) payment else payment.copy(
                             invoiceReceptorId = invoiceRequest!!.receptorId,
                             invoiceReceptorName = invoiceRequest.receptorName,
                             invoiceWithoutDetail = invoiceRequest.withoutDetail
+                        )).copy(
+                            depositId = depositToApply?.id.orEmpty(),
+                            depositFolio = depositToApply?.folio.orEmpty(),
+                            depositAmount = depositHere
                         )
-                    )
+                    ).also { depositUsed += depositHere }
                 }
                 // Las ventas que van en la factura de este cobro: las que quedaron SOLICITADA.
                 val collectedToInvoice = collected
@@ -613,6 +651,7 @@ class POSViewModel(
 
                 if (bakeryCart.isEmpty()) return@runCatching collected.first() to collectedToInvoice
 
+                val bakeryDeposit = depositPlan[BAKERY_SALE_KEY] ?: 0.0
                 val sale = Sale(
                     branchId = branch.id,
                     branchName = branch.name,
@@ -626,7 +665,7 @@ class POSViewModel(
                     total = bakeryTotal - discountAmount,
                     discountAccountId = if (discountAmount > 0) discountAccount?.id.orEmpty() else "",
                     discountLabel = if (discountAmount > 0) "Descuento colaborador: ${discountAccount?.name.orEmpty()}" else "",
-                    paymentMethod = paymentMethod,
+                    paymentMethod = saleMethod,
                     tenderedAmount = effectiveTendered,
                     changeAmount = change,
                     // Unidades por grupo en el encabezado: el conteo de cierre las reparte
@@ -645,7 +684,14 @@ class POSViewModel(
                     invoiceStatus = if (invoiceRequest != null) FelInvoiceStatus.SOLICITADA else "",
                     invoiceReceptorId = invoiceRequest?.receptorId.orEmpty(),
                     invoiceReceptorName = invoiceRequest?.receptorName.orEmpty(),
-                    invoiceWithoutDetail = invoiceRequest?.withoutDetail == true
+                    invoiceWithoutDetail = invoiceRequest?.withoutDetail == true,
+                    depositId = if (bakeryDeposit > 0.004) depositToApply?.id.orEmpty() else "",
+                    depositFolio = if (bakeryDeposit > 0.004) depositToApply?.folio.orEmpty() else "",
+                    depositAmount = bakeryDeposit,
+                    // Con anticipo, la caja solo suma el saldo (ver createSale).
+                    paymentBreakdown = com.bakery.erp.model.paymentBreakdownWithDeposit(
+                        money(bakeryTotal - discountAmount), bakeryDeposit, saleMethod
+                    )
                 )
                 val lines = bakeryCart.map { line ->
                     if (line.isGroup) {
@@ -688,6 +734,7 @@ class POSViewModel(
                     )
                 }
                 val created = saleRepository.createSale(companyId, sale, lines)
+                depositUsed += bakeryDeposit
                 if (isCredit && credit != null) {
                     // El cargo va DESPUÉS de la venta: sin venta no hay nada que deber. Si
                     // fallara acá, la venta queda y el error lo dice, para cargarlo a mano.
@@ -718,9 +765,18 @@ class POSViewModel(
                 }
                 created to (listOfNotNull(created.id.takeIf { invoiceRequest != null }) + collectedToInvoice)
             }.onSuccess { (sale, invoiceSaleIds) ->
+                if (depositToApply != null && depositApplied > 0.004) {
+                    // Constancia de qué ventas pagó. No crítico: cada venta ya lleva el folio.
+                    viewModelScope.launch {
+                        runCatching { depositRepository.linkSales(companyId, depositToApply.id, listOf(sale.id) + invoiceSaleIds) }
+                    }
+                }
                 // El ticket y el acuse muestran el COBRO completo, no solo la venta de pan.
                 val checkoutSale = sale.copy(subtotal = total + discountAmount, discount = discountAmount,
-                    total = total, tenderedAmount = effectiveTendered, changeAmount = change)
+                    total = total, tenderedAmount = effectiveTendered, changeAmount = change,
+                    paymentMethod = saleMethod,
+                    depositFolio = depositToApply?.folio.orEmpty().takeIf { depositApplied > 0.004 }.orEmpty(),
+                    depositAmount = depositApplied)
                 val receipt = buildReceiptData(checkoutSale, snapshotCart, branch)
                 val record = CheckoutRecord(
                     checkoutId = payment.checkoutId,
@@ -735,7 +791,8 @@ class POSViewModel(
                         if (l.isRestaurant) l.productName
                         else "${l.quantity.fmtMoney(0)} × ${l.productName}"
                     } + listOfNotNull(
-                        if (discountAmount > 0) "Descuento ${discountAccount?.name.orEmpty()}: −Q ${discountAmount.fmtMoney(2)}" else null
+                        if (discountAmount > 0) "Descuento ${discountAccount?.name.orEmpty()}: −Q ${discountAmount.fmtMoney(2)}" else null,
+                        if (depositApplied > 0.004) "Anticipo ${depositToApply?.folio.orEmpty()}: −Q ${depositApplied.fmtMoney(2)}" else null
                     ),
                     cashierName = currentUser.displayName
                 )
@@ -753,10 +810,123 @@ class POSViewModel(
                 }
                 if (invoiced && invoiceRequest != null) certifyInvoice(companyId, invoiceSaleIds, invoiceRequest)
             }.onFailure { err ->
+                // Lo reservado del anticipo que no llegó a ninguna venta vuelve a estar disponible.
+                val unused = money(depositApplied - depositUsed)
+                if (depositReserved && depositToApply != null && unused > 0.004) {
+                    runCatching { depositRepository.release(companyId, depositToApply.id, unused) }
+                }
                 _uiState.update { it.copy(isLoading = false, isCheckingOut = false, error = err.message) }
             }
         }
     }
+
+    // ── Anticipos de clientes ─────────────────────────────────────────────────
+
+    /** Anticipos con saldo de todas las sucursales: el cliente recoge donde quiera. */
+    fun loadOpenDeposits(companyId: String) {
+        viewModelScope.launch {
+            runCatching { depositRepository.getOpen(companyId) }
+                .onSuccess { list -> _uiState.update { it.copy(openDeposits = list) } }
+                .onFailure { e -> _uiState.update { it.copy(error = "No se pudieron cargar los anticipos: ${e.message}") } }
+        }
+    }
+
+    /**
+     * Recibe un anticipo en la caja abierta. El efectivo entra a la gaveta como movimiento (el
+     * cuadre de ESTA caja lo explica) y NO como venta: la venta ocurre al entregar el encargo.
+     */
+    fun receiveDeposit(companyId: String, currentUser: User, input: DepositInput) {
+        val session = _uiState.value.session ?: return
+        val branch = _uiState.value.branch ?: return
+        if (_uiState.value.isDepositBusy || input.amount <= 0.0) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isDepositBusy = true, error = null) }
+            runCatching {
+                val saved = depositRepository.create(companyId, com.bakery.erp.model.CustomerDeposit(
+                    customerName = input.customerName,
+                    customerPhone = input.customerPhone,
+                    description = input.description,
+                    deliveryLabel = input.deliveryLabel,
+                    amount = money(input.amount),
+                    method = input.method,
+                    branchId = branch.id,
+                    branchName = branch.name,
+                    sessionId = session.id,
+                    registerName = session.registerName,
+                    receivedByUserId = currentUser.id,
+                    receivedByUserName = currentUser.displayName
+                ))
+                // Tarjeta o transferencia no entran a la gaveta: quedan solo en el anticipo.
+                if (input.method == SalePaymentMethod.CASH) {
+                    cashSessionRepository.addMovement(companyId, com.bakery.erp.model.CashMovement(
+                        sessionId = session.id,
+                        type = com.bakery.erp.model.CashMovementType.DEPOSIT,
+                        amount = saved.amount,
+                        reason = "Anticipo ${saved.folio} · ${saved.customerName}",
+                        createdByUserId = currentUser.id,
+                        createdByUserName = currentUser.displayName,
+                        sourceDepositId = saved.id
+                    ))
+                }
+                saved
+            }.onSuccess { saved ->
+                _uiState.update {
+                    it.copy(
+                        isDepositBusy = false,
+                        depositToPrint = saved,
+                        openDeposits = listOf(saved) + it.openDeposits,
+                        notice = "Anticipo ${saved.folio} recibido: Q ${saved.amount.fmtMoney(2)}"
+                    )
+                }
+            }.onFailure { e -> _uiState.update { it.copy(isDepositBusy = false, error = e.message) } }
+        }
+    }
+
+    /**
+     * Devuelve lo que queda de un anticipo, en efectivo de ESTA gaveta. Se valida contra el
+     * efectivo de la sesión recién leída: no se entrega dinero que no está.
+     */
+    fun refundDeposit(companyId: String, currentUser: User, deposit: com.bakery.erp.model.CustomerDeposit, reason: String) {
+        val session = _uiState.value.session ?: return
+        if (_uiState.value.isDepositBusy) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isDepositBusy = true, error = null) }
+            runCatching {
+                val fresh = cashSessionRepository.getSession(companyId, session.id)
+                    ?: throw IllegalStateException("La sesión de caja ya no existe.")
+                if (fresh.expectedCashNow + 0.004 < deposit.remaining) {
+                    throw IllegalStateException(
+                        "En esta caja hay Q ${fresh.expectedCashNow.fmtMoney(2)}: no alcanza para devolver Q ${deposit.remaining.fmtMoney(2)}."
+                    )
+                }
+                val amount = depositRepository.refund(companyId, deposit.id, currentUser.displayName, reason)
+                cashSessionRepository.addMovement(companyId, com.bakery.erp.model.CashMovement(
+                    sessionId = session.id,
+                    type = com.bakery.erp.model.CashMovementType.WITHDRAWAL,
+                    amount = amount,
+                    reason = "Devolución anticipo ${deposit.folio} · ${deposit.customerName}",
+                    createdByUserId = currentUser.id,
+                    createdByUserName = currentUser.displayName,
+                    sourceDepositId = deposit.id
+                ))
+                amount
+            }.onSuccess { amount ->
+                _uiState.update {
+                    it.copy(
+                        isDepositBusy = false,
+                        openDeposits = it.openDeposits.filterNot { d -> d.id == deposit.id },
+                        notice = "Anticipo ${deposit.folio} devuelto: Q ${amount.fmtMoney(2)}"
+                    )
+                }
+            }.onFailure { e -> _uiState.update { it.copy(isDepositBusy = false, error = e.message) } }
+        }
+    }
+
+    fun reprintDeposit(deposit: com.bakery.erp.model.CustomerDeposit) = _uiState.update { it.copy(depositToPrint = deposit) }
+    fun consumeDepositToPrint() = _uiState.update { it.copy(depositToPrint = null) }
+
+    /** Nombre comercial para el encabezado de los comprobantes, igual que el ticket. */
+    fun receiptCompanyName(): String = organizationName.ifEmpty { _uiState.value.branch?.name ?: "" }
 
     /**
      * Carga los cobros de la sesión para "Último cobro". Los de este aparato ya están en
@@ -1076,6 +1246,11 @@ private const val POPULARITY_DAYS = 30
 
 /** Cuántos cobros guarda "Último cobro" para ir hacia atrás. */
 private const val MAX_RECENT_CHECKOUTS = 10
+
+/** Clave de la venta de pan en el reparto del anticipo (las del restaurante van por su id). */
+private const val BAKERY_SALE_KEY = "__bakery__"
+
+private fun money(v: Double): Double = kotlin.math.round(v * 100) / 100
 
 /** Cuánto espera el acuse a que Digifact certifique antes de decir "se completa sola". */
 private const val INVOICE_WAIT_MS = 15_000L

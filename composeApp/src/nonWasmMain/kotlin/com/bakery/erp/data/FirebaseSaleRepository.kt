@@ -205,9 +205,11 @@ class FirebaseSaleRepository(
         }
         val sessionInc = async {
             if (sale.sessionId.isNotEmpty()) {
-                cashSessionRepository.incrementSaleTotals(
-                    companyId, sale.sessionId, sale.paymentMethod, sale.total
-                )
+                // Por partes: con anticipo, solo el saldo es dinero de esta gaveta. En serie,
+                // porque incrementSaleTotals lee y reescribe la sesión.
+                sale.effectivePaymentBreakdown.forEach { (method, amount) ->
+                    cashSessionRepository.incrementSaleTotals(companyId, sale.sessionId, method, amount)
+                }
             }
         }
 
@@ -317,13 +319,19 @@ class FirebaseSaleRepository(
             // no están en la gaveta.
             val updated = if (checkout == null) received else received.copy(
                 paymentMethod = checkout.method,
-                paymentBreakdown = emptyMap(),
                 checkoutId = checkout.checkoutId,
                 checkoutTotal = checkout.checkoutTotal,
                 tenderedAmount = checkout.tenderedAmount,
                 changeAmount = checkout.changeAmount,
                 billValues = checkout.billValues,
-                billCounts = checkout.billCounts
+                billCounts = checkout.billCounts,
+                depositId = checkout.depositId.takeIf { checkout.depositAmount > 0.004 }.orEmpty(),
+                depositFolio = checkout.depositFolio.takeIf { checkout.depositAmount > 0.004 }.orEmpty(),
+                depositAmount = checkout.depositAmount,
+                // Con anticipo, el desglose separa lo que paga el anticipo del saldo cobrado hoy.
+                paymentBreakdown = com.bakery.erp.model.paymentBreakdownWithDeposit(
+                    received.total, checkout.depositAmount, checkout.method
+                )
             ).let { s ->
                 // Se pidió factura del cobro y ComandaYa no la facturó (sin estado): queda
                 // SOLICITADA en esta misma escritura, así el reintento del servidor la encuentra.
@@ -515,6 +523,9 @@ class FirebaseSaleRepository(
         "invoiceReceptorId" to invoiceReceptorId,
         "invoiceReceptorName" to invoiceReceptorName,
         "invoiceWithoutDetail" to invoiceWithoutDetail,
+        "depositId" to depositId,
+        "depositFolio" to depositFolio,
+        "depositAmount" to depositAmount,
         "externalDeliveryFee" to externalDeliveryFee,
         "externalDteId" to externalDteId,
         "invoiceConflict" to invoiceConflict,
@@ -569,6 +580,10 @@ class FirebaseSaleRepository(
         invoiceReceptorId = runCatching { get<String?>("invoiceReceptorId") }.getOrNull() ?: "",
         invoiceReceptorName = runCatching { get<String?>("invoiceReceptorName") }.getOrNull() ?: "",
         invoiceWithoutDetail = runCatching { get<Boolean?>("invoiceWithoutDetail") }.getOrNull() ?: false,
+        depositId = runCatching { get<String?>("depositId") }.getOrNull() ?: "",
+        depositFolio = runCatching { get<String?>("depositFolio") }.getOrNull() ?: "",
+        depositAmount = runCatching { get<Double?>("depositAmount") }.getOrNull()
+            ?: runCatching { get<Long?>("depositAmount")?.toDouble() }.getOrNull() ?: 0.0,
         externalDeliveryFee = runCatching { get<Double?>("externalDeliveryFee") }.getOrNull()
             ?: runCatching { get<Long?>("externalDeliveryFee")?.toDouble() }.getOrNull() ?: 0.0,
         externalDteId = runCatching { get<String?>("externalDteId") }.getOrNull() ?: "",

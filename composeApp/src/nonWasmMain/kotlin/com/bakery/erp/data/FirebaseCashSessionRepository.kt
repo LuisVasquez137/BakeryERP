@@ -117,6 +117,12 @@ class FirebaseCashSessionRepository(
                 totalSales = current.totalSales + amount,
                 saleCount = current.saleCount + 1
             )
+            // La parte pagada con anticipo es venta de hoy, pero su dinero entró a otra gaveta
+            // (o a ésta, otro día): suma al total vendido y a nada que se cuente en la gaveta. No
+            // suma una venta más: la cuenta la parte que sí se cobró.
+            SalePaymentMethod.CUSTOMER_DEPOSIT -> current.copy(
+                totalSales = current.totalSales + amount
+            )
             else -> current.copy(
                 totalSales = current.totalSales + amount,
                 saleCount = current.saleCount + 1
@@ -421,7 +427,8 @@ class FirebaseCashSessionRepository(
         "spotCheckId" to spotCheckId,
         "sourcePurchaseId" to sourcePurchaseId,
         "sourceMovementId" to sourceMovementId,
-        "sourceCreditMovementId" to sourceCreditMovementId
+        "sourceCreditMovementId" to sourceCreditMovementId,
+        "sourceDepositId" to sourceDepositId
     )
 
     private fun DocumentSnapshot.toMovement() = CashMovement(
@@ -438,7 +445,8 @@ class FirebaseCashSessionRepository(
         spotCheckId = get<String?>("spotCheckId"),
         sourcePurchaseId = get<String?>("sourcePurchaseId") ?: "",
         sourceMovementId = get<String?>("sourceMovementId") ?: "",
-        sourceCreditMovementId = get<String?>("sourceCreditMovementId") ?: ""
+        sourceCreditMovementId = get<String?>("sourceCreditMovementId") ?: "",
+        sourceDepositId = runCatching { get<String?>("sourceDepositId") }.getOrNull() ?: ""
     )
 
     private fun DocumentSnapshot.readMillis(field: String): Long =

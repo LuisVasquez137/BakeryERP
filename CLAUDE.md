@@ -1829,6 +1829,41 @@ cuaderno se carga como ajuste "Saldo anterior (cuaderno)".
   línea (medio centavo sube); el pan de grupo y el restaurante no descuentan. Va a
   `Sale.discount` + `discountAccountId/Label`. Lo fiado, con tarjeta o transferencia: sin descuento.
 
+### Anticipos de clientes (`CustomerDeposit`) — reemplazan el papel de "ya pagó"
+
+El cliente deja un encargo (pan, un pastel, comida del restaurante) con anticipo o pagado
+completo, y lo recoge otro día en **cualquier caja o sucursal**. El anticipo es dinero que entra
+a una gaveta hoy pero **todavía no es venta** (si cancela, se devuelve):
+
+- **Recibir** (menú de la caja abierta → "Anticipo de cliente"): `companies/{c}/customerDeposits`
+  con folio correlativo `ANT-0042` asignado en transacción (`counters/customerDeposits`). El
+  efectivo entra como `CashMovement` DEPOSIT con `sourceDepositId` — el cuadre de ESA caja lo
+  explica — y **no suma a ventas**. Tarjeta/transferencia no tocan la gaveta (mismo criterio que
+  el abono de crédito). Se imprime el comprobante (`util/CustomerDepositPrint.kt`, por
+  `DocumentPrinter`): folio grande y "no es factura".
+- **Aplicar** (cobro → "Aplicar anticipo de cliente", busca por folio/nombre/teléfono con
+  `CustomerDeposit.matches`): la venta se registra por el TOTAL y el anticipo va en el desglose
+  como `SalePaymentMethod.CUSTOMER_DEPOSIT`, que `incrementSaleTotals` suma a `totalSales` y a
+  nada de la gaveta; hoy solo se cobra el saldo. Se reparte entre las ventas del cobro con
+  `planDepositApplication` (restaurante primero, después el pan). Puede ser parcial: el resto
+  queda abierto. No se combina con fiado.
+- **Orden de escritura**: el anticipo se reserva (`apply`, en transacción contra el saldo recién
+  leído) ANTES de escribir ventas; si el cobro se corta, `release` devuelve solo lo que no llegó
+  a ninguna venta. `createSale` ahora suma a la caja **por partes** (`effectivePaymentBreakdown`),
+  igual que `collectPendingSale`.
+- **Devolver** ("Anticipos pendientes" → Devolver): sale en efectivo de la caja abierta, validado
+  contra `expectedCashNow` recién leído; `WITHDRAWAL` con `sourceDepositId`. Los movimientos con
+  `sourceDepositId` no se corrigen desde "Movimientos de caja".
+- **La factura sale al entregar, por el total** de la venta. El comprobante del anticipo no es
+  factura.
+- Restaurante: el encargo se anota en ComandaYa (la cocina lo necesita), el anticipo en BakeOS; al
+  entregar, la orden llega como cuenta pendiente, se agrega al carrito y se le aplica el anticipo.
+  Regla de operación: anotar el folio en la nota de la orden de ComandaYa.
+- El ticket de la venta muestra "Anticipo ANT-0042 −Q" y "Pagado hoy". Lógica pura con tests en
+  `CustomerDepositTest` y `CustomerDepositPrintTest`.
+- **Pendiente**: ligar el anticipo a un `CustomerOrder` (pasteles) — ese módulo tiene modelo de
+  anticipos (`CustomerOrderPayment`) que ninguna pantalla usa.
+
 ### Facturación electrónica (FEL Guatemala, Digifact) — en construcción
 
 Réplica en BakeOS de lo que ComandaYa ya factura (mismo certificador, mismo NIT, mismos

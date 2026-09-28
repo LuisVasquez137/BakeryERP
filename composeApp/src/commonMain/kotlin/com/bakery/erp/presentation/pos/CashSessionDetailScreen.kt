@@ -409,6 +409,7 @@ private fun canAct(
     // Un abono a crédito o un adelanto se corrige en la cuenta de crédito, donde tiene que
     // cuadrar el saldo; compensarlo solo acá dejaría la deuda diciendo otra cosa.
     if (m.sourceCreditMovementId.isNotEmpty()) return false
+    if (m.sourceDepositId.isNotEmpty()) return false
     return m.type == CashMovementType.EXPENSE && m.sourcePurchaseId.isNotEmpty() ||
         m.type == CashMovementType.DEPOSIT ||
         m.type == CashMovementType.FUND_ADDITION ||

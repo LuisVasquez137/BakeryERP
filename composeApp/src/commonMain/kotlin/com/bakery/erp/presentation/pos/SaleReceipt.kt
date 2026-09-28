@@ -49,7 +49,9 @@ internal fun saleReceiptData(
                     " (llevó ${sale.creditPersonName})" else "")
         else SalePaymentMethod.label(sale.paymentMethod),
         tenderedAmount = sale.tenderedAmount,
-        changeAmount = sale.changeAmount
+        changeAmount = sale.changeAmount,
+        depositFolio = sale.depositFolio,
+        depositAmount = sale.depositAmount
     )
 }
 

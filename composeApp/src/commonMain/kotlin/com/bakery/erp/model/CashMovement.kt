@@ -41,7 +41,13 @@ data class CashMovement(
      * adelanto a un colaborador que salió de la gaveta. Estos no se corrigen desde la lista de
      * la caja: se corrigen en la cuenta, que es donde el saldo tiene que cuadrar.
      */
-    val sourceCreditMovementId: String = ""
+    val sourceCreditMovementId: String = "",
+    /**
+     * Anticipo de cliente que lo causó: la entrada al recibirlo o la salida al devolverlo. No se
+     * corrige desde la lista de la caja: se corrige en el anticipo, que es lo que el cliente
+     * tiene en su comprobante.
+     */
+    val sourceDepositId: String = ""
 )
 
 object CashMovementType {

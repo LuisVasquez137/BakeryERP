@@ -121,6 +121,7 @@ fun buildReceiptHtml(data: ReceiptData): String {
       <div class="row"><span>Subtotal</span><span>Q${data.subtotal.fmt(2)}</span></div>
       $discountRow
       <div class="row total"><span>TOTAL</span><span>Q${data.total.fmt(2)}</span></div>
+      ${if (data.depositAmount > 0.004) """<div class="row"><span>Anticipo ${escapeHtml(data.depositFolio)}</span><span>-Q${data.depositAmount.fmt(2)}</span></div><div class="row"><span>Pagado hoy</span><span>Q${(data.total - data.depositAmount).coerceAtLeast(0.0).fmt(2)}</span></div>""" else ""}
       $invoicedRow
       <div class="sep"></div>
       <div class="row"><span>Pago</span><span>${escapeHtml(data.paymentMethodLabel)}</span></div>

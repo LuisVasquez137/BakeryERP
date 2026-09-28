@@ -76,7 +76,13 @@ fun PaymentDialog(
     employeeDiscount: Double = 0.0,
     onDiscountChange: (com.bakery.erp.model.CreditAccount?) -> Unit = {},
     /** Null = esta sucursal no factura y la sección no aparece. */
-    invoiceOptions: InvoiceOptions? = null
+    invoiceOptions: InvoiceOptions? = null,
+    /**
+     * Anticipos de clientes con saldo, de cualquier sucursal. Null = la opción no aparece. El
+     * elegido se avisa por [onDepositChange] (igual que el descuento) y reduce lo que se cobra.
+     */
+    deposits: List<com.bakery.erp.model.CustomerDeposit>? = null,
+    onDepositChange: (com.bakery.erp.model.CustomerDeposit?) -> Unit = {}
 ) {
     val invoiceForm = remember { InvoiceFormState(invoiceOptions?.defaultOn == true) }
     var discountAccount by remember { mutableStateOf<com.bakery.erp.model.CreditAccount?>(null) }
@@ -86,7 +92,14 @@ fun PaymentDialog(
     val isCash = method == SalePaymentMethod.CASH
     val isCredit = method == SalePaymentMethod.CREDIT
     val discountAmount = if (isCash && discountAccount != null) employeeDiscount else 0.0
-    @Suppress("NAME_SHADOWING") val total = baseTotal - discountAmount
+    var deposit by remember { mutableStateOf<com.bakery.erp.model.CustomerDeposit?>(null) }
+    var depositPickerOpen by remember { mutableStateOf(false) }
+    // Lo que vale la venta (va en la factura) y lo que se cobra hoy: el anticipo ya se pagó en
+    // otra caja u otro día. No se combina con fiado — ahí no entra dinero que descontar.
+    val saleTotal = baseTotal - discountAmount
+    val depositApplied = if (!isCredit) minOf(deposit?.remaining ?: 0.0, saleTotal).coerceAtLeast(0.0) else 0.0
+    @Suppress("NAME_SHADOWING") val total = saleTotal - depositApplied
+    val coveredByDeposit = depositApplied > 0.004 && total <= 0.004
     var credit by remember { mutableStateOf<CreditCharge?>(null) }
     val creditReady = credit != null && (credit?.account?.requiresPerson != true || credit?.personName?.isNotBlank() == true)
     var tenderedText by remember { mutableStateOf("") }
@@ -100,11 +113,11 @@ fun PaymentDialog(
     val invoicedTotal = ((invoiceOptions?.invoiceableTotal ?: 0.0) - discountAmount).coerceAtLeast(0.0)
     val invoice = if (invoiceOptions != null) invoiceForm.request() else null
     val invoiceReady = invoiceOptions == null || invoiceForm.problem(invoicedTotal) == null
-    val canConfirm = invoiceReady && when (method) {
+    val canConfirm = invoiceReady && (coveredByDeposit || when (method) {
         SalePaymentMethod.CASH -> tendered >= total - 0.004 && total > 0
         SalePaymentMethod.CREDIT -> creditReady && total > 0
         else -> total > 0
-    }
+    })
 
     fun confirm() {
         val c = credit
@@ -136,6 +149,12 @@ fun PaymentDialog(
                         ) { t ->
                             Text("Q ${t.fmtMoney(2)}", color = Color.White, fontWeight = FontWeight.ExtraBold,
                                 style = MaterialTheme.typography.displaySmall)
+                        }
+                        if (depositApplied > 0.004) {
+                            Text(
+                                "Total Q ${saleTotal.fmtMoney(2)} · Anticipo ${deposit?.folio.orEmpty()} −Q ${depositApplied.fmtMoney(2)}",
+                                color = Color.White, style = MaterialTheme.typography.bodySmall
+                            )
                         }
                         if (discountAmount > 0) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -171,7 +190,34 @@ fun PaymentDialog(
                         }
                     }
 
-                    when {
+                    if (deposits != null && !isCredit) {
+                        val d = deposit
+                        if (d == null) {
+                            OutlinedButton(onClick = { depositPickerOpen = true }, modifier = Modifier.fillMaxWidth()) {
+                                Text("Aplicar anticipo de cliente")
+                            }
+                        } else {
+                            Surface(shape = RoundedCornerShape(12.dp), color = BrandColors.AccentSoft) {
+                                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text("Anticipo ${d.folio} · ${d.customerName}", fontWeight = FontWeight.SemiBold,
+                                            color = BrandColors.Primary)
+                                        Text(
+                                            if (d.remaining > depositApplied + 0.004)
+                                                "Se aplican Q ${depositApplied.fmtMoney(2)}; le quedan Q ${(d.remaining - depositApplied).fmtMoney(2)}"
+                                            else "Se aplican Q ${depositApplied.fmtMoney(2)}",
+                                            style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate
+                                        )
+                                    }
+                                    TextButton(onClick = { deposit = null; onDepositChange(null) }) { Text("Quitar") }
+                                }
+                            }
+                        }
+                    }
+                    if (coveredByDeposit) {
+                        InfoNote("El anticipo cubre todo: no hay nada que cobrar.")
+                    } else when {
                         isCredit && creditAccounts != null -> {
                             InfoNote("No entra dinero: se carga a la cuenta y se cobra cuando venga a pagar.")
                             CreditChargeSelector(accounts = creditAccounts, selection = credit, onChange = { credit = it })
@@ -279,13 +325,25 @@ fun PaymentDialog(
                         modifier = Modifier.weight(1f).height(56.dp)
                     ) {
                         Text(
-                            if (isCredit) "Cargar Q ${total.fmtMoney(2)} a la cuenta" else "Cobrar Q ${total.fmtMoney(2)}",
+                            when {
+                                coveredByDeposit -> "Entregar (pagado con anticipo)"
+                                isCredit -> "Cargar Q ${total.fmtMoney(2)} a la cuenta"
+                                else -> "Cobrar Q ${total.fmtMoney(2)}"
+                            },
                             style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold
                         )
                     }
                 }
             }
         }
+    }
+
+    if (depositPickerOpen && deposits != null) {
+        DepositPickerDialog(
+            deposits = deposits,
+            onDismiss = { depositPickerOpen = false },
+            onSelect = { deposit = it; onDepositChange(it); depositPickerOpen = false }
+        )
     }
 
     if (discountPickerOpen) {

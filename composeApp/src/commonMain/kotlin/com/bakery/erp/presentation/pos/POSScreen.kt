@@ -92,7 +92,9 @@ fun POSScreen(
     cashSessionViewModel: CashSessionViewModel,
     bluetoothPrinterManager: BluetoothPrinterManager,
     /** Cuentas de crédito: vender fiado, cobrar abonos y dar adelantos desde la caja. */
-    creditViewModel: com.bakery.erp.presentation.credit.CreditViewModel? = null
+    creditViewModel: com.bakery.erp.presentation.credit.CreditViewModel? = null,
+    /** Comprobantes que no son ticket de venta (anticipos de clientes). */
+    documentPrinter: com.bakery.erp.domain.DocumentPrinter? = null
 ) {
     val state by viewModel.uiState.collectAsState()
     val creditState = creditViewModel?.uiState?.collectAsState()?.value
@@ -145,6 +147,27 @@ fun POSScreen(
     var groupQuantityFor by remember { mutableStateOf<POSCategory?>(null) }
     var pickerSearchOpen by remember { mutableStateOf(false) }
     var paymentOpen by remember { mutableStateOf(false) }
+    // Anticipos de clientes: recibir, ver los pendientes y el elegido en el cobro.
+    var depositReceiveOpen by remember { mutableStateOf(false) }
+    var depositsListOpen by remember { mutableStateOf(false) }
+    var paymentDeposit by remember { mutableStateOf<com.bakery.erp.model.CustomerDeposit?>(null) }
+    // Al abrir el cobro o la lista se traen los anticipos al día: otra caja pudo aplicar uno.
+    LaunchedEffect(paymentOpen, depositsListOpen) {
+        if (paymentOpen || depositsListOpen) viewModel.loadOpenDeposits(companyId)
+    }
+    // Comprobante listo (recién recibido o reimpresión): se imprime y, si venía de recibirlo,
+    // se cierra el diálogo y se recarga la caja, porque el efectivo esperado cambió.
+    LaunchedEffect(state.depositToPrint) {
+        val d = state.depositToPrint ?: return@LaunchedEffect
+        if (depositReceiveOpen) {
+            depositReceiveOpen = false
+            viewModel.load(companyId, sessionId)
+        }
+        documentPrinter?.takeIf { it.isAvailable }?.print(
+            com.bakery.erp.util.buildCustomerDepositDocument(d, viewModel.receiptCompanyName(), formatReceiptTimestamp(d.receivedAt))
+        )?.onFailure { e -> snackbar.showSnackbar("No se pudo imprimir el comprobante: ${e.message}") }
+        viewModel.consumeDepositToPrint()
+    }
     var cartSheetOpen by remember { mutableStateOf(false) }
     var btPickerOpen by remember { mutableStateOf(false) }
     var showTransfer by remember { mutableStateOf(false) }
@@ -341,6 +364,16 @@ fun POSScreen(
                                             leadingIcon = { Icon(Icons.Default.Receipt, null) }
                                         )
                                         DropdownMenuItem(
+                                            text = { Text("Anticipo de cliente") },
+                                            onClick = { overflowOpen = false; depositReceiveOpen = true },
+                                            leadingIcon = { Icon(Icons.Default.People, null) }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Anticipos pendientes") },
+                                            onClick = { overflowOpen = false; depositsListOpen = true },
+                                            leadingIcon = { Icon(Icons.Default.People, null) }
+                                        )
+                                        DropdownMenuItem(
                                             text = { Text("Movimientos de la caja") },
                                             onClick = { overflowOpen = false; onNavigateToSessionDetail(sess.id) },
                                             leadingIcon = { Icon(Icons.Default.Receipt, null) }
@@ -378,6 +411,22 @@ fun POSScreen(
                                 }
                                 TextButton(onClick = { showIncome = true }) {
                                     Text("Ingreso", color = MaterialTheme.colorScheme.onPrimary)
+                                }
+                                var depositMenu by remember { mutableStateOf(false) }
+                                Box {
+                                    TextButton(onClick = { depositMenu = true }) {
+                                        Text("Anticipos", color = MaterialTheme.colorScheme.onPrimary)
+                                    }
+                                    DropdownMenu(expanded = depositMenu, onDismissRequest = { depositMenu = false }) {
+                                        DropdownMenuItem(
+                                            text = { Text("Recibir anticipo") },
+                                            onClick = { depositMenu = false; depositReceiveOpen = true }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Anticipos pendientes") },
+                                            onClick = { depositMenu = false; depositsListOpen = true }
+                                        )
+                                    }
                                 }
                                 TextButton(onClick = { onNavigateToSessionDetail(sess.id) }) {
                                     Text("Movimientos", color = MaterialTheme.colorScheme.onPrimary)
@@ -609,10 +658,17 @@ fun POSScreen(
                 cartSheetOpen = false
                 val discount = paymentDiscountAccount
                 paymentDiscountAccount = null
+                val deposit = paymentDeposit
+                paymentDeposit = null
                 user?.let {
-                    viewModel.confirmSale(companyId, it, method, tendered, bills, discountAccount = discount, invoice = invoice)
+                    viewModel.confirmSale(
+                        companyId, it, method, tendered, bills,
+                        discountAccount = discount, invoice = invoice, deposit = deposit
+                    )
                 }
             },
+            deposits = state.openDeposits,
+            onDepositChange = { paymentDeposit = it },
             invoiceOptions = if (viewModel.canInvoice()) {
                 val billable = viewModel.invoiceableRestaurantIds()
                 val restaurant = state.cart.filter { l -> l.isRestaurant }
@@ -782,6 +838,24 @@ fun POSScreen(
             checkouts = state.recentCheckouts,
             isLoading = state.isLoadingCheckouts,
             onDismiss = { lastCheckoutOpen = false }
+        )
+    }
+
+    if (depositReceiveOpen) {
+        ReceiveDepositDialog(
+            isSaving = state.isDepositBusy,
+            onDismiss = { depositReceiveOpen = false },
+            onConfirm = { input -> user?.let { viewModel.receiveDeposit(companyId, it, input) } }
+        )
+    }
+
+    if (depositsListOpen) {
+        DepositsListDialog(
+            deposits = state.openDeposits,
+            isBusy = state.isDepositBusy,
+            onDismiss = { depositsListOpen = false },
+            onReprint = { viewModel.reprintDeposit(it) },
+            onRefund = { d, reason -> user?.let { viewModel.refundDeposit(companyId, it, d, reason) } }
         )
     }
 

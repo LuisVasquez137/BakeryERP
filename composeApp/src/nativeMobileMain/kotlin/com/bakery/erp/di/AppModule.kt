@@ -147,6 +147,7 @@ val appModule = module {
     single<RecipeRepository> { FirebaseRecipeRepository(get()) }
     single<BranchRepository> { FirebaseBranchRepository(get()) }
     single<com.bakery.erp.domain.FelRepository> { com.bakery.erp.data.FirebaseFelRepository(get()) }
+    single<com.bakery.erp.domain.CustomerDepositRepository> { com.bakery.erp.data.FirebaseCustomerDepositRepository(get()) }
     single<WeatherRepository> { OpenMeteoWeatherRepository() }
     single<PurchaseRepository> { FirebasePurchaseRepository(get()) }
     single<PurchaseConceptRepository> { FirebasePurchaseConceptRepository(get()) }
@@ -214,7 +215,7 @@ val appModule = module {
     single { PreparationViewModel(get()) }
     single { PreparationBatchViewModel(get(), get(), get(), get()) }
     single { FixedAssetViewModel(get(), get(), get()) }
-    single { POSViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    single { POSViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { CashSessionViewModel(get(), get(), get(), get(), get()) }
     single { SaleHistoryViewModel(get(), get(), get(), get(), get(), get()) }
     single { CashRegisterAdminViewModel(get(), get(), get()) }
