@@ -60,6 +60,17 @@ class CustomerDepositTest {
     }
 
     @Test
+    fun `se recoge en la misma sucursal salvo que se elija otra`() {
+        val d = deposit.copy(branchId = "b1", branchName = "Bombero")
+        assertEquals("Bombero", d.effectivePickupBranchName)
+        assertFalse(d.picksUpElsewhere)
+        val otra = d.copy(pickupBranchId = "b2", pickupBranchName = "Pacajá")
+        assertEquals("Pacajá", otra.effectivePickupBranchName)
+        assertTrue(otra.picksUpElsewhere)
+        assertFalse(d.copy(pickupBranchId = "b1", pickupBranchName = "Bombero").picksUpElsewhere)
+    }
+
+    @Test
     fun `folio correlativo`() {
         assertEquals("ANT-0042", customerDepositFolio(42))
         assertEquals("ANT-12345", customerDepositFolio(12345))

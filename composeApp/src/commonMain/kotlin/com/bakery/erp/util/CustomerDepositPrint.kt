@@ -47,6 +47,9 @@ internal fun depositEscPos(deposit: CustomerDeposit, companyName: String, receiv
     wrapped("Encargo: ${deposit.description}")
     if (deposit.customerOrderLabel.isNotBlank()) wrapped("Pedido: ${deposit.customerOrderLabel}")
     if (deposit.deliveryLabel.isNotBlank()) wrapped("Entrega: ${deposit.deliveryLabel}")
+    // Dónde se dejó y dónde se recoge: el cliente lo necesita para saber a qué sucursal ir.
+    wrapped("Anticipo en: ${deposit.branchName}")
+    bold(true); wrapped("Recoge en: ${deposit.effectivePickupBranchName}"); bold(false)
     sep()
     // A doble ancho cada carácter ocupa dos columnas: el monto va solo y centrado.
     center(); bold(true)
@@ -91,6 +94,8 @@ private fun depositHtml(d: CustomerDeposit, companyName: String, receivedAtLabel
       <div>Encargo: ${esc(d.description)}</div>
       ${if (d.customerOrderLabel.isNotBlank()) "<div>Pedido: ${esc(d.customerOrderLabel)}</div>" else ""}
       ${if (d.deliveryLabel.isNotBlank()) "<div>Entrega: ${esc(d.deliveryLabel)}</div>" else ""}
+      <div>Anticipo en: ${esc(d.branchName)}</div>
+      <div class="b">Recoge en: ${esc(d.effectivePickupBranchName)}</div>
       <div class="sep"></div>
       <div class="row amount"><span>ANTICIPO</span><span>Q${d.amount.fmt(2)}</span></div>
       <div>Pago: ${esc(SalePaymentMethod.label(d.method))}</div>

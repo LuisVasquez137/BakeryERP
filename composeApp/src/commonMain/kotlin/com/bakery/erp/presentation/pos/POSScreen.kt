@@ -157,7 +157,10 @@ fun POSScreen(
     }
     // Pedidos con saldo, para ligarles el anticipo (pasteles, encargos especiales).
     LaunchedEffect(depositReceiveOpen) {
-        if (depositReceiveOpen) viewModel.loadDepositOrders(companyId)
+        if (depositReceiveOpen) {
+            viewModel.loadDepositOrders(companyId)
+            viewModel.loadPickupBranches(companyId)
+        }
     }
     // Anticipo guardado (con o sin impresión): se cierra el diálogo y se recarga la caja, porque
     // el efectivo esperado cambió.
@@ -854,7 +857,9 @@ fun POSScreen(
             onDismiss = { depositReceiveOpen = false },
             onConfirm = { input, print -> user?.let { viewModel.receiveDeposit(companyId, it, input, print) } },
             orders = state.depositOrders,
-            products = state.products
+            products = state.products,
+            branches = state.pickupBranches,
+            currentBranchId = state.branch?.id.orEmpty()
         )
     }
 

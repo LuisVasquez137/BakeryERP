@@ -1850,6 +1850,11 @@ a una gaveta hoy pero **todavía no es venta** (si cancela, se devuelve):
   anteriores (`SelectableDates`) y hoy a una hora ya pasada se marca en rojo y no deja guardar;
   `receiveDeposit` lo revalida (el diálogo pudo quedar abierto mientras la hora pasaba). La fecha
   se lee "Miércoles 30/09/2026" (`longDateLabel`).
+- **Sucursal de retiro** (`pickupBranchId/Name`): por defecto la de la caja; se elige entre las
+  sucursales activas con `CAN_SELL`, y un pedido ligado trae la suya. El comprobante dice
+  "Anticipo en: X" y "Recoge en: Y" (en negrita), y la lista de pendientes "Dejó en X · recoge
+  en Y" cuando difieren. Vacío en anticipos viejos = la misma donde se dejó
+  (`effectivePickupBranchName`).
 - **Recibir** (menú de la caja abierta → "Anticipo de cliente"): `companies/{c}/customerDeposits`
   con folio correlativo `ANT-0042` asignado en transacción (`counters/customerDeposits`). El
   efectivo entra como `CashMovement` DEPOSIT con `sourceDepositId` — el cuadre de ESA caja lo

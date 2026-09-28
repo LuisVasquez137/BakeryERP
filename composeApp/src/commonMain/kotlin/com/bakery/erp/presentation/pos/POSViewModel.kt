@@ -146,7 +146,9 @@ data class POSUiState(
     /** Pedidos de clientes con saldo, para ligarles el anticipo al recibirlo. */
     val depositOrders: List<com.bakery.erp.model.CustomerOrder> = emptyList(),
     /** Cambia cada vez que se guarda un anticipo: la pantalla cierra el diálogo al verlo. */
-    val depositSavedAt: Long = 0L
+    val depositSavedAt: Long = 0L,
+    /** Sucursales que venden: dónde puede recoger el cliente su encargo. */
+    val pickupBranches: List<Branch> = emptyList()
 )
 
 /**
@@ -842,6 +844,20 @@ class POSViewModel(
         }
     }
 
+    /** Sucursales que venden (activas): el cliente puede recoger en cualquiera. */
+    fun loadPickupBranches(companyId: String) {
+        viewModelScope.launch {
+            runCatching { branchRepository.getBranches(companyId) }
+                .onSuccess { list ->
+                    _uiState.update { s ->
+                        s.copy(pickupBranches = list
+                            .filter { it.active && com.bakery.erp.model.BranchCapability.CAN_SELL in it.capabilities }
+                            .sortedBy { it.name.lowercase() })
+                    }
+                }
+        }
+    }
+
     /** Pedidos de clientes que todavía aceptan anticipo (con saldo, no entregados ni cancelados). */
     fun loadDepositOrders(companyId: String) {
         viewModelScope.launch {
@@ -926,6 +942,8 @@ class POSViewModel(
                     deliveryAt = input.deliveryAt,
                     items = input.items,
                     isRestaurant = input.isRestaurant,
+                    pickupBranchId = input.pickupBranchId.ifBlank { branch.id },
+                    pickupBranchName = input.pickupBranchName.ifBlank { branch.name },
                     amount = money(input.amount),
                     method = input.method,
                     branchId = branch.id,

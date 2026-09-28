@@ -118,6 +118,8 @@ class FirebaseCustomerDepositRepository(
         "deliveryLabel" to deliveryLabel,
         "deliveryAt" to deliveryAt,
         "isRestaurant" to isRestaurant,
+        "pickupBranchId" to pickupBranchId,
+        "pickupBranchName" to pickupBranchName,
         // Arreglos paralelos: GitLive no serializa listas de objetos.
         "itemProductIds" to items.map { it.productId },
         "itemNames" to items.map { it.productName },
@@ -159,6 +161,8 @@ class FirebaseCustomerDepositRepository(
             deliveryLabel = str("deliveryLabel"),
             deliveryAt = num("deliveryAt").toLong(),
             isRestaurant = runCatching { get<Boolean?>("isRestaurant") }.getOrNull() ?: false,
+            pickupBranchId = str("pickupBranchId"),
+            pickupBranchName = str("pickupBranchName"),
             items = run {
                 val ids = runCatching { get<List<String>?>("itemProductIds") }.getOrNull().orEmpty()
                 val names = runCatching { get<List<String>?>("itemNames") }.getOrNull().orEmpty()

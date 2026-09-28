@@ -99,7 +99,10 @@ data class DepositInput(
     val deliveryAt: Long = 0L,
     /** Productos del catálogo. Vacío si es del restaurante (texto en [description]). */
     val items: List<CustomerDepositItem> = emptyList(),
-    val isRestaurant: Boolean = false
+    val isRestaurant: Boolean = false,
+    /** Dónde recoge el cliente. Vacío = la sucursal de esta caja. */
+    val pickupBranchId: String = "",
+    val pickupBranchName: String = ""
 )
 
 /** "12/10 · 10:30 AM": la entrega del pedido tal como se ve en el anticipo. */
@@ -130,9 +133,13 @@ fun ReceiveDepositDialog(
     /** Pedidos con saldo para ligar el anticipo. Vacío = no se ofrece. */
     orders: List<com.bakery.erp.model.CustomerOrder> = emptyList(),
     /** Catálogo para elegir el encargo. */
-    products: List<Product> = emptyList()
+    products: List<Product> = emptyList(),
+    /** Sucursales donde se puede recoger; la de esta caja viene elegida. */
+    branches: List<com.bakery.erp.model.Branch> = emptyList(),
+    currentBranchId: String = ""
 ) {
     var order by remember { mutableStateOf<com.bakery.erp.model.CustomerOrder?>(null) }
+    var pickupBranchId by remember { mutableStateOf(currentBranchId) }
     var orderPickerOpen by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf("") }
     var phone by remember { mutableStateOf("") }
@@ -188,7 +195,9 @@ fun ReceiveDepositDialog(
         orderLabel = order?.let { it.depositLabel(orderDeliveryLabel(it)) }.orEmpty(),
         deliveryAt = deliveryAt,
         items = if (isRestaurant) emptyList() else items,
-        isRestaurant = isRestaurant
+        isRestaurant = isRestaurant,
+        pickupBranchId = pickupBranchId,
+        pickupBranchName = branches.firstOrNull { it.id == pickupBranchId }?.name.orEmpty()
     )
 
     // ── Secciones: las mismas en una o dos columnas ──────────────────────────
@@ -276,6 +285,20 @@ fun ReceiveDepositDialog(
                 }
                 OutlinedButton(onClick = { timePickerOpen = true }, modifier = Modifier.weight(1f)) {
                     Text(time?.let { (h, m) -> time12(h, m) } ?: "Elegir hora", maxLines = 1)
+                }
+            }
+            // Dónde recoge: por defecto aquí; el cliente puede dejar el anticipo en una
+            // sucursal y recoger en otra.
+            if (branches.size > 1) {
+                Text("Recoge en", style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    branches.forEach { b ->
+                        FilterChip(
+                            selected = pickupBranchId == b.id,
+                            onClick = { pickupBranchId = b.id },
+                            label = { Text(if (b.id == currentBranchId) "${b.name} (aquí)" else b.name) }
+                        )
+                    }
                 }
             }
             when {
@@ -472,6 +495,7 @@ fun ReceiveDepositDialog(
                                         dateUtcMillis = LocalDateTime(local, LocalTime(0, 0)).toInstant(TimeZone.UTC).toEpochMilliseconds()
                                     }
                                     com.bakery.erp.ui.parseHHmm(o.deliveryTime)?.let { time = it }
+                                    o.deliveryBranchId.takeIf { id -> branches.any { it.id == id } }?.let { pickupBranchId = it }
                                     if (amountText.isBlank()) amountText = o.balanceAmount.fmt(2)
                                     orderPickerOpen = false
                                 }) {
@@ -680,7 +704,8 @@ private fun DepositRow(d: CustomerDeposit, modifier: Modifier) {
                         (if (d.deliveryAt > 0L) deliveryDayLabel(d.deliveryAt, kotlin.time.Clock.System.now().toEpochMilliseconds(), TimeZone.currentSystemDefault())
                         else d.deliveryLabel).takeIf { it.isNotBlank() }?.let { "Entrega: $it" },
                         d.customerPhone.takeIf { it.isNotBlank() },
-                        d.branchName.takeIf { it.isNotBlank() }
+                        if (d.picksUpElsewhere) "Dejó en ${d.branchName} · recoge en ${d.pickupBranchName}"
+                        else d.effectivePickupBranchName.takeIf { it.isNotBlank() }?.let { "Recoge en $it" }
                     ).joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate
                 )

@@ -44,6 +44,13 @@ data class CustomerDeposit(
     val items: List<CustomerDepositItem> = emptyList(),
     /** Encargo del restaurante (comida): se describe en texto, no con el catálogo. */
     val isRestaurant: Boolean = false,
+    /**
+     * Sucursal donde se recoge. Puede no ser la que recibió el anticipo ([branchId]): el cliente
+     * deja el anticipo en Bombero y recoge en Pacajá. Vacío = la misma donde se recibió
+     * (anticipos anteriores a este campo).
+     */
+    val pickupBranchId: String = "",
+    val pickupBranchName: String = "",
     val amount: Double = 0.0,
     /** CASH | CARD | TRANSFER. Solo el efectivo entra a la gaveta como movimiento. */
     val method: String = SalePaymentMethod.CASH,
@@ -76,6 +83,9 @@ data class CustomerDeposit(
     /** Lo que todavía se puede aplicar o devolver. */
     val remaining: Double get() = roundMoney(amount - appliedAmount - refundedAmount).coerceAtLeast(0.0)
     val isOpen: Boolean get() = status == CustomerDepositStatus.OPEN && remaining > 0.004
+    /** Dónde se recoge: la elegida, o la misma donde se dejó el anticipo. */
+    val effectivePickupBranchName: String get() = pickupBranchName.ifBlank { branchName }
+    val picksUpElsewhere: Boolean get() = pickupBranchId.isNotBlank() && pickupBranchId != branchId
 }
 
 /** Un producto del catálogo dentro de un encargo. El precio es el de hoy: sirve de referencia. */
