@@ -33,6 +33,7 @@ const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const { resolverEmisor, limpiarNit, FEL_PROFILES } = require("./felEmisor");
 const { clienteParaPerfil, guardarCredenciales, URLS } = require("./felCredenciales");
 const { DigifactClient, serieYNumero } = require("./digifactClient");
+const { reportarDte, reportarPendientes, debeReportarse, INGEST_KEY } = require("./comandayaDteReport");
 const {
   buildFacturaNuc, prorateDiscount, referenciaInterna, fechaEmisionParaAnular, idReceptorParaXml, nowGuatemalaISO,
 } = require("./nucXmlBuilder");
@@ -40,6 +41,8 @@ const {
 const REGION = "us-central1";
 // Digifact puede tardar ~45 s en certificar; la función espera hasta 5 min.
 const CALL_OPTS = { region: REGION, timeoutSeconds: 300, memory: "256MiB" };
+// Certificar avisa a ComandaYa (contador de DTEs por NIT): necesita la clave del puente.
+const CERT_OPTS = { ...CALL_OPTS, secrets: [INGEST_KEY] };
 
 const ESTADO = {
   CERTIFICANDO: "CERTIFICANDO",
@@ -303,13 +306,16 @@ async function certificarVentas({ companyId, saleIds, receptor: receptorPedido, 
       ultimoError: "",
       lockedAt: 0,
     };
+    // Pendiente de avisar a ComandaYa, escrito junto con la factura: si esta función se cae
+    // antes de avisar, el reintento programado lo encuentra igual.
+    if (await debeReportarse(companyId, certificado).catch(() => false)) certificado.comandayaReportado = false;
     await dteRef.set(certificado, { merge: true });
     await marcarVentas(companyId, ventas, {
       dteId, invoiceStatus: ESTADO.CERTIFICADO, invoiceSerie: serie, invoiceNumero: numero, invoiceUuid: uuid,
       invoiceVersion: version,
     });
     await firestore.doc(`felPendientes/${companyId}__${dteId}`).delete().catch(() => {});
-    // Fase 4: aquí se avisa a ComandaYa (cuenta del restaurante facturada + crédito DTE).
+    if (certificado.comandayaReportado === false) await reportarDte(companyId, dteId, certificado);
     return respuestaDe({ ...dte, ...certificado, id: dteId });
   } catch (e) {
     if (e instanceof HttpsError && e.code === "failed-precondition") {
@@ -380,7 +386,7 @@ function respuestaDe(d) {
 
 // ── Callables ──────────────────────────────────────────────────────────────
 
-exports.felCertificarVenta = onCall(CALL_OPTS, async (request) => {
+exports.felCertificarVenta = onCall(CERT_OPTS, async (request) => {
   const { companyId, saleIds, receptor, sinDetalle, reemitir } = request.data || {};
   const user = await usuarioDeLaEmpresa(request, companyId);
   // Volver a facturar es corregir una factura ya emitida: el mismo permiso que anularla.
@@ -512,7 +518,7 @@ exports.felGuardarPerfil = onCall({ region: REGION, timeoutSeconds: 60 }, async 
 // ── Reintentos ─────────────────────────────────────────────────────────────
 
 exports.felReintentarPendientes = onSchedule(
-  { schedule: "every 5 minutes", region: REGION, timeoutSeconds: 540 },
+  { schedule: "every 5 minutes", region: REGION, timeoutSeconds: 540, secrets: [INGEST_KEY] },
   async () => {
     const vencidos = await db().collection("felPendientes").where("proximoIntento", "<=", Date.now()).limit(20).get();
     for (const doc of vencidos.docs) {
@@ -526,6 +532,7 @@ exports.felReintentarPendientes = onSchedule(
       }
     }
     await certificarSolicitadasHuerfanas();
+    await reportarPendientes().catch((e) => console.warn("Avisos a ComandaYa:", e.message));
   }
 );
 

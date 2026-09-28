@@ -18,6 +18,8 @@ const { onRequest } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 
+const { buildAddendum, accountedItemsFrom } = require("./externalAddendum");
+
 const INGEST_KEY = defineSecret("COMANDAYA_INGEST_KEY");
 
 /** Doc de configuración del puente. Único, porque esto es solo de Sabreopan. */
@@ -148,7 +150,9 @@ function rollupUpdate(applied, sign, meta) {
     businessDate: meta.date,
     dateMillis: meta.startMillis,
     revenue: inc(applied.total),
-    transactionCount: inc(1),
+    // Un adicional suma dinero a una cuenta que ya contó como transacción: contarla otra vez
+    // inflaría las transacciones del día y bajaría el ticket promedio.
+    transactionCount: inc(applied.transactions ?? 1),
     unitsSold: inc(applied.units),
     hourTotal: { [applied.hour]: inc(applied.total) },
     channelRevenue: { [applied.channel]: inc(applied.total) },
@@ -306,19 +310,81 @@ exports.ingestExternalSale = onRequest(
         // único que se acepta de un reenvío es enterarse de que ComandaYa la facturó.
         if (prev && prev.status === COMPLETED_STATUS) {
           skipped = "ya recibida en caja";
+          const patch = {};
           if (billedExternally && prev.invoiceStatus !== INVOICE_EXTERNAL) {
             const bakeosInvoiced = BAKEOS_INVOICE_STATES.includes(prev.invoiceStatus);
-            tx.set(saleRef, bakeosInvoiced
-              // Facturada en los dos lados: no se pisa la de BakeOS, se deja la marca para
-              // que alguien anule una de las dos.
-              ? { externalDteId: String(payload.dteId || ""), invoiceConflict: true }
-              : { invoiceStatus: INVOICE_EXTERNAL, externalDteId: String(payload.dteId || "") },
-            { merge: true });
+            // Facturada en los dos lados: no se pisa la de BakeOS, se deja la marca para que
+            // alguien anule una de las dos.
+            if (bakeosInvoiced) patch.invoiceConflict = true;
+            else patch.invoiceStatus = INVOICE_EXTERNAL;
+            patch.externalDteId = String(payload.dteId || "");
             if (bakeosInvoiced) console.error(`ingestExternalSale: ${externalId} facturada en BakeOS Y en ComandaYa`);
           }
+
           if (isCancelled) {
-            console.error(`ingestExternalSale: ${externalId} se canceló en ComandaYa después de recibirse en caja`);
+            // Reabrir la orden para agregar algo también pasa por acá (deja de estar "Pagado").
+            // No se hace nada: si vuelve con más, entra como adicional en el siguiente envío.
+            console.warn(`ingestExternalSale: ${externalId} dejó de estar pagada después de recibirse en caja`);
+          } else {
+            // Lo ya contabilizado: guardado desde el primer adicional; antes de eso, las líneas
+            // con que se recibió. Se lee antes de escribir nada (regla de las transacciones).
+            let accountedItems;
+            if (Array.isArray(prev.accountedItems)) {
+              accountedItems = Object.fromEntries(prev.accountedItems.map((i) => [i.key, i]));
+            } else {
+              const prevLines = await tx.get(saleRef.collection("lines"));
+              accountedItems = accountedItemsFrom(prevLines.docs.map((d) => d.data()));
+            }
+            const accountedTotal = typeof prev.accountedTotal === "number" ? prev.accountedTotal : (Number(prev.total) || 0);
+            const orderLabel = sale.externalOrderNumber ? `orden ${sale.externalOrderNumber}` : "";
+            const ad = buildAddendum({ accountedTotal, accountedItems, newTotal: sale.total, newLines: lines, orderLabel });
+
+            if (ad && ad.refund) {
+              console.error(`ingestExternalSale: ${externalId} bajó Q${ad.refund} después de cobrarse: revisar devolución`);
+            } else if (ad) {
+              const n = (Number(prev.addendumCount) || 0) + 1;
+              const adId = `${externalId}_ad${n}`;
+              const adRef = db.doc(`companies/${companyId}/sales/${adId}`);
+              const adLines = ad.lines.map((l, i) => ({
+                id: `l${i}`, saleId: adId, productId: l.productId, productName: l.productName,
+                quantity: l.quantity, unitPrice: l.unitPrice, subtotal: l.subtotal,
+                costAtSale: 0, priceSource: "EXTERNAL", stockDeducted: false,
+              }));
+              const adSale = {
+                ...sale,
+                id: adId,
+                externalId: adId,
+                parentSaleId: externalId,
+                subtotal: ad.subtotal,
+                discount: ad.discount,
+                total: ad.deltaTotal,
+                paymentMethod: dominantMethod,
+                paymentBreakdown: { [dominantMethod]: ad.deltaTotal },
+                lineCount: adLines.length,
+                externalTableLabel: `${sale.externalTableLabel || "Cuenta"} · adicional`,
+                // El domicilio ya se cobró en la cuenta original; un cambio de monto entra
+                // como renglón de ajuste.
+                externalDeliveryFee: 0,
+                status: PENDING_COLLECTION,
+                createdAt: closedAt,
+              };
+              const adContribution = {
+                ...contributionOf(adSale, adLines, [{ method: dominantMethod, amount: ad.deltaTotal }], day),
+                transactions: 0,
+              };
+              tx.set(dailyRef, rollupUpdate(adContribution, +1, meta), { merge: true });
+              tx.set(adRef, { ...adSale, appliedRollup: adContribution });
+              for (const l of adLines) tx.set(adRef.collection("lines").doc(l.id), l);
+
+              // Lo que queda contabilizado pasa a ser lo nuevo: un reenvío idéntico no crea
+              // otro adicional. Lista y no mapa: un nombre con punto rompería la clave.
+              patch.accountedTotal = sale.total;
+              patch.accountedItems = Object.entries(ad.items).map(([key, i]) => ({ key, ...i }));
+              patch.addendumCount = n;
+              skipped = `ya recibida en caja; adicional ${adId} por Q${ad.deltaTotal}`;
+            }
           }
+          if (Object.keys(patch).length) tx.set(saleRef, patch, { merge: true });
           return;
         }
 
