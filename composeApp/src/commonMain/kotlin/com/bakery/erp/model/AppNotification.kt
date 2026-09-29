@@ -55,12 +55,20 @@ object NotificationType {
      */
     const val DISPATCH_QUANTITY_CHANGED = "DISPATCH_QUANTITY_CHANGED"
 
+    /**
+     * Alguien entró al cierre de una caja fuera de su horario de cuadre. Al dueño (y a quien
+     * tenga la bitácora): entrar ya muestra cuánto debería haber, así que es contar dinero sin
+     * autorización aunque no llegue a cerrar.
+     */
+    const val CASH_CLOSE_OUT_OF_SCHEDULE = "CASH_CLOSE_OUT_OF_SCHEDULE"
+
     fun label(type: String) = when (type) {
         ORDER_RECEIVED -> "Pedido recibido"
         ORDER_IN_LOT -> "Pedido tomado"
         ORDER_IN_PRODUCTION -> "En producción"
         PRODUCT_CANCELLED_MIN_BATCH -> "Producto anulado"
         DISPATCH_QUANTITY_CHANGED -> "Cambio en tu envío"
+        CASH_CLOSE_OUT_OF_SCHEDULE -> "Caja fuera de horario"
         else -> "Aviso"
     }
 }
@@ -76,6 +84,8 @@ object NotificationTarget {
     const val PRODUCTION_ORDER_LIST = "PRODUCTION_ORDER_LIST"
     const val PRODUCTION_LOT_DETAIL = "PRODUCTION_LOT_DETAIL"
     const val DISPATCH_NOTE_DETAIL = "DISPATCH_NOTE_DETAIL"
+    /** Bitácora de cajas; `targetId` = sucursal. */
+    const val CASH_AUDIT = "CASH_AUDIT"
 }
 
 /**

@@ -41,10 +41,20 @@ fun CashSessionCloseScreen(
     }
     var notes by rememberSaveable { mutableStateOf("") }
     var showConfirm by remember { mutableStateOf(false) }
+    val user = authState.user
+    // Quién recibe la gaveta. "Nadie" (fin del día) también es una respuesta: por eso aparte.
+    var receivedBy by remember { mutableStateOf<com.bakery.erp.model.Employee?>(null) }
+    var receiverChosen by remember { mutableStateOf(false) }
+    var outOfScheduleAccepted by remember { mutableStateOf(false) }
 
     LaunchedEffect(companyId, sessionId) {
         if (companyId.isNotEmpty()) viewModel.observeSession(companyId, sessionId)
     }
+    // Entrar ya queda en la bitácora: la pantalla muestra cuánto debería haber, se cierre o no.
+    LaunchedEffect(companyId, sessionId, user?.id) {
+        if (companyId.isNotEmpty() && user != null) viewModel.enterCloseScreen(companyId, sessionId, user)
+    }
+    DisposableEffect(sessionId) { onDispose { viewModel.clearCloseGate() } }
     LaunchedEffect(state.error) {
         state.error?.let { snackbar.showSnackbar(it); viewModel.clearError() }
     }
@@ -56,6 +66,10 @@ fun CashSessionCloseScreen(
     }
 
     val session = state.currentSession
+    LaunchedEffect(companyId, session?.branchId) {
+        if (companyId.isNotEmpty() && session != null) viewModel.loadEmployees(companyId, session.branchId)
+    }
+    val gate = state.closeGate?.takeIf { it.sessionId == sessionId }
     val expected = session?.expectedCashNow ?: 0.0
     val counted = closingCounts.entries.sumOf { (code, qty) ->
         (CashDenominations.byCode(code)?.value ?: 0.0) * qty
@@ -134,6 +148,15 @@ fun CashSessionCloseScreen(
                     }
                 }
 
+                EmployeePickerField(
+                    label = "¿Quién recibe la caja?",
+                    employees = state.employees,
+                    selected = receivedBy,
+                    chosen = receiverChosen,
+                    onSelect = { receivedBy = it; receiverChosen = true },
+                    noneLabel = "Nadie: es el cierre del día"
+                )
+
                 OutlinedTextField(
                     value = notes,
                     onValueChange = { notes = it },
@@ -144,13 +167,39 @@ fun CashSessionCloseScreen(
 
                 Button(
                     onClick = { showConfirm = true },
-                    enabled = hasCount && !state.isLoading,
+                    enabled = hasCount && receiverChosen && !state.isLoading,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("Cerrar caja")
                 }
             }
         }
+    }
+
+    // Fuera del horario de cuadre de ESTA caja: ya quedó en la bitácora y ya se avisó; acá se
+    // pregunta si de verdad se va a cerrar a esta hora.
+    if (gate?.outOfSchedule == true && !outOfScheduleAccepted) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("¿Cierre de caja fuera de horario?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("¿Estás seguro de que harás el cierre de caja en un horario que no es el habitual?")
+                    if (gate.scheduleLabel.isNotBlank()) {
+                        Text("Horario de cuadre de esta caja: ${gate.scheduleLabel}",
+                            style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                    }
+                    Text("Quedó registrado en la bitácora y se avisó al administrador.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { outOfScheduleAccepted = true }) { Text("Sí, continuar") }
+            },
+            dismissButton = {
+                Button(onClick = onNavigateBack) { Text("Volver") }
+            }
+        )
     }
 
     if (showConfirm) {
@@ -165,7 +214,8 @@ fun CashSessionCloseScreen(
                 TextButton(onClick = {
                     showConfirm = false
                     viewModel.closeSession(
-                        companyId, sessionId, counted, notes.trim().ifEmpty { null }, closingCounts
+                        companyId, sessionId, counted, notes.trim().ifEmpty { null }, closingCounts,
+                        receivedBy = receivedBy, currentUser = user
                     )
                 }) { Text("Sí, cerrar") }
             },

@@ -496,6 +496,9 @@ sealed class Screen(val route: String) {
     }
     object OrganizationSettings : Screen("organization/settings")
     object FelSetup : Screen("fel/setup")
+    object CashAudit : Screen("cash/audit?branchId={branchId}") {
+        fun route(branchId: String?) = if (branchId.isNullOrEmpty()) "cash/audit" else "cash/audit?branchId=$branchId"
+    }
     object FelProfileForm : Screen("fel/profile?profileId={profileId}") {
         fun route(profileId: String?) =
             if (profileId.isNullOrEmpty()) "fel/profile" else "fel/profile?profileId=$profileId"
@@ -563,6 +566,7 @@ fun AppNavigation(
     val externalCustomerViewModel = vms.externalCustomer
     val organizationSettingsViewModel = vms.organizationSettings
     val felViewModel = vms.fel
+    val cashAuditViewModel = vms.cashAudit
     val bluetoothPrinterManager = vms.bluetoothPrinterManager
     val documentPrinter = vms.documentPrinter
 
@@ -649,6 +653,8 @@ fun AppNavigation(
                 if (targetId.isNotEmpty())
                     navController.navigate(Screen.DispatchDetail.route(targetId))
                 else navController.navigate(Screen.DispatchList.route)
+            NotificationTarget.CASH_AUDIT ->
+                navController.navigate(Screen.CashAudit.route(targetId))
             else -> Unit
         }
     }
@@ -793,6 +799,7 @@ fun AppNavigation(
                 onNavigateToCustomerOrders = { navController.navigate(Screen.CustomerOrderList.route) },
                 onNavigateToOrganizationSettings = { navController.navigate(Screen.OrganizationSettings.route) },
                 onNavigateToFelSetup = { navController.navigate(Screen.FelSetup.route) },
+                onNavigateToCashAudit = { navController.navigate(Screen.CashAudit.route(null)) },
                 onNavigateToResellerApproval = { navController.navigate(Screen.ResellerApproval.route) },
                 onNavigateToNotificationTarget = ::navigateToNotificationTarget,
                 viewModel = viewModel,
@@ -2410,6 +2417,19 @@ fun AppNavigation(
         }
         // Solo el dueño: el NIT y las credenciales de Digifact son del negocio, no de la
         // operación diaria. La Cloud Function exige lo mismo al guardar.
+        composable(
+            route = Screen.CashAudit.route,
+            arguments = listOf(navArgument("branchId") { type = NavType.StringType; nullable = true; defaultValue = null })
+        ) { entry ->
+            RequirePermission(state.user, Permission.VIEW_CASH_AUDIT, onBack = { navController.popBackStack() }) {
+                com.bakery.erp.presentation.cashaudit.CashAuditScreen(
+                    initialBranchId = entry.savedStateHandle.get<String>("branchId"),
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = cashAuditViewModel
+                )
+            }
+        }
         composable(Screen.FelSetup.route) {
             RequireOwner(state.user, onBack = { navController.popBackStack() }) {
                 FelSetupScreen(

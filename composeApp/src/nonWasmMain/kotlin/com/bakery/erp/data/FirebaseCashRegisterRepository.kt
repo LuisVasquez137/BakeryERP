@@ -70,6 +70,8 @@ class FirebaseCashRegisterRepository(
         "name" to name,
         "active" to active,
         "deleted" to deleted,
+        "closeSchedules" to closeSchedules,
+        "closeToleranceMinutes" to closeToleranceMinutes,
         "createdAt" to createdAt,
         "updatedAt" to updatedAt
     )
@@ -81,6 +83,10 @@ class FirebaseCashRegisterRepository(
         name = get<String?>("name") ?: "",
         active = get<Boolean?>("active") ?: true,
         deleted = get<Boolean?>("deleted") ?: false,
+        closeSchedules = runCatching { get<List<String>?>("closeSchedules") }.getOrNull().orEmpty(),
+        closeToleranceMinutes = runCatching { get<Long?>("closeToleranceMinutes")?.toInt() }.getOrNull()
+            ?: runCatching { get<Double?>("closeToleranceMinutes")?.toInt() }.getOrNull()
+            ?: com.bakery.erp.model.DEFAULT_CLOSE_TOLERANCE_MINUTES,
         createdAt = readMillis("createdAt"),
         updatedAt = readMillis("updatedAt")
     )

@@ -114,6 +114,7 @@ private val ALL_SECTIONS = listOf(
     ModuleSection("Administración", Icons.Default.Settings, BrandColors.MutedSlate, BrandColors.Sand, listOf(
         ModuleItem("Configuración",        "Código de invitación y entregas", Icons.Default.Settings),
         ModuleItem("Facturación",          "NIT y sucursales que facturan", Icons.AutoMirrored.Filled.ReceiptLong),
+        ModuleItem("Bitácora de cajas",    "Aperturas, cierres y fuera de horario", Icons.Default.History),
         ModuleItem("Proveedores",          "Gestión externa",      Icons.Default.Business),
         ModuleItem("Gastos",               "Lo gastado del mes",   Icons.Default.Receipt),
         ModuleItem("Costos Fijos",         "Renta, luz, internet", Icons.Default.EventRepeat),
@@ -183,6 +184,7 @@ private fun hasModuleAccess(title: String, user: User) = with(user) {
                                  hasPermission(Permission.MANAGE_CUSTOMER_ORDERS)
         "Configuración"       -> hasPermission(Permission.MANAGE_USERS)
         "Facturación"         -> role == UserRole.OWNER
+        "Bitácora de cajas"   -> hasPermission(Permission.VIEW_CASH_AUDIT)
         "Aprobar Revendedores" -> hasPermission(Permission.MANAGE_EXTERNAL_CUSTOMERS)
         "Créditos"          -> hasPermission(Permission.MANAGE_CREDIT_ACCOUNTS)
         else                      -> true
@@ -231,6 +233,7 @@ fun HomeScreen(
     onNavigateToCustomerOrders: () -> Unit = {},
     onNavigateToOrganizationSettings: () -> Unit = {},
     onNavigateToFelSetup: () -> Unit = {},
+    onNavigateToCashAudit: () -> Unit = {},
     onNavigateToResellerApproval: () -> Unit = {},
     onNavigateToNotificationTarget: (targetScreen: String, targetId: String) -> Unit = { _, _ -> },
     viewModel: AuthViewModel,
@@ -314,6 +317,7 @@ fun HomeScreen(
             "Pedidos de Clientes"     -> onNavigateToCustomerOrders()
             "Configuración"           -> onNavigateToOrganizationSettings()
             "Facturación"             -> onNavigateToFelSetup()
+            "Bitácora de cajas"       -> onNavigateToCashAudit()
             "Aprobar Revendedores"    -> onNavigateToResellerApproval()
             "Créditos"                -> onNavigateToCredit()
         }

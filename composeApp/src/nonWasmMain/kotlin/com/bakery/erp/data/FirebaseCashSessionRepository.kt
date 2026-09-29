@@ -158,7 +158,11 @@ class FirebaseCashSessionRepository(
 
     override suspend fun closeSession(
         companyId: String, sessionId: String, countedCash: Double, notes: String?,
-        autoClosed: Boolean
+        autoClosed: Boolean,
+        receivedByEmployeeId: String,
+        receivedByEmployeeName: String,
+        closedByUserId: String,
+        closedByUserName: String
     ): CashSession {
         val current = getSession(companyId, sessionId)
             ?: throw IllegalStateException("Sesión no encontrada: $sessionId")
@@ -172,7 +176,11 @@ class FirebaseCashSessionRepository(
             difference = countedCash - expected,
             status = CashSessionStatus.CLOSED,
             notes = notes?.trim()?.ifEmpty { null },
-            autoClosed = autoClosed
+            autoClosed = autoClosed,
+            receivedByEmployeeId = receivedByEmployeeId,
+            receivedByEmployeeName = receivedByEmployeeName,
+            closedByUserId = closedByUserId,
+            closedByUserName = closedByUserName
         )
         sessionsCol(companyId).document(sessionId).set(closed.toMap())
         return closed
@@ -382,7 +390,13 @@ class FirebaseCashSessionRepository(
         "saleCount" to saleCount,
         "notes" to notes,
         "dailyCloseId" to dailyCloseId,
-        "autoClosed" to autoClosed
+        "autoClosed" to autoClosed,
+        "openedByEmployeeId" to openedByEmployeeId,
+        "openedByEmployeeName" to openedByEmployeeName,
+        "receivedByEmployeeId" to receivedByEmployeeId,
+        "receivedByEmployeeName" to receivedByEmployeeName,
+        "closedByUserId" to closedByUserId,
+        "closedByUserName" to closedByUserName
     )
 
     private fun DocumentSnapshot.toSession() = CashSession(
@@ -410,7 +424,13 @@ class FirebaseCashSessionRepository(
         saleCount = (get<Double?>("saleCount") ?: 0.0).toInt(),
         notes = get<String?>("notes"),
         dailyCloseId = get<String?>("dailyCloseId"),
-        autoClosed = runCatching { get<Boolean?>("autoClosed") }.getOrNull() ?: false
+        autoClosed = runCatching { get<Boolean?>("autoClosed") }.getOrNull() ?: false,
+        openedByEmployeeId = runCatching { get<String?>("openedByEmployeeId") }.getOrNull() ?: "",
+        openedByEmployeeName = runCatching { get<String?>("openedByEmployeeName") }.getOrNull() ?: "",
+        receivedByEmployeeId = runCatching { get<String?>("receivedByEmployeeId") }.getOrNull() ?: "",
+        receivedByEmployeeName = runCatching { get<String?>("receivedByEmployeeName") }.getOrNull() ?: "",
+        closedByUserId = runCatching { get<String?>("closedByUserId") }.getOrNull() ?: "",
+        closedByUserName = runCatching { get<String?>("closedByUserName") }.getOrNull() ?: ""
     )
 
     private fun CashMovement.toMap(): Map<String, Any?> = firestoreSafeOf(

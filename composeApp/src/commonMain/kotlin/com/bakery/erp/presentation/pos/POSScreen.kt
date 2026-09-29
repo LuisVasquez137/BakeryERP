@@ -284,15 +284,17 @@ fun POSScreen(
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                // En teléfono se omite el nombre del cajero: es quien está
-                                // parado frente a la pantalla y no necesita que se lo digan,
-                                // mientras que el total y el número de ventas sí se consultan.
+                                // Solo cuántas ventas, nunca el monto: la caja la ve cualquiera que pase
+                                // por el mostrador, y cuánto se lleva vendido se ve al cierre. En vez del
+                                // usuario (la tablet tiene uno solo), el colaborador que abrió la caja.
                                 if (compact)
-                                    "Q ${(state.session?.totalSales ?: 0.0).fmtMoney(2)} · #${state.session?.saleCount ?: 0}"
+                                    "${state.session?.saleCount ?: 0} ventas"
                                 else
-                                    "${state.session?.registerName.orEmpty()} · ${state.session?.cashierName.orEmpty()} · " +
-                                        "Ventas: Q ${(state.session?.totalSales ?: 0.0).fmtMoney(2)} · " +
-                                        "#${state.session?.saleCount ?: 0}",
+                                    listOf(
+                                        state.session?.registerName.orEmpty(),
+                                        state.session?.openedByEmployeeName.orEmpty().ifBlank { state.session?.cashierName.orEmpty() },
+                                        "${state.session?.saleCount ?: 0} ventas"
+                                    ).filter { it.isNotBlank() }.joinToString(" · "),
                                 style = MaterialTheme.typography.labelSmall,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis

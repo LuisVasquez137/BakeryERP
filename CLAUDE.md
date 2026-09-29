@@ -1746,6 +1746,41 @@ tocó la cajera — por eso es más exacto que obligar a elegir.
 en caché por sucursal y día en `POSViewModel`) y cada grupo de precio sale ahí como una ficha
 más (`GroupTile`), que pregunta cuántos.
 
+### Control de cajas: horarios de cuadre y bitácora (Fase A, 2026-09-29)
+
+El dueño quiere detectar a quien cuenta dinero fuera de hora: ver cuánto se lleva vendido es
+contar sin autorización. Decisiones tomadas con él:
+
+- **La barra del POS solo dice cuántas ventas** ("45 ventas"), nunca el monto. Lo vendido se ve
+  al cierre. En vez del usuario (la tablet de cada caja tiene UN solo usuario para todas las
+  cajeras) muestra el colaborador que abrió.
+- **El cierre NO es a ciegas**: muestra cuánto debería haber, porque las cajeras cuadran entre
+  ellas en el cambio de turno y necesitan saber si cuadró. Lo que se controla es CUÁNDO.
+- **Horarios de cuadre por caja, no por sucursal** (`CashRegister.closeSchedules` "HH:mm" +
+  `closeToleranceMinutes`, editables en el formulario de la caja): en una sucursal cada caja
+  cuadra a su hora. Sin horarios = sin control. `isWithinCloseSchedule` (con ventana que cruza
+  medianoche) y `closeScheduleLabel` en `model/CashAudit.kt`, tests en `CashAuditTest`.
+- **Entrar a la pantalla de cierre ya queda en la bitácora** (`enterCloseScreen`), se cierre o
+  no — la pantalla muestra lo esperado. Fuera de horario, además: push al dueño
+  (`NotificationType.CASH_CLOSE_OUT_OF_SCHEDULE`, `requiredPermission = VIEW_CASH_AUDIT`, tap →
+  `NotificationTarget.CASH_AUDIT` con la sucursal) y un diálogo "¿Seguro que harás el cierre en
+  un horario que no es el habitual?" con "Volver".
+- **Quién**: colaboradores (`Employee`), no usuarios de la app. `EmployeePickerField` al abrir
+  ("¿Quién abre la caja?", obligatorio) y al cerrar ("¿Quién recibe la caja?", con "Nadie: es el
+  cierre del día"). `CashSession.openedByEmployee*/receivedByEmployee*/closedByUser*`; van en
+  `toMap()` porque `closeSession` reescribe la sesión.
+- **Bitácora** (`companies/{c}/cashAuditEvents`, solo se agrega; `presentation/cashaudit/`):
+  módulo "Bitácora de cajas" en Administración con permiso `VIEW_CASH_AUDIT`, por sucursal y
+  día, fuera de horario en rojo y filtrable. Eventos: OPEN, CLOSE_SCREEN, CLOSE (esperado,
+  contado, diferencia, quién abrió → quién recibe).
+- **Pendiente (Fase B)**: cadena de turnos — retiro al cerrar (permiso aparte), lo que queda
+  pasa solo al siguiente turno de esa caja sin teclear el fondo; vouchers de tarjeta y
+  transferencias pasan de turno a turno como el efectivo, con el detalle de cuáles se cobraron en
+  cada turno; verificación al abrir de lo que se dejó el día anterior (el `DailyCashClose` ya
+  tiene `leftForNextDay` pero la apertura no lo usa). **Fase C**: depósitos al banco por tandas
+  con foto de la boleta, que cuentan en el cuadre y no pasan al siguiente turno — el dueño quiere
+  que todo el dinero termine en el banco y nadie retire.
+
 ### POS: diálogo de cobro (`PaymentDialog`)
 
 - **En pantalla ancha (≥840dp, tablet horizontal) va en dos paneles**: izquierda "cómo paga"

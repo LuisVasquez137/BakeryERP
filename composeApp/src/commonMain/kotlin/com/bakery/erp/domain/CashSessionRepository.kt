@@ -56,7 +56,12 @@ interface CashSessionRepository {
         countedCash: Double,
         notes: String?,
         /** Ver [CashSession.autoClosed]. Lo pone el cierre por quedarse abierta de un día a otro. */
-        autoClosed: Boolean = false
+        autoClosed: Boolean = false,
+        /** Colaborador que recibe la gaveta. Vacío = nadie (fin del día). */
+        receivedByEmployeeId: String = "",
+        receivedByEmployeeName: String = "",
+        closedByUserId: String = "",
+        closedByUserName: String = ""
     ): CashSession
 
     /**

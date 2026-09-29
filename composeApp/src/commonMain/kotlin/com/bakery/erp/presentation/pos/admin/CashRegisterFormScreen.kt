@@ -9,6 +9,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -127,6 +128,13 @@ private fun CashRegisterFormContent(
     var active by rememberSaveable { mutableStateOf(existing?.active ?: true) }
     val branch = remember(branches, branchId) { branches.firstOrNull { it.id == branchId } }
     var branchPickerOpen by remember { mutableStateOf(false) }
+    // Horarios de cuadre de esta caja ("HH:mm"). Por caja y no por sucursal: cada caja cuadra a su hora.
+    var schedules by remember { mutableStateOf(existing?.closeSchedules.orEmpty().sortedBy { com.bakery.erp.model.parseScheduleMinutes(it) ?: 0 }) }
+    var toleranceText by rememberSaveable {
+        mutableStateOf((existing?.closeToleranceMinutes ?: com.bakery.erp.model.DEFAULT_CLOSE_TOLERANCE_MINUTES).toString())
+    }
+    var timePickerOpen by remember { mutableStateOf(false) }
+    val tolerance = toleranceText.toIntOrNull()?.coerceIn(0, 180) ?: com.bakery.erp.model.DEFAULT_CLOSE_TOLERANCE_MINUTES
 
     Column(
         modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -166,6 +174,43 @@ private fun CashRegisterFormContent(
             }
         }
 
+        // ── Horarios de cuadre ──
+        Text("Horarios de cuadre", fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+        Text(
+            "Entrar al cierre de esta caja fuera de estos horarios queda marcado en la bitácora, " +
+                "pide confirmación y le avisa al administrador. Sin horarios, no se controla.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            schedules.forEach { t ->
+                InputChip(
+                    selected = true,
+                    onClick = { schedules = schedules - t },
+                    label = { Text(com.bakery.erp.model.closeScheduleLabel(listOf(t), tolerance).substringBefore(" (")) },
+                    trailingIcon = { Icon(androidx.compose.material.icons.Icons.Default.Close, "Quitar", Modifier.size(16.dp)) }
+                )
+            }
+            AssistChip(onClick = { timePickerOpen = true }, label = { Text("Agregar horario") })
+        }
+        OutlinedTextField(
+            value = toleranceText,
+            onValueChange = { toleranceText = it.filter { c -> c.isDigit() }.take(3) },
+            label = { Text("Tolerancia (minutos antes y después)") },
+            singleLine = true,
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+            ),
+            modifier = Modifier.fillMaxWidth()
+        )
+        if (schedules.isNotEmpty()) {
+            Text("Se permite cerrar: ${com.bakery.erp.model.closeScheduleLabel(schedules, tolerance)}",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+        }
+
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = active, onCheckedChange = { active = it })
             Spacer(Modifier.width(8.dp))
@@ -181,7 +226,9 @@ private fun CashRegisterFormContent(
                         branchId = b.id,
                         branchName = b.name,
                         name = name.trim(),
-                        active = active
+                        active = active,
+                        closeSchedules = schedules,
+                        closeToleranceMinutes = tolerance
                     )
                 )
             },
@@ -190,5 +237,19 @@ private fun CashRegisterFormContent(
         ) {
             Text("Guardar")
         }
+    }
+
+    if (timePickerOpen) {
+        com.bakery.erp.ui.TimePickerDialog(
+            initialHour = 21,
+            initialMinute = 0,
+            title = "Horario de cuadre",
+            onDismiss = { timePickerOpen = false },
+            onConfirm = { h, m ->
+                val t = com.bakery.erp.ui.formatHHmm(h, m)
+                schedules = (schedules + t).distinct().sortedBy { com.bakery.erp.model.parseScheduleMinutes(it) ?: 0 }
+                timePickerOpen = false
+            }
+        )
     }
 }

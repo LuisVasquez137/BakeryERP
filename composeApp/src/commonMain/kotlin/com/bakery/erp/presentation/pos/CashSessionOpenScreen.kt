@@ -60,6 +60,11 @@ fun CashSessionOpenScreen(
 
     val register = state.registers.firstOrNull { it.id == registerId }
     val branch = state.branches.firstOrNull { it.id == register?.branchId }
+    // Quién abre: de Colaboradores. La tablet tiene un solo usuario para todas las cajeras.
+    var openedBy by remember { mutableStateOf<com.bakery.erp.model.Employee?>(null) }
+    LaunchedEffect(companyId, branch?.id) {
+        if (companyId.isNotEmpty() && branch != null) viewModel.loadEmployees(companyId, branch.id)
+    }
 
     Scaffold(
         topBar = {
@@ -91,11 +96,19 @@ fun CashSessionOpenScreen(
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(branch?.name.orEmpty(), fontWeight = FontWeight.SemiBold)
                         Text(register?.name.orEmpty(), style = MaterialTheme.typography.bodyMedium)
-                        Text("Cajero: ${user?.displayName.orEmpty()}",
+                        Text("Usuario: ${user?.displayName.orEmpty()}",
                              style = MaterialTheme.typography.bodySmall,
                              color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
+
+                EmployeePickerField(
+                    label = "¿Quién abre la caja?",
+                    employees = state.employees,
+                    selected = openedBy,
+                    chosen = openedBy != null,
+                    onSelect = { openedBy = it }
+                )
 
                 if (state.expectedOpeningDenoms.isNotEmpty()) {
                     Card(
@@ -135,10 +148,11 @@ fun CashSessionOpenScreen(
                             (CashDenominations.byCode(code)?.value ?: 0.0) * qty
                         }
                         viewModel.openSession(
-                            companyId, branchRef, registerRef, userRef, opening, openingCounts
+                            companyId, branchRef, registerRef, userRef, opening, openingCounts,
+                            openedBy = openedBy
                         )
                     },
-                    enabled = register != null && branch != null && user != null && !state.isLoading,
+                    enabled = register != null && branch != null && user != null && openedBy != null && !state.isLoading,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("Abrir caja")

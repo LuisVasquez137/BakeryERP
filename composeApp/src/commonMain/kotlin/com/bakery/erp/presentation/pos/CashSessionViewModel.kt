@@ -65,7 +65,22 @@ data class CashSessionUiState(
     val closingDenoms: Map<String, Int> = emptyMap(),
     /** Cajas abiertas en la sucursal del usuario actual — selector para transferencia. */
     val openSessionsForTransfer: List<CashSession> = emptyList(),
-    val transferDone: Boolean = false
+    val transferDone: Boolean = false,
+    /** Colaboradores activos: quién abre la caja y quién la recibe al cerrar. */
+    val employees: List<com.bakery.erp.model.Employee> = emptyList(),
+    /**
+     * Resultado de entrar a la pantalla de cierre: si está fuera del horario de ESA caja, la
+     * pantalla pregunta antes de seguir. Null = todavía no se evaluó.
+     */
+    val closeGate: CloseGate? = null
+)
+
+/** ¿Se entró al cierre en el horario de cuadre de esta caja? */
+data class CloseGate(
+    val sessionId: String,
+    val outOfSchedule: Boolean,
+    /** "2:00 PM, 9:00 PM (±30 min)". Vacío si la caja no tiene horarios configurados. */
+    val scheduleLabel: String
 )
 
 class CashSessionViewModel(
@@ -73,7 +88,12 @@ class CashSessionViewModel(
     private val registerRepository: CashRegisterRepository,
     private val branchRepository: BranchRepository,
     private val dailyCloseRepository: DailyCashCloseRepository,
-    private val purchaseRepository: PurchaseRepository
+    private val purchaseRepository: PurchaseRepository,
+    /** Bitácora de cajas: aperturas, entradas al cierre y cierres. */
+    private val auditRepository: com.bakery.erp.domain.CashAuditRepository,
+    /** Aviso al dueño cuando alguien entra al cierre fuera de horario. */
+    private val notificationRepository: com.bakery.erp.domain.NotificationRepository,
+    private val employeeRepository: com.bakery.erp.domain.EmployeeRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(CashSessionUiState())
@@ -176,13 +196,102 @@ class CashSessionViewModel(
         }
     }
 
+    /** Colaboradores activos, los de la sucursal primero: el que cubre otro turno también cuenta. */
+    fun loadEmployees(companyId: String, branchId: String) {
+        viewModelScope.launch {
+            runCatching { employeeRepository.getEmployees(companyId) }
+                .onSuccess { list ->
+                    val active = list.filter { it.active && it.status == com.bakery.erp.model.EmployeeStatus.ACTIVE }
+                        .sortedWith(compareBy<com.bakery.erp.model.Employee> { it.branchId != branchId }.thenBy { it.name.lowercase() })
+                    _uiState.update { it.copy(employees = active) }
+                }
+        }
+    }
+
+    /**
+     * Se entró a la pantalla de cierre: queda en la bitácora EN ESE MOMENTO, se cierre o no,
+     * porque la pantalla ya muestra cuánto debería haber. Fuera del horario de cuadre de esa
+     * caja, además le llega el aviso al dueño y la pantalla pregunta antes de seguir.
+     */
+    fun enterCloseScreen(companyId: String, sessionId: String, currentUser: User) {
+        if (_uiState.value.closeGate?.sessionId == sessionId) return
+        viewModelScope.launch {
+            runCatching {
+                val session = sessionRepository.getSession(companyId, sessionId) ?: return@runCatching null
+                val register = registerRepository.get(companyId, session.registerId)
+                val schedules = register?.closeSchedules.orEmpty()
+                val tolerance = register?.closeToleranceMinutes ?: com.bakery.erp.model.DEFAULT_CLOSE_TOLERANCE_MINUTES
+                val now = Clock.System.now()
+                val local = now.toLocalDateTime(TimeZone.currentSystemDefault())
+                val outOfSchedule = !com.bakery.erp.model.isWithinCloseSchedule(local.hour * 60 + local.minute, schedules, tolerance)
+                val label = com.bakery.erp.model.closeScheduleLabel(schedules, tolerance)
+                auditRepository.log(companyId, auditEvent(session, currentUser, com.bakery.erp.model.CashAuditEventType.CLOSE_SCREEN,
+                    outOfSchedule, label, employeeName = session.openedByEmployeeName))
+                if (outOfSchedule) {
+                    runCatching {
+                        notificationRepository.push(companyId, com.bakery.erp.model.AppNotification(
+                            type = com.bakery.erp.model.NotificationType.CASH_CLOSE_OUT_OF_SCHEDULE,
+                            title = "Cierre de caja fuera de horario",
+                            body = "${session.branchName} · ${session.registerName}: entraron al cierre a las " +
+                                "${local.hour.toString().padStart(2, '0')}:${local.minute.toString().padStart(2, '0')}" +
+                                (if (label.isNotBlank()) ". Horario: $label" else "") +
+                                (if (session.openedByEmployeeName.isNotBlank()) ". Caja de ${session.openedByEmployeeName}" else ""),
+                            targetBranchIds = listOf(session.branchId),
+                            requiredPermission = com.bakery.erp.model.Permission.VIEW_CASH_AUDIT.name,
+                            targetScreen = com.bakery.erp.model.NotificationTarget.CASH_AUDIT,
+                            targetId = session.branchId,
+                            createdByUserId = currentUser.id,
+                            createdByUserName = currentUser.displayName
+                        ))
+                    }
+                }
+                CloseGate(sessionId, outOfSchedule, label)
+            }.onSuccess { gate ->
+                if (gate != null) _uiState.update { it.copy(closeGate = gate) }
+            }
+        }
+    }
+
+    fun clearCloseGate() = _uiState.update { it.copy(closeGate = null) }
+
+    private fun auditEvent(
+        session: CashSession,
+        user: User,
+        type: String,
+        outOfSchedule: Boolean,
+        scheduleLabel: String,
+        employeeName: String,
+        expected: Double = 0.0,
+        counted: Double = 0.0,
+        difference: Double = 0.0,
+        notes: String = ""
+    ) = com.bakery.erp.model.CashAuditEvent(
+        type = type,
+        branchId = session.branchId,
+        branchName = session.branchName,
+        registerId = session.registerId,
+        registerName = session.registerName,
+        sessionId = session.id,
+        userId = user.id,
+        userName = user.displayName,
+        employeeName = employeeName,
+        outOfSchedule = outOfSchedule,
+        scheduleLabel = scheduleLabel,
+        expectedCash = expected,
+        countedCash = counted,
+        difference = difference,
+        notes = notes
+    )
+
     fun openSession(
         companyId: String,
         branch: Branch,
         register: CashRegister,
         currentUser: User,
         openingBalance: Double,
-        openingDenominations: Map<String, Int> = emptyMap()
+        openingDenominations: Map<String, Int> = emptyMap(),
+        /** Colaborador que abre: en la tablet de usuario único, es lo que dice quién estaba. */
+        openedBy: com.bakery.erp.model.Employee? = null
     ) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null, openedSessionId = null) }
@@ -197,9 +306,16 @@ class CashSessionViewModel(
                         cashierId = currentUser.id,
                         cashierName = currentUser.displayName,
                         openedAt = Clock.System.now().toEpochMilliseconds(),
-                        openingBalance = openingBalance
+                        openingBalance = openingBalance,
+                        openedByEmployeeId = openedBy?.id.orEmpty(),
+                        openedByEmployeeName = openedBy?.name.orEmpty()
                     )
                 )
+                runCatching {
+                    auditRepository.log(companyId, auditEvent(session, currentUser, com.bakery.erp.model.CashAuditEventType.OPEN,
+                        outOfSchedule = false, scheduleLabel = "", employeeName = openedBy?.name.orEmpty(),
+                        expected = openingBalance))
+                }
                 if (openingDenominations.isNotEmpty()) {
                     sessionRepository.saveDenominations(
                         companyId, session.id, CashDenominationStage.OPENING, openingDenominations
@@ -368,12 +484,34 @@ class CashSessionViewModel(
         sessionId: String,
         countedCash: Double,
         notes: String?,
-        closingDenominations: Map<String, Int> = emptyMap()
+        closingDenominations: Map<String, Int> = emptyMap(),
+        /** Quién recibe la gaveta (siguiente turno). Null = nadie, fin del día. */
+        receivedBy: com.bakery.erp.model.Employee? = null,
+        currentUser: User? = null
     ) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null, isClosed = false) }
             runCatching {
-                val closed = sessionRepository.closeSession(companyId, sessionId, countedCash, notes)
+                val closed = sessionRepository.closeSession(
+                    companyId, sessionId, countedCash, notes,
+                    receivedByEmployeeId = receivedBy?.id.orEmpty(),
+                    receivedByEmployeeName = receivedBy?.name.orEmpty(),
+                    closedByUserId = currentUser?.id.orEmpty(),
+                    closedByUserName = currentUser?.displayName.orEmpty()
+                )
+                if (currentUser != null) {
+                    val gate = _uiState.value.closeGate?.takeIf { it.sessionId == sessionId }
+                    runCatching {
+                        auditRepository.log(companyId, auditEvent(closed, currentUser, com.bakery.erp.model.CashAuditEventType.CLOSE,
+                            outOfSchedule = gate?.outOfSchedule == true, scheduleLabel = gate?.scheduleLabel.orEmpty(),
+                            employeeName = listOfNotNull(
+                                closed.openedByEmployeeName.takeIf { it.isNotBlank() },
+                                receivedBy?.name?.let { "entrega a $it" }
+                            ).joinToString(" → "),
+                            expected = closed.expectedCash, counted = closed.countedCash, difference = closed.difference,
+                            notes = notes.orEmpty()))
+                    }
+                }
                 if (closingDenominations.isNotEmpty()) {
                     sessionRepository.saveDenominations(
                         companyId, sessionId, CashDenominationStage.CLOSING, closingDenominations

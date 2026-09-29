@@ -44,7 +44,19 @@ data class CashSession(
      * porque alguien haya contado. Sin este campo, el reporte mostraría una caja perfectamente
      * cuadrada y nadie sabría que nunca se contó — que es peor que un faltante declarado.
      */
-    val autoClosed: Boolean = false
+    val autoClosed: Boolean = false,
+    /**
+     * Colaborador que abrió la caja. La tablet del mostrador tiene un solo usuario para todas,
+     * así que el usuario no dice quién estaba: el colaborador sí.
+     */
+    val openedByEmployeeId: String = "",
+    val openedByEmployeeName: String = "",
+    /** Colaborador que recibe la gaveta al cerrar (el del siguiente turno). Vacío = fin del día. */
+    val receivedByEmployeeId: String = "",
+    val receivedByEmployeeName: String = "",
+    /** Usuario de la app que cerró. Puede no ser el que abrió (un supervisor, otro turno). */
+    val closedByUserId: String = "",
+    val closedByUserName: String = ""
 )
 
 /**

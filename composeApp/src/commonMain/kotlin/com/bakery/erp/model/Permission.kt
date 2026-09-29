@@ -68,6 +68,8 @@ enum class Permission {
     VOID_SALE,
     MANAGE_DAILY_CASH_CLOSE,
     SPOT_CHECK_CASH,
+    /** Bitácora de cajas: aperturas, cierres y entradas al cierre fuera de horario. */
+    VIEW_CASH_AUDIT,
 
     // Conteo de pan (cierre de día)
     COUNT_FINISHED_STOCK,
@@ -143,6 +145,7 @@ enum class Permission {
         VOID_SALE -> "Anular ventas"
         MANAGE_DAILY_CASH_CLOSE -> "Cerrar el día por sucursal"
         SPOT_CHECK_CASH -> "Cuadre sorpresa de caja"
+        VIEW_CASH_AUDIT -> "Bitácora de cajas"
         COUNT_FINISHED_STOCK -> "Conteo de pan al cierre"
         VIEW_BREAD_COUNTS -> "Ver conteos de pan"
         VIEW_OPERATIONS_REPORT -> "Ver dashboard operativo"
@@ -211,6 +214,7 @@ enum class Permission {
         VOID_SALE -> "Puede anular ventas ya cobradas (Fase 2 — revierte stock y caja)"
         MANAGE_DAILY_CASH_CLOSE -> "Puede hacer el cierre consolidado del día por sucursal: define cuánto se deja para mañana y cuánto se lleva el owner"
         SPOT_CHECK_CASH -> "Puede hacer cuadres sorpresa a cualquier caja abierta sin cerrarla (auditoría en caliente para owners y supervisores)"
+        VIEW_CASH_AUDIT -> "Puede ver la bitácora de cajas por sucursal y recibe el aviso cuando alguien entra al cierre fuera del horario de esa caja"
         COUNT_FINISHED_STOCK -> "Puede contar físicamente el pan al cierre del día y aplicar mermas automáticas por las diferencias"
         VIEW_BREAD_COUNTS -> "Puede consultar el historial de conteos de pan y sus mermas"
         VIEW_OPERATIONS_REPORT -> "Puede ver el dashboard del Home con KPIs operativos en vivo y banner de alertas accionables"
@@ -259,7 +263,7 @@ enum class Permission {
         MANAGE_FINISHED_STOCK, VIEW_DISPATCH_VALUE -> "Distribución"
         OPERATE_POS, VIEW_SALES, MANAGE_POS_CONFIG,
         VIEW_SALES_VALUE, VOID_SALE,
-        MANAGE_DAILY_CASH_CLOSE, SPOT_CHECK_CASH -> "Ventas (POS)"
+        MANAGE_DAILY_CASH_CLOSE, SPOT_CHECK_CASH, VIEW_CASH_AUDIT -> "Ventas (POS)"
         COUNT_FINISHED_STOCK, VIEW_BREAD_COUNTS -> "Distribución"
         VIEW_OPERATIONS_REPORT, VIEW_SALES_REPORT,
         VIEW_PRODUCTION_REPORT, VIEW_FINANCIAL_REPORT,
