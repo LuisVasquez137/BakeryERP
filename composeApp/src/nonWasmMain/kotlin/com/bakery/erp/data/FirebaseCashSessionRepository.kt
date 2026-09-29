@@ -186,6 +186,29 @@ class FirebaseCashSessionRepository(
         return closed
     }
 
+    /** Número de dinero que en Android llega entero y en JS Double. 0 si falta. */
+    private fun DocumentSnapshot.readMoney(field: String): Double =
+        runCatching { get<Double?>(field) }.getOrNull()
+            ?: runCatching { get<Long?>(field)?.toDouble() }.getOrNull() ?: 0.0
+
+    override suspend fun recordHandover(
+        companyId: String,
+        sessionId: String,
+        withdrawal: Double,
+        handover: com.bakery.erp.model.ShiftHandover
+    ) {
+        // Escritura parcial: el cierre ya reescribió la sesión y esto solo le agrega la entrega.
+        sessionsCol(companyId).document(sessionId).update(
+            firestoreSafeOf(
+                "closingWithdrawal" to withdrawal,
+                "carriedOutCash" to handover.cash,
+                "carriedOutCard" to handover.card,
+                "carriedOutTransfer" to handover.transfer,
+                "handoverRecorded" to true
+            )
+        )
+    }
+
     override suspend fun autoCloseStaleSessions(companyId: String, todayStartMillis: Long): Int {
         val stale = sessionsCol(companyId)
             .where { "status" equalTo CashSessionStatus.OPEN }
@@ -206,7 +229,12 @@ class FirebaseCashSessionRepository(
                     notes = "Cerrada automáticamente: quedó abierta del día anterior. " +
                         "No se contó el efectivo; se asumió pago exacto.",
                     autoClosed = true
-                )
+                ).also { closed ->
+                    // Sin entrega registrada, la primera apertura de mañana no tendría contra qué
+                    // comprobar lo que quedó en la gaveta: se deja lo que se asumió (nada retirado).
+                    recordHandover(companyId, closed.id, 0.0,
+                        com.bakery.erp.model.shiftHandover(closed, closed.countedCash, 0.0))
+                }
             }
         }
         return stale.size
@@ -396,7 +424,16 @@ class FirebaseCashSessionRepository(
         "receivedByEmployeeId" to receivedByEmployeeId,
         "receivedByEmployeeName" to receivedByEmployeeName,
         "closedByUserId" to closedByUserId,
-        "closedByUserName" to closedByUserName
+        "closedByUserName" to closedByUserName,
+        "previousSessionId" to previousSessionId,
+        "openingExpected" to openingExpected,
+        "carriedInCard" to carriedInCard,
+        "carriedInTransfer" to carriedInTransfer,
+        "closingWithdrawal" to closingWithdrawal,
+        "carriedOutCash" to carriedOutCash,
+        "carriedOutCard" to carriedOutCard,
+        "carriedOutTransfer" to carriedOutTransfer,
+        "handoverRecorded" to handoverRecorded
     )
 
     private fun DocumentSnapshot.toSession() = CashSession(
@@ -430,7 +467,16 @@ class FirebaseCashSessionRepository(
         receivedByEmployeeId = runCatching { get<String?>("receivedByEmployeeId") }.getOrNull() ?: "",
         receivedByEmployeeName = runCatching { get<String?>("receivedByEmployeeName") }.getOrNull() ?: "",
         closedByUserId = runCatching { get<String?>("closedByUserId") }.getOrNull() ?: "",
-        closedByUserName = runCatching { get<String?>("closedByUserName") }.getOrNull() ?: ""
+        closedByUserName = runCatching { get<String?>("closedByUserName") }.getOrNull() ?: "",
+        previousSessionId = runCatching { get<String?>("previousSessionId") }.getOrNull() ?: "",
+        openingExpected = readMoney("openingExpected"),
+        carriedInCard = readMoney("carriedInCard"),
+        carriedInTransfer = readMoney("carriedInTransfer"),
+        closingWithdrawal = readMoney("closingWithdrawal"),
+        carriedOutCash = readMoney("carriedOutCash"),
+        carriedOutCard = readMoney("carriedOutCard"),
+        carriedOutTransfer = readMoney("carriedOutTransfer"),
+        handoverRecorded = runCatching { get<Boolean?>("handoverRecorded") }.getOrNull() ?: false
     )
 
     private fun CashMovement.toMap(): Map<String, Any?> = firestoreSafeOf(

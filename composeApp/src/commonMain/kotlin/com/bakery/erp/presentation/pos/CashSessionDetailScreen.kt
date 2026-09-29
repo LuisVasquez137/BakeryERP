@@ -24,6 +24,8 @@ import com.bakery.erp.model.cashMovementTotals
 import com.bakery.erp.model.CashMovement
 import com.bakery.erp.model.CashMovementType
 import com.bakery.erp.model.CashSession
+import com.bakery.erp.model.effectivePaymentBreakdown
+import kotlinx.datetime.toLocalDateTime
 import com.bakery.erp.model.CashSessionStatus
 import com.bakery.erp.model.Permission
 import com.bakery.erp.model.hasPermission
@@ -68,7 +70,10 @@ fun CashSessionDetailScreen(
     val totals = remember(state.movements) { cashMovementTotals(state.movements) }
 
     LaunchedEffect(companyId, sessionId) {
-        if (companyId.isNotEmpty()) viewModel.observeSession(companyId, sessionId)
+        if (companyId.isNotEmpty()) {
+            viewModel.observeSession(companyId, sessionId)
+            viewModel.loadSessionNonCashSales(companyId, sessionId)
+        }
     }
     LaunchedEffect(state.error) {
         state.error?.let { snackbar.showSnackbar(it); viewModel.clearError() }
@@ -131,6 +136,8 @@ fun CashSessionDetailScreen(
                 // anotó algo mal. Cerrada, el encabezado sí sirve: es el comprobante del cierre.
                 if (session.status != CashSessionStatus.OPEN) {
                     item { SessionHeaderCard(session) }
+                    // Solo cerrada: abierta, la lista de cobros con tarjeta diría cuánto se lleva vendido.
+                    item { ShiftHandoverCard(session, state.sessionNonCashSales) }
                 }
                 item { MovementTotalsCard(totals) }
                 item {
@@ -283,6 +290,69 @@ fun CashSessionDetailScreen(
                 },
                 viewModel = viewModel
             )
+        }
+    }
+}
+
+/**
+ * Lo que este turno recibió, lo que cobró con tarjeta y transferencia (uno por uno: así se sabe
+ * en qué turno se cobró cada voucher) y lo que entregó al cerrar.
+ */
+@Composable
+private fun ShiftHandoverCard(session: CashSession, nonCash: List<com.bakery.erp.model.Sale>) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Entrega de turno", fontWeight = FontWeight.SemiBold)
+            val openedBy = session.openedByEmployeeName.ifBlank { session.cashierName }
+            Text("Abrió: $openedBy", style = MaterialTheme.typography.bodySmall)
+            if (session.carriedInCard > 0.004 || session.carriedInTransfer > 0.004) {
+                Text("Recibió vouchers: tarjeta Q ${session.carriedInCard.fmtMoney(2)} · transferencias Q ${session.carriedInTransfer.fmtMoney(2)}",
+                    style = MaterialTheme.typography.bodySmall)
+            }
+            if (session.openingExpected > 0.004 && kotlin.math.abs(session.openingDifference) > 0.004) {
+                Text(
+                    if (session.openingDifference < 0) "Al abrir faltaban Q ${(-session.openingDifference).fmtMoney(2)} de lo que se dejó"
+                    else "Al abrir sobraban Q ${session.openingDifference.fmtMoney(2)} de lo que se dejó",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error
+                )
+            }
+
+            if (nonCash.isNotEmpty()) {
+                HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                Text("Tarjeta y transferencias de este turno", fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.bodyMedium)
+                nonCash.forEach { sale ->
+                    val t = kotlin.time.Instant.fromEpochMilliseconds(sale.createdAt)
+                        .toLocalDateTime(kotlinx.datetime.TimeZone.currentSystemDefault())
+                    val time = "${t.hour.toString().padStart(2, '0')}:${t.minute.toString().padStart(2, '0')}"
+                    sale.effectivePaymentBreakdown
+                        .filterKeys { it == com.bakery.erp.model.SalePaymentMethod.CARD || it == com.bakery.erp.model.SalePaymentMethod.TRANSFER }
+                        .forEach { (method, amount) ->
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("$time · ${com.bakery.erp.model.SalePaymentMethod.label(method)}" +
+                                    (sale.invoiceSerie.takeIf { it.isNotBlank() }?.let { " · Fact. $it-${sale.invoiceNumero}" } ?: ""),
+                                    style = MaterialTheme.typography.bodySmall)
+                                Text("Q ${amount.fmtMoney(2)}", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                }
+            }
+
+            if (session.handoverRecorded) {
+                HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                Text(
+                    if (session.receivedByEmployeeName.isNotBlank()) "Entregó a ${session.receivedByEmployeeName}" else "Cierre del día: se dejó para mañana",
+                    fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium
+                )
+                if (session.closingWithdrawal > 0.004) {
+                    Text("Retiró Q ${session.closingWithdrawal.fmtMoney(2)}", style = MaterialTheme.typography.bodySmall)
+                }
+                Text("Efectivo Q ${session.carriedOutCash.fmtMoney(2)} · tarjeta Q ${session.carriedOutCard.fmtMoney(2)} · " +
+                    "transferencias Q ${session.carriedOutTransfer.fmtMoney(2)}", style = MaterialTheme.typography.bodySmall)
+            }
         }
     }
 }

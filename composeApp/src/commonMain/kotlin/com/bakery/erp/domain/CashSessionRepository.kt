@@ -75,6 +75,17 @@ interface CashSessionRepository {
      * Devuelve cuántas cerró. Solo toca sesiones de días ANTERIORES: la de hoy sigue viva
      * aunque lleve muchas horas abierta, porque el turno puede cruzar la medianoche.
      */
+    /**
+     * Deja registrado en la sesión ya cerrada lo que se retiró y lo que se entregó (al siguiente
+     * turno o para mañana). Escritura parcial.
+     */
+    suspend fun recordHandover(
+        companyId: String,
+        sessionId: String,
+        withdrawal: Double,
+        handover: com.bakery.erp.model.ShiftHandover
+    )
+
     suspend fun autoCloseStaleSessions(companyId: String, todayStartMillis: Long): Int
 
     /**

@@ -1773,13 +1773,26 @@ contar sin autorización. Decisiones tomadas con él:
   módulo "Bitácora de cajas" en Administración con permiso `VIEW_CASH_AUDIT`, por sucursal y
   día, fuera de horario en rojo y filtrable. Eventos: OPEN, CLOSE_SCREEN, CLOSE (esperado,
   contado, diferencia, quién abrió → quién recibe).
-- **Pendiente (Fase B)**: cadena de turnos — retiro al cerrar (permiso aparte), lo que queda
-  pasa solo al siguiente turno de esa caja sin teclear el fondo; vouchers de tarjeta y
-  transferencias pasan de turno a turno como el efectivo, con el detalle de cuáles se cobraron en
-  cada turno; verificación al abrir de lo que se dejó el día anterior (el `DailyCashClose` ya
-  tiene `leftForNextDay` pero la apertura no lo usa). **Fase C**: depósitos al banco por tandas
-  con foto de la boleta, que cuentan en el cuadre y no pasan al siguiente turno — el dueño quiere
-  que todo el dinero termine en el banco y nadie retire.
+- **Fase B (hecha): la caja es una cadena de turnos** (`model/CashHandover.kt`, tests en
+  `CashHandoverTest`). Al cerrar: retiro opcional (permiso `WITHDRAW_AT_CLOSE`, no más de lo
+  contado) y `shiftHandover` calcula lo que se entrega — efectivo contado menos retirado, y los
+  vouchers de tarjeta y transferencias ACUMULADOS (recibidos + cobrados en el turno): pasan de
+  turno a turno como efectivo y se recogen al final del día. `recordHandover` (escritura parcial)
+  lo guarda en la sesión cerrada (`closingWithdrawal`, `carriedOut*`, `handoverRecorded`).
+  - **Si alguien recibe**, `closeSession` abre SOLO el siguiente turno de la misma caja con
+    `openingBalance` = efectivo entregado, `carriedInCard/Transfer`, `previousSessionId` y el
+    colaborador que recibe; la pantalla va directo al POS de ese turno (`onHandedOver`).
+  - **"Nadie" (cierre del día)**: lo que queda es para mañana. La primera apertura de esa caja
+    muestra "Se dejaron Q X" (`loadOpeningExpected` → `expectedOpeningCash` del último cierre con
+    entrega) y la diferencia en vivo; se guarda en `openingExpected` y la bitácora la anota
+    ("Al abrir faltaban Q…"). El cierre automático de cajas olvidadas también registra entrega.
+  - El detalle de un turno cerrado (`ShiftHandoverCard`) lista cada cobro con tarjeta y
+    transferencia (hora, factura) — de qué turno es cada voucher — y qué entregó o retiró. Solo
+    cerrado: abierto diría cuánto se lleva vendido.
+  - El `DailyCashClose` sigue aparte: la cadena no lo usa todavía.
+- **Pendiente (Fase C)**: depósitos al banco por tandas con foto de la boleta, que cuentan en el
+  cuadre y no pasan al siguiente turno — el dueño quiere que todo el dinero termine en el banco y
+  nadie retire.
 
 ### POS: diálogo de cobro (`PaymentDialog`)
 

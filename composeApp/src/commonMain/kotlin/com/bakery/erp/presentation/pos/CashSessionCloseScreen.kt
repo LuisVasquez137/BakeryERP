@@ -22,6 +22,7 @@ import com.bakery.erp.presentation.pos.components.DenominationCounter
 import com.bakery.erp.presentation.pos.components.DenominationCountsSaver
 import com.bakery.erp.ui.AdaptiveContainer
 import com.bakery.erp.util.fmtMoney
+import com.bakery.erp.model.hasPermission
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -30,7 +31,9 @@ fun CashSessionCloseScreen(
     onNavigateBack: () -> Unit,
     onClosed: (sessionId: String) -> Unit,
     authViewModel: AuthViewModel,
-    viewModel: CashSessionViewModel
+    viewModel: CashSessionViewModel,
+    /** Se entregó la caja: el siguiente turno ya está abierto y sigue en el POS. */
+    onHandedOver: (newSessionId: String) -> Unit = onClosed
 ) {
     val state by viewModel.uiState.collectAsState()
     val authState by authViewModel.uiState.collectAsState()
@@ -46,6 +49,8 @@ fun CashSessionCloseScreen(
     var receivedBy by remember { mutableStateOf<com.bakery.erp.model.Employee?>(null) }
     var receiverChosen by remember { mutableStateOf(false) }
     var outOfScheduleAccepted by remember { mutableStateOf(false) }
+    val canWithdraw = user?.hasPermission(com.bakery.erp.model.Permission.WITHDRAW_AT_CLOSE) == true
+    var withdrawalText by rememberSaveable { mutableStateOf("") }
 
     LaunchedEffect(companyId, sessionId) {
         if (companyId.isNotEmpty()) viewModel.observeSession(companyId, sessionId)
@@ -60,8 +65,10 @@ fun CashSessionCloseScreen(
     }
     LaunchedEffect(state.isClosed) {
         if (state.isClosed) {
+            val next = state.handedOverSessionId
             viewModel.clearClosed()
-            onClosed(sessionId)
+            viewModel.clearHandedOver()
+            if (next != null) onHandedOver(next) else onClosed(sessionId)
         }
     }
 
@@ -76,6 +83,9 @@ fun CashSessionCloseScreen(
     }
     val diff = counted - expected
     val hasCount = closingCounts.values.any { it > 0 }
+    val withdrawal = if (canWithdraw) withdrawalText.toDoubleOrNull() ?: 0.0 else 0.0
+    val withdrawalProblem = com.bakery.erp.model.closingWithdrawalProblem(counted, withdrawal)
+    val handover = session?.let { com.bakery.erp.model.shiftHandover(it, counted, withdrawal) }
 
     Scaffold(
         topBar = {
@@ -148,6 +158,22 @@ fun CashSessionCloseScreen(
                     }
                 }
 
+                if (canWithdraw && hasCount) {
+                    OutlinedTextField(
+                        value = withdrawalText,
+                        onValueChange = { withdrawalText = it.filter { c -> c.isDigit() || c == '.' } },
+                        label = { Text("Retirar de la gaveta (opcional)") },
+                        prefix = { Text("Q ") },
+                        singleLine = true,
+                        isError = withdrawalProblem != null,
+                        supportingText = withdrawalProblem?.let { p -> { Text(p) } },
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
                 EmployeePickerField(
                     label = "¿Quién recibe la caja?",
                     employees = state.employees,
@@ -156,6 +182,37 @@ fun CashSessionCloseScreen(
                     onSelect = { receivedBy = it; receiverChosen = true },
                     noneLabel = "Nadie: es el cierre del día"
                 )
+
+                // Lo que sale de esta gaveta: al siguiente turno, o lo que queda para mañana.
+                if (hasCount && receiverChosen && handover != null) {
+                    Card(colors = CardDefaults.cardColors(containerColor = com.bakery.erp.ui.theme.BrandColors.PrimaryContainer)) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                receivedBy?.let { "Recibe ${it.name}" } ?: "Se deja para mañana",
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Efectivo"); Text("Q ${handover.cash.fmtMoney(2)}", fontWeight = FontWeight.Bold)
+                            }
+                            if (receivedBy != null) {
+                                // Los vouchers pasan de turno a turno; al final del día se recogen.
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("Vouchers de tarjeta"); Text("Q ${handover.card.fmtMoney(2)}")
+                                }
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("Transferencias"); Text("Q ${handover.transfer.fmtMoney(2)}")
+                                }
+                            } else if (handover.card > 0.004 || handover.transfer > 0.004) {
+                                Text("Vouchers del día para recoger: tarjeta Q ${handover.card.fmtMoney(2)} · " +
+                                    "transferencias Q ${handover.transfer.fmtMoney(2)}",
+                                    style = MaterialTheme.typography.bodySmall)
+                            }
+                            if (withdrawal > 0.004) {
+                                Text("Se retiran Q ${withdrawal.fmtMoney(2)}", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
 
                 OutlinedTextField(
                     value = notes,
@@ -167,7 +224,7 @@ fun CashSessionCloseScreen(
 
                 Button(
                     onClick = { showConfirm = true },
-                    enabled = hasCount && receiverChosen && !state.isLoading,
+                    enabled = hasCount && receiverChosen && withdrawalProblem == null && !state.isLoading,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("Cerrar caja")
@@ -215,7 +272,7 @@ fun CashSessionCloseScreen(
                     showConfirm = false
                     viewModel.closeSession(
                         companyId, sessionId, counted, notes.trim().ifEmpty { null }, closingCounts,
-                        receivedBy = receivedBy, currentUser = user
+                        receivedBy = receivedBy, currentUser = user, withdrawal = withdrawal
                     )
                 }) { Text("Sí, cerrar") }
             },

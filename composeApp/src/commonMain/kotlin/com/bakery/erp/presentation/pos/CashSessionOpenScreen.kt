@@ -15,6 +15,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.CashDenominations
 import com.bakery.erp.presentation.auth.AuthViewModel
+import com.bakery.erp.util.fmtMoney
 import com.bakery.erp.presentation.pos.components.DenominationCounter
 import com.bakery.erp.presentation.pos.components.DenominationCountsSaver
 import com.bakery.erp.ui.AdaptiveContainer
@@ -65,6 +66,11 @@ fun CashSessionOpenScreen(
     LaunchedEffect(companyId, branch?.id) {
         if (companyId.isNotEmpty() && branch != null) viewModel.loadEmployees(companyId, branch.id)
     }
+    // Lo que dejó el último cierre de esta caja: se comprueba que esté cabal.
+    LaunchedEffect(companyId, registerId) {
+        if (companyId.isNotEmpty()) viewModel.loadOpeningExpected(companyId, registerId)
+    }
+    val openingSoFar = openingCounts.entries.sumOf { (code, qty) -> (CashDenominations.byCode(code)?.value ?: 0.0) * qty }
 
     Scaffold(
         topBar = {
@@ -128,6 +134,33 @@ fun CashSessionOpenScreen(
                     }
                 }
 
+                state.openingExpectedCash?.let { expected ->
+                    Card(colors = CardDefaults.cardColors(containerColor = com.bakery.erp.ui.theme.BrandColors.PrimaryContainer),
+                        shape = RoundedCornerShape(10.dp)) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("Se dejaron Q ${expected.fmtMoney(2)} al cerrar", fontWeight = FontWeight.SemiBold)
+                            if (state.openingExpectedFrom.isNotBlank()) {
+                                Text(state.openingExpectedFrom, style = MaterialTheme.typography.bodySmall)
+                            }
+                            Text("Cuéntalo: si no está cabal, la diferencia queda registrada en la bitácora.",
+                                style = MaterialTheme.typography.bodySmall)
+                            if (openingSoFar > 0.004) {
+                                val d = openingSoFar - expected
+                                Text(
+                                    when {
+                                        d < -0.004 -> "Faltan Q ${(-d).fmtMoney(2)}"
+                                        d > 0.004 -> "Sobran Q ${d.fmtMoney(2)}"
+                                        else -> "Está cabal"
+                                    },
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (kotlin.math.abs(d) <= 0.004) com.bakery.erp.ui.theme.BrandColors.Primary
+                                    else MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                    }
+                }
+
                 Text("Fondo de cambio inicial · cuenta por denominaciones",
                     fontWeight = FontWeight.SemiBold)
                 DenominationCounter(
@@ -149,7 +182,8 @@ fun CashSessionOpenScreen(
                         }
                         viewModel.openSession(
                             companyId, branchRef, registerRef, userRef, opening, openingCounts,
-                            openedBy = openedBy
+                            openedBy = openedBy,
+                            openingExpected = state.openingExpectedCash ?: 0.0
                         )
                     },
                     enabled = register != null && branch != null && user != null && openedBy != null && !state.isLoading,

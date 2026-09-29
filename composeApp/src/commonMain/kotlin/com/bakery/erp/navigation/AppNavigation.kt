@@ -1278,7 +1278,13 @@ fun AppNavigation(
                         }
                     },
                     authViewModel = viewModel,
-                    viewModel = cashSessionViewModel
+                    viewModel = cashSessionViewModel,
+                    // Entregó la caja: el siguiente turno sigue vendiendo en la misma gaveta.
+                    onHandedOver = { next ->
+                        navController.navigate(Screen.POSScreen.route(next)) {
+                            popUpTo(Screen.POSHome.route) { inclusive = false }
+                        }
+                    }
                 )
             }
         }

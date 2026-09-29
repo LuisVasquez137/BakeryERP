@@ -31,6 +31,8 @@ import kotlinx.datetime.DatePeriod
 import com.bakery.erp.domain.PurchaseRepository
 import com.bakery.erp.model.Purchase
 import kotlinx.coroutines.async
+import com.bakery.erp.util.fmtMoney
+import com.bakery.erp.model.effectivePaymentBreakdown
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.datetime.Instant
@@ -72,7 +74,18 @@ data class CashSessionUiState(
      * Resultado de entrar a la pantalla de cierre: si está fuera del horario de ESA caja, la
      * pantalla pregunta antes de seguir. Null = todavía no se evaluó.
      */
-    val closeGate: CloseGate? = null
+    val closeGate: CloseGate? = null,
+    /** Turno que se abrió solo al entregar la caja: la pantalla lleva al POS de ése. */
+    val handedOverSessionId: String? = null,
+    /**
+     * Efectivo que la caja debería tener al abrir (lo que dejó el último cierre). Null = no hay
+     * de dónde saberlo.
+     */
+    val openingExpectedCash: Double? = null,
+    /** Quién y cuándo dejó ese efectivo, para mostrarlo al abrir. */
+    val openingExpectedFrom: String = "",
+    /** Cobros con tarjeta y transferencia del turno que se está viendo: de cuál turno es cada uno. */
+    val sessionNonCashSales: List<com.bakery.erp.model.Sale> = emptyList()
 )
 
 /** ¿Se entró al cierre en el horario de cuadre de esta caja? */
@@ -93,7 +106,9 @@ class CashSessionViewModel(
     private val auditRepository: com.bakery.erp.domain.CashAuditRepository,
     /** Aviso al dueño cuando alguien entra al cierre fuera de horario. */
     private val notificationRepository: com.bakery.erp.domain.NotificationRepository,
-    private val employeeRepository: com.bakery.erp.domain.EmployeeRepository
+    private val employeeRepository: com.bakery.erp.domain.EmployeeRepository,
+    /** Ventas del turno: el detalle de vouchers y transferencias. */
+    private val saleRepository: com.bakery.erp.domain.SaleRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(CashSessionUiState())
@@ -254,6 +269,47 @@ class CashSessionViewModel(
 
     fun clearCloseGate() = _uiState.update { it.copy(closeGate = null) }
 
+    /**
+     * Lo que la caja debería tener al abrir: lo que dejó su último cierre. Así el primer turno del
+     * día comprueba que esté cabal lo que se dejó la noche anterior.
+     */
+    fun loadOpeningExpected(companyId: String, registerId: String) {
+        viewModelScope.launch {
+            runCatching { sessionRepository.getSessionsForRegister(companyId, registerId) }
+                .onSuccess { sessions ->
+                    val last = sessions.filter { it.status == com.bakery.erp.model.CashSessionStatus.CLOSED }
+                        .maxByOrNull { it.closedAt ?: 0L }
+                    val expected = com.bakery.erp.model.expectedOpeningCash(last)
+                    val from = last?.let { s ->
+                        val at = s.closedAt?.let { ms ->
+                            val d = kotlin.time.Instant.fromEpochMilliseconds(ms).toLocalDateTime(TimeZone.currentSystemDefault())
+                            "${d.dayOfMonth.toString().padStart(2, '0')}/${d.monthNumber.toString().padStart(2, '0')} " +
+                                "${d.hour.toString().padStart(2, '0')}:${d.minute.toString().padStart(2, '0')}"
+                        }.orEmpty()
+                        listOf(s.openedByEmployeeName, at).filter { it.isNotBlank() }.joinToString(" · ")
+                    }.orEmpty()
+                    _uiState.update { it.copy(openingExpectedCash = expected, openingExpectedFrom = from) }
+                }
+        }
+    }
+
+    fun clearHandedOver() = _uiState.update { it.copy(handedOverSessionId = null) }
+
+    /** Cobros con tarjeta o transferencia del turno: de cuál turno es cada voucher. */
+    fun loadSessionNonCashSales(companyId: String, sessionId: String) {
+        viewModelScope.launch {
+            runCatching { saleRepository.getSalesForSession(companyId, sessionId) }
+                .onSuccess { sales ->
+                    val nonCash = sales.filter { sale ->
+                        sale.effectivePaymentBreakdown.keys.any {
+                            it == com.bakery.erp.model.SalePaymentMethod.CARD || it == com.bakery.erp.model.SalePaymentMethod.TRANSFER
+                        }
+                    }.sortedBy { it.createdAt }
+                    _uiState.update { it.copy(sessionNonCashSales = nonCash) }
+                }
+        }
+    }
+
     private fun auditEvent(
         session: CashSession,
         user: User,
@@ -291,7 +347,9 @@ class CashSessionViewModel(
         openingBalance: Double,
         openingDenominations: Map<String, Int> = emptyMap(),
         /** Colaborador que abre: en la tablet de usuario único, es lo que dice quién estaba. */
-        openedBy: com.bakery.erp.model.Employee? = null
+        openedBy: com.bakery.erp.model.Employee? = null,
+        /** Lo que dejó el último cierre (si se sabe): con lo contado dice si faltaba algo. */
+        openingExpected: Double = 0.0
     ) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null, openedSessionId = null) }
@@ -308,13 +366,21 @@ class CashSessionViewModel(
                         openedAt = Clock.System.now().toEpochMilliseconds(),
                         openingBalance = openingBalance,
                         openedByEmployeeId = openedBy?.id.orEmpty(),
-                        openedByEmployeeName = openedBy?.name.orEmpty()
+                        openedByEmployeeName = openedBy?.name.orEmpty(),
+                        openingExpected = openingExpected
                     )
                 )
                 runCatching {
+                    val diff = if (openingExpected > 0.004) openingBalance - openingExpected else 0.0
                     auditRepository.log(companyId, auditEvent(session, currentUser, com.bakery.erp.model.CashAuditEventType.OPEN,
                         outOfSchedule = false, scheduleLabel = "", employeeName = openedBy?.name.orEmpty(),
-                        expected = openingBalance))
+                        expected = openingExpected, counted = openingBalance, difference = diff,
+                        notes = when {
+                            openingExpected <= 0.004 -> ""
+                            diff < -0.004 -> "Al abrir faltaban Q ${(-diff).fmtMoney(2)} de lo que se dejó"
+                            diff > 0.004 -> "Al abrir sobraban Q ${diff.fmtMoney(2)} de lo que se dejó"
+                            else -> "Estaba lo que se dejó"
+                        }))
                 }
                 if (openingDenominations.isNotEmpty()) {
                     sessionRepository.saveDenominations(
@@ -487,10 +553,16 @@ class CashSessionViewModel(
         closingDenominations: Map<String, Int> = emptyMap(),
         /** Quién recibe la gaveta (siguiente turno). Null = nadie, fin del día. */
         receivedBy: com.bakery.erp.model.Employee? = null,
-        currentUser: User? = null
+        currentUser: User? = null,
+        /** Efectivo que se saca de la gaveta al cerrar (permiso aparte). */
+        withdrawal: Double = 0.0
     ) {
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, error = null, isClosed = false) }
+            _uiState.update { it.copy(isLoading = true, error = null, isClosed = false, handedOverSessionId = null) }
+            com.bakery.erp.model.closingWithdrawalProblem(countedCash, withdrawal)?.let { problem ->
+                _uiState.update { it.copy(isLoading = false, error = problem) }; return@launch
+            }
+            var nextSessionId: String? = null
             runCatching {
                 val closed = sessionRepository.closeSession(
                     companyId, sessionId, countedCash, notes,
@@ -509,7 +581,41 @@ class CashSessionViewModel(
                                 receivedBy?.name?.let { "entrega a $it" }
                             ).joinToString(" → "),
                             expected = closed.expectedCash, counted = closed.countedCash, difference = closed.difference,
-                            notes = notes.orEmpty()))
+                            notes = listOfNotNull(
+                                notes?.takeIf { it.isNotBlank() },
+                                "Retiró Q ${withdrawal.fmtMoney(2)}".takeIf { withdrawal > 0.004 }
+                            ).joinToString(" · ")))
+                    }
+                }
+                // Lo que sale de esta gaveta: al siguiente turno o, si nadie la recibe, para mañana.
+                val handover = com.bakery.erp.model.shiftHandover(closed, countedCash, withdrawal)
+                sessionRepository.recordHandover(companyId, sessionId, withdrawal, handover)
+                if (receivedBy != null && currentUser != null) {
+                    // El siguiente turno sigue con la misma gaveta: no se vuelve a teclear el fondo.
+                    val next = sessionRepository.openSession(companyId, CashSession(
+                        branchId = closed.branchId,
+                        branchName = closed.branchName,
+                        registerId = closed.registerId,
+                        registerName = closed.registerName,
+                        cashierId = currentUser.id,
+                        cashierName = currentUser.displayName,
+                        openedAt = Clock.System.now().toEpochMilliseconds(),
+                        openingBalance = handover.cash,
+                        openingExpected = handover.cash,
+                        openedByEmployeeId = receivedBy.id,
+                        openedByEmployeeName = receivedBy.name,
+                        previousSessionId = closed.id,
+                        carriedInCard = handover.card,
+                        carriedInTransfer = handover.transfer
+                    ))
+                    nextSessionId = next.id
+                    runCatching {
+                        auditRepository.log(companyId, auditEvent(next, currentUser, com.bakery.erp.model.CashAuditEventType.OPEN,
+                            outOfSchedule = false, scheduleLabel = "", employeeName = receivedBy.name,
+                            expected = handover.cash, counted = handover.cash,
+                            notes = "Recibe de ${closed.openedByEmployeeName.ifBlank { "el turno anterior" }}: " +
+                                "efectivo Q ${handover.cash.fmtMoney(2)}, tarjeta Q ${handover.card.fmtMoney(2)}, " +
+                                "transferencias Q ${handover.transfer.fmtMoney(2)}"))
                     }
                 }
                 if (closingDenominations.isNotEmpty()) {
@@ -519,7 +625,7 @@ class CashSessionViewModel(
                 }
                 closed
             }.onSuccess { closed ->
-                _uiState.update { it.copy(isLoading = false, currentSession = closed, isClosed = true) }
+                _uiState.update { it.copy(isLoading = false, currentSession = closed, isClosed = true, handedOverSessionId = nextSessionId) }
             }.onFailure { err ->
                 _uiState.update { it.copy(isLoading = false, error = err.message) }
             }

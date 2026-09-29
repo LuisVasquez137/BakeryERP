@@ -56,8 +56,32 @@ data class CashSession(
     val receivedByEmployeeName: String = "",
     /** Usuario de la app que cerró. Puede no ser el que abrió (un supervisor, otro turno). */
     val closedByUserId: String = "",
-    val closedByUserName: String = ""
-)
+    val closedByUserName: String = "",
+
+    // ── Cadena de turnos (ver ShiftHandover) ────────────────────────────────
+    /** Turno de la misma caja del que se recibió la gaveta. Vacío = el primero del día. */
+    val previousSessionId: String = "",
+    /**
+     * Efectivo que se esperaba recibir al abrir (lo que dejó el turno anterior o el cierre del día
+     * anterior). 0 si no había de dónde saberlo. Con [openingBalance], que es lo que se contó o
+     * se recibió, dice si faltaba algo al empezar.
+     */
+    val openingExpected: Double = 0.0,
+    /** Vouchers de tarjeta y transferencias que se recibieron del turno anterior (mismo día). */
+    val carriedInCard: Double = 0.0,
+    val carriedInTransfer: Double = 0.0,
+    /** Efectivo que se retiró de la gaveta al cerrar (permiso aparte). */
+    val closingWithdrawal: Double = 0.0,
+    /** Lo que se entregó al cerrar: al siguiente turno, o lo que quedó para mañana. */
+    val carriedOutCash: Double = 0.0,
+    val carriedOutCard: Double = 0.0,
+    val carriedOutTransfer: Double = 0.0,
+    /** El cierre registró la entrega (los cierres anteriores a esto no la traen). */
+    val handoverRecorded: Boolean = false
+) {
+    /** Diferencia al abrir: contado/recibido menos lo que se esperaba. Solo si había qué esperar. */
+    val openingDifference: Double get() = if (openingExpected > 0.004) openingBalance - openingExpected else 0.0
+}
 
 /**
  * Efectivo que DEBERÍA haber en la gaveta ahora mismo.
