@@ -16,6 +16,12 @@ import com.bakery.erp.domain.ForecastPeriod
 import com.bakery.erp.domain.SpecialOrderImageUploader
 import com.bakery.erp.domain.WeatherRepository
 import com.bakery.erp.model.AppNotification
+import com.bakery.erp.model.ProductionOrderAdjustment
+import com.bakery.erp.model.adjustedBy
+import com.bakery.erp.model.adjustedFor
+import com.bakery.erp.model.orderAdjustmentLabel
+import com.bakery.erp.model.orderAdjustmentNeedsVerification
+import com.bakery.erp.model.orderAdjustmentProblem
 import com.bakery.erp.model.Branch
 import com.bakery.erp.model.BranchCapability
 import com.bakery.erp.model.DoughFilling
@@ -358,7 +364,16 @@ data class ProductionUiState(
     val isSaved: Boolean = false,
     val isCompleted: Boolean = false,
     val error: String? = null,
-    val stockWarnings: List<String> = emptyList()
+    val stockWarnings: List<String> = emptyList(),
+
+    // ── Ajuste del pedido con el reparto ya hecho (ver model/OrderAdjustment.kt) ──
+    val orderAdjustmentContext: OrderAdjustmentContext? = null,
+    val isOrderAdjustmentLoading: Boolean = false,
+    val isOrderAdjustmentSaving: Boolean = false,
+    /** Acuse del último ajuste guardado, para cerrar el diálogo y avisarlo. */
+    val orderAdjustmentDone: String? = null,
+    /** Ajustes ya hechos al pedido seleccionado, para el detalle. */
+    val selectedOrderAdjustments: List<ProductionOrderAdjustment> = emptyList()
 )
 
 class ProductionViewModel(
@@ -1025,6 +1040,252 @@ class ProductionViewModel(
                 )
             }
         }
+    }
+
+    // ── Ajuste del pedido con el reparto ya hecho ───────────────────────────
+
+    /**
+     * Lee todo lo que necesita el diálogo de ajuste: los lotes que consolidaron el
+     * pedido (uno por turno), sus líneas, la nota de esta sucursal en cada uno, los
+     * turnos (exclusiones y viaje) y la sucursal (viaje restringido).
+     */
+    fun loadOrderAdjustmentContext(companyId: String, orderId: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isOrderAdjustmentLoading = true, orderAdjustmentDone = null) }
+            runCatching { buildOrderAdjustmentContext(companyId, orderId) }
+                .onSuccess { ctx ->
+                    _uiState.update { it.copy(orderAdjustmentContext = ctx, isOrderAdjustmentLoading = false) }
+                }
+                .onFailure { err ->
+                    _uiState.update {
+                        it.copy(
+                            isOrderAdjustmentLoading = false,
+                            error = "No se pudo preparar el ajuste: ${err.message}"
+                        )
+                    }
+                }
+        }
+    }
+
+    fun clearOrderAdjustment() {
+        _uiState.update { it.copy(orderAdjustmentContext = null) }
+    }
+
+    fun clearOrderAdjustmentDone() {
+        _uiState.update { it.copy(orderAdjustmentDone = null) }
+    }
+
+    fun loadOrderAdjustments(companyId: String, orderId: String) {
+        viewModelScope.launch {
+            val list = runCatching { productionRepository.getOrderAdjustments(companyId, orderId) }
+                .getOrElse { emptyList() }
+            _uiState.update { it.copy(selectedOrderAdjustments = list) }
+        }
+    }
+
+    private suspend fun buildOrderAdjustmentContext(companyId: String, orderId: String): OrderAdjustmentContext {
+        val order = productionRepository.getOrder(companyId, orderId) ?: error("No se encontró el pedido")
+        val orderLines = productionRepository.getOrderLines(companyId, orderId)
+        val lots = productionRepository.getLotsForBranch(companyId, order.producingBranchId)
+            .filter { it.status != ProductionLotStatus.CANCELLED && orderId in it.sourceOrderIds }
+        val shifts = runCatching { productionRepository.getShiftsForBranch(companyId, order.producingBranchId) }
+            .getOrElse { emptyList() }
+        val notes = runCatching { dispatchRepository.getNotesForOrder(companyId, orderId) }.getOrElse { emptyList() }
+        val branch = runCatching { branchRepository.getBranches(companyId) }.getOrElse { emptyList() }
+            .find { it.id == order.sellingBranchId }
+        ensureRecipeRefByProductIdLoaded(companyId)
+
+        // `getShiftsForBranch` los devuelve ordenados por viaje: el primero de la
+        // lista entre los lotes de este pedido es el del primer viaje.
+        fun tripIndex(lot: ProductionLot) = shifts.indexOfFirst { it.id == lot.shiftId }
+            .let { if (it < 0) Int.MAX_VALUE else it }
+        val sortedLots = lots.sortedBy { tripIndex(it) }
+        val firstTripLotId = sortedLots.firstOrNull()?.id
+
+        val adjustmentShifts = coroutineScope {
+            sortedLots.map { lot ->
+                async {
+                    val lines = productionRepository.getLotLines(companyId, lot.id)
+                    val note = notes.find { it.lotId == lot.id }?.let { header ->
+                        runCatching { dispatchRepository.getNote(companyId, header.id) }.getOrNull()
+                    }
+                    OrderAdjustmentShift(
+                        lot = lot,
+                        shift = shifts.find { it.id == lot.shiftId },
+                        isFirstTrip = sortedLots.size > 1 && lot.id == firstTripLotId,
+                        lines = lines,
+                        note = note
+                    )
+                }
+            }.awaitAll()
+        }
+
+        val recipeIdByProductId = _uiState.value.recipeRefByProductId.mapValues { it.value.id }
+        val recipeIds = (orderLines.mapNotNull { recipeIdByProductId[it.productId] } +
+            adjustmentShifts.flatMap { s -> s.lines.map { it.recipeId } }).filter { it.isNotEmpty() }.toSet()
+        val cached = _uiState.value.recipesById
+        val fetched = coroutineScope {
+            (recipeIds - cached.keys).map { id ->
+                async { runCatching { recipeRepository.getRecipe(companyId, id) }.getOrNull() }
+            }.awaitAll().filterNotNull().associateBy { it.id }
+        }
+        return OrderAdjustmentContext(
+            order = order,
+            orderLines = orderLines,
+            shifts = adjustmentShifts,
+            branchTrip = branch?.receivesOnlyInTrip ?: DISPATCH_TRIP_BOTH,
+            recipeIdByProductId = recipeIdByProductId,
+            recipesById = cached.filterKeys { it in recipeIds } + fetched
+        )
+    }
+
+    /**
+     * Suma o quita [delta] unidades de [productId] al pedido de la sucursal, en el
+     * turno (lote) [lotId] que eligió la encargada. Escribe, en este orden: el
+     * pedido, la línea del lote (con su desglose por sucursal y la marca para el
+     * panadero), la nota de despacho de esa sucursal en ese turno y el registro.
+     *
+     * Todo se vuelve a leer y a validar antes de escribir: entre abrir el diálogo y
+     * confirmar, el panadero pudo haber contado la masa o el empaque cerrado la nota.
+     * Nada va al inventario de la planta: el cambio es del pedido de la sucursal.
+     */
+    fun applyOrderAdjustment(
+        companyId: String,
+        currentUser: User,
+        orderId: String,
+        lotId: String,
+        productId: String,
+        productName: String,
+        productUnit: String,
+        delta: Double,
+        verifiedNotMade: Boolean
+    ) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isOrderAdjustmentSaving = true, error = null) }
+            runCatching {
+                val ctx = buildOrderAdjustmentContext(companyId, orderId)
+                val shift = ctx.shifts.find { it.lot.id == lotId } ?: error("Ese turno ya no está disponible")
+                val target = ctx.targetFor(shift, productId)
+                orderAdjustmentProblem(target, delta)?.let { error(it) }
+                if (orderAdjustmentNeedsVerification(shift.lot.status) && !verifiedNotMade) {
+                    error("Confirmá con el panadero que esa masa todavía no se hizo.")
+                }
+                val order = ctx.order
+                val isSplit = shift.lot.isShiftSplit || shift.lines.any { it.sourceOrderAllocations.isNotEmpty() }
+
+                // 1. Pedido de la sucursal.
+                val existingOrderLine = ctx.orderLines.find { it.productId == productId && !it.isSpecial }
+                val newOrderLine = (existingOrderLine ?: ProductionOrderLine(
+                    productId = productId,
+                    productName = productName,
+                    productUnit = productUnit,
+                    requestedQuantity = 0.0
+                )).adjustedBy(delta, shift.isFirstTrip)
+                val newOrderLines = if (existingOrderLine != null) {
+                    ctx.orderLines.mapNotNull { line ->
+                        if (line.id != existingOrderLine.id) line
+                        else newOrderLine.takeIf { it.requestedQuantity > 0.0 }
+                    }
+                } else ctx.orderLines + newOrderLine
+                productionRepository.updateOrder(companyId, order, newOrderLines)
+
+                // 2. Línea del lote de ese turno.
+                val now = Clock.System.now().toEpochMilliseconds()
+                val label = orderAdjustmentLabel(delta, order.sellingBranchName, clockLabel(now))
+                val lotLine = shift.lines.find { it.productId == productId && !it.isSpecial }
+                if (lotLine != null) {
+                    val planned = (lotLine.plannedQuantity + delta).coerceAtLeast(0.0)
+                    val updated = lotLine.copy(
+                        plannedQuantity = planned,
+                        producedQuantity = (lotLine.producedQuantity + delta).coerceAtLeast(0.0),
+                        sourceOrderAllocations = if (isSplit)
+                            lotLine.sourceOrderAllocations.adjustedFor(order.id, order.sellingBranchName, delta)
+                        else lotLine.sourceOrderAllocations,
+                        adjustmentNote = listOf(lotLine.adjustmentNote, label)
+                            .filter { it.isNotBlank() }.joinToString(" · ")
+                    )
+                    val nothingLeft = planned <= 0.0 && updated.extraQuantity <= 0.0 &&
+                        updated.plantRetainedQuantity <= 0.0
+                    if (nothingLeft && shift.lot.status == ProductionLotStatus.OPEN) {
+                        productionRepository.deleteLotLine(companyId, lotId, lotLine.id)
+                    } else {
+                        // En producción la línea queda en cero con su marca: el panadero
+                        // tiene que ver que ese pan se quitó, no que desapareció.
+                        productionRepository.saveLotLine(companyId, lotId, updated)
+                    }
+                } else if (delta > 0.0) {
+                    val allocations = if (isSplit) listOf(
+                        SourceOrderAllocation(order.id, order.sellingBranchName, delta)
+                    ) else emptyList()
+                    applySplitLotLine(
+                        companyId, lotId, productId, delta, null, allocations,
+                        mapOf(productId to (productName to productUnit)), null,
+                        ctx.recipesById, _uiState.value.productsById,
+                        _uiState.value.availableDecorationBatchesByPreparation,
+                        adjustmentNote = label
+                    )
+                }
+
+                // 3. Nota de despacho de esta sucursal en ese turno. Las notas nacen
+                // al iniciar el lote, así que un turno abierto todavía no tiene.
+                val newForNote = if (isSplit) target.currentForBranch + delta else newOrderLine.requestedQuantity
+                val note = shift.note
+                if (note != null) {
+                    dispatchRepository.adjustNoteLineForOrder(companyId, note.id, newOrderLine, newForNote)
+                } else if (shift.lot.status == ProductionLotStatus.IN_PROGRESS && newForNote > 0.0) {
+                    // La sucursal no tenía nada en este turno: se crea su nota con el
+                    // desglose ya actualizado (idempotente por pedido).
+                    val freshLot = productionRepository.getLot(companyId, lotId) ?: shift.lot
+                    val freshLines = productionRepository.getLotLines(companyId, lotId)
+                    dispatchRepository.createDispatchNotesForLot(companyId, freshLot, freshLines, currentUser)
+                }
+
+                // 4. Constancia. Que falle no deshace lo anterior, que ya es correcto.
+                runCatching {
+                    productionRepository.saveOrderAdjustment(
+                        companyId,
+                        ProductionOrderAdjustment(
+                            orderId = order.id,
+                            lotId = lotId,
+                            shiftName = shift.label,
+                            sellingBranchName = order.sellingBranchName,
+                            productId = productId,
+                            productName = productName,
+                            delta = delta,
+                            lotStatus = shift.lot.status,
+                            verifiedNotMade = verifiedNotMade,
+                            recipeName = ctx.recipesById[ctx.recipeIdFor(shift, productId)]?.name.orEmpty(),
+                            createdByUserId = currentUser.id,
+                            createdByUserName = currentUser.displayName,
+                            createdAt = now
+                        )
+                    )
+                }
+                "$productName: $label en ${shift.label}"
+            }.onSuccess { done ->
+                _uiState.update {
+                    it.copy(
+                        isOrderAdjustmentSaving = false,
+                        orderAdjustmentDone = done,
+                        orderAdjustmentContext = null
+                    )
+                }
+                loadOrderDetail(companyId, orderId)
+                loadOrderAdjustments(companyId, orderId)
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(isOrderAdjustmentSaving = false, error = err.message ?: "No se pudo ajustar el pedido")
+                }
+            }
+        }
+    }
+
+    /** "1:20 AM" en la hora del aparato — la que el panadero tiene en la pared. */
+    private fun clockLabel(millis: Long): String {
+        val t = Instant.fromEpochMilliseconds(millis).toLocalDateTime(TimeZone.currentSystemDefault())
+        val h12 = if (t.hour % 12 == 0) 12 else t.hour % 12
+        val mm = t.minute.toString().padStart(2, '0')
+        return "$h12:$mm ${if (t.hour < 12) "AM" else "PM"}"
     }
 
     fun cancelOrder(companyId: String, orderId: String) {
@@ -4171,7 +4432,9 @@ class ProductionViewModel(
         special: ProductionOrderLine?,
         recipesById: Map<String, Recipe>,
         productsById: Map<String, Product>,
-        decorationBatchesByPrep: Map<String, List<PreparationBatch>>
+        decorationBatchesByPrep: Map<String, List<PreparationBatch>>,
+        /** Marca para el panadero cuando la línea nace de un ajuste post-reparto. */
+        adjustmentNote: String = ""
     ) {
         if (targetQty <= 0.0) {
             if (existing != null) runCatching { productionRepository.deleteLotLine(companyId, lotId, existing.id) }
@@ -4220,7 +4483,8 @@ class ProductionViewModel(
                 // Sin esto la línea nueva no tiene desglose y `createDispatchNotesForLot`
                 // la despacha como 0 a todas las sucursales: el pan sale del horno y no
                 // aparece en ninguna nota.
-                sourceOrderAllocations = allocations
+                sourceOrderAllocations = allocations,
+                adjustmentNote = adjustmentNote
             )
         )
     }

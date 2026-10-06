@@ -12,6 +12,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -29,6 +30,7 @@ import com.bakery.erp.model.UserRole
 import com.bakery.erp.model.canAccessBranch
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.presentation.auth.AuthViewModel
+import com.bakery.erp.presentation.products.ProductViewModel
 import com.bakery.erp.ui.theme.BrandChip
 import com.bakery.erp.ui.theme.BrandColors
 import com.bakery.erp.ui.theme.ChipTone
@@ -40,9 +42,22 @@ fun ProductionOrderDetailScreen(
     onNavigateBack: () -> Unit,
     onNavigateToEdit: (String) -> Unit = {},
     authViewModel: AuthViewModel,
-    viewModel: ProductionViewModel
+    viewModel: ProductionViewModel,
+    /** Para ofrecer en el ajuste un pan que la sucursal no había pedido. */
+    productViewModel: ProductViewModel? = null
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
+    if (productViewModel != null) {
+        val productState by productViewModel.uiState.collectAsState()
+        val authState by authViewModel.uiState.collectAsState()
+        val companyId = authState.user?.orgId ?: ""
+        LaunchedEffect(companyId) {
+            if (companyId.isNotEmpty() && productState.productList.isEmpty()) productViewModel.loadProducts(companyId)
+        }
+        LaunchedEffect(productState.productList) {
+            if (productState.productList.isNotEmpty()) viewModel.updateProductsCache(productState.productList)
+        }
+    }
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
@@ -103,7 +118,31 @@ fun ProductionOrderDetailContent(
     var showDeleteDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(orderId) {
-        if (companyId.isNotEmpty()) viewModel.loadOrderDetail(companyId, orderId)
+        if (companyId.isNotEmpty()) {
+            viewModel.loadOrderDetail(companyId, orderId)
+            viewModel.loadOrderAdjustments(companyId, orderId)
+        }
+    }
+    LaunchedEffect(state.orderAdjustmentDone) {
+        state.orderAdjustmentDone?.let {
+            snackbarHostState.showSnackbar("Ajuste guardado — $it")
+            viewModel.clearOrderAdjustmentDone()
+        }
+    }
+    state.orderAdjustmentContext?.takeIf { it.order.id == orderId }?.let { ctx ->
+        OrderAdjustmentDialog(
+            context = ctx,
+            productsById = state.productsById,
+            isSaving = state.isOrderAdjustmentSaving,
+            onDismiss = { viewModel.clearOrderAdjustment() },
+            onConfirm = { lotId, productId, productName, productUnit, delta, verified ->
+                user?.let {
+                    viewModel.applyOrderAdjustment(
+                        companyId, it, orderId, lotId, productId, productName, productUnit, delta, verified
+                    )
+                }
+            }
+        )
     }
     LaunchedEffect(state.error) {
         state.error?.let { snackbarHostState.showSnackbar(it); viewModel.clearError() }
@@ -346,6 +385,34 @@ fun ProductionOrderDetailContent(
             }
         }
 
+        val adjustments = state.selectedOrderAdjustments.filter { it.orderId == order.id }
+        if (adjustments.isNotEmpty()) {
+            item {
+                Text("Ajustes después del reparto", fontWeight = FontWeight.Bold, color = BrandColors.Primary)
+            }
+            items(adjustments) { adj ->
+                Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(10.dp)) {
+                    Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                        val sign = if (adj.delta > 0) "+" else "−"
+                        Text(
+                            "$sign${kotlin.math.abs(adj.delta).toInt()} ${adj.productName} · ${adj.shiftName}",
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (adj.delta > 0) BrandColors.Primary else BrandColors.AccentDeep
+                        )
+                        Text(
+                            listOfNotNull(
+                                adj.createdByUserName.ifBlank { null },
+                                formatHourMinute(adj.createdAt),
+                                if (adj.verifiedNotMade) "verificado con el panadero" else null
+                            ).joinToString(" · "),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.Gray
+                        )
+                    }
+                }
+            }
+        }
+
         // Seguimiento: aparece en cuanto la planta arranca el lote y nacen las notas.
         // Antes de eso no hay nada que seguir más allá de lo pedido, que ya está arriba.
         val supply = state.orderSupply?.takeIf { state.orderSupplyForId == order.id }
@@ -382,10 +449,18 @@ fun ProductionOrderDetailContent(
             //     + permiso MANAGE_PRODUCTION_LOTS). Esto evita que la sucursal origen
             //     cambie unilateralmente algo que la planta ya está consolidando.
             //   - lote IN_PROGRESS o COMPLETED: nadie edita.
+            // Con algún turno ya en producción no se edita el pedido entero: el
+            // recálculo repartiría el cambio solo y lo cargaría al turno abierto
+            // aunque ese turno no haga ese pan. Para eso está "Ajustar pedido",
+            // donde la planta dice a qué turno va.
+            val anyLotStarted = state.lotsForSelectedOrder.any { it.status != ProductionLotStatus.OPEN }
             val editable = when (lotStatus) {
                 null -> canSend
-                ProductionLotStatus.OPEN -> isProducingStaff && canManageLots
+                ProductionLotStatus.OPEN -> isProducingStaff && canManageLots && !anyLotStarted
                 else -> false
+            }
+            val canAdjust = isProducingStaff && canManageLots && state.lotsForSelectedOrder.any {
+                it.status == ProductionLotStatus.OPEN || it.status == ProductionLotStatus.IN_PROGRESS
             }
             // Cancelar permitido si: no hay lote (la sucursal solicitante puede), o el
             // lote está OPEN (solo la planta productora puede; la sucursal origen ya no
@@ -403,10 +478,7 @@ fun ProductionOrderDetailContent(
             val lockedShifts = state.lotsForSelectedOrder
                 .filter { it.status != ProductionLotStatus.OPEN }
                 .mapNotNull { it.shiftName.ifEmpty { null } }
-            val openShifts = state.lotsForSelectedOrder
-                .filter { it.status == ProductionLotStatus.OPEN }
-                .mapNotNull { it.shiftName.ifEmpty { null } }
-            if (editable && lockedShifts.isNotEmpty()) {
+            if (canAdjust && lockedShifts.isNotEmpty()) {
                 item {
                     Spacer(Modifier.height(8.dp))
                     Surface(
@@ -415,13 +487,39 @@ fun ProductionOrderDetailContent(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            "${lockedShifts.joinToString(" y ")} ya está en producción: lo que cambies " +
-                                "acá solo puede salir de ${openShifts.joinToString(" y ").ifEmpty { "el turno abierto" }}.",
+                            "${lockedShifts.joinToString(" y ")} ya está en producción: para cambiar este " +
+                                "pedido usá \"Ajustar pedido\" y elegí a qué turno va el cambio. Si es un turno " +
+                                "en producción, verificá antes con el panadero que esa masa no se haya hecho.",
                             modifier = Modifier.padding(12.dp),
                             style = MaterialTheme.typography.bodySmall,
                             color = BrandColors.AccentDeep
                         )
                     }
+                }
+            }
+            if (canAdjust) {
+                item {
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = { viewModel.loadOrderAdjustmentContext(companyId, order.id) },
+                        enabled = !state.isOrderAdjustmentLoading,
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = BrandColors.Accent, contentColor = BrandColors.OnAccent)
+                    ) {
+                        if (state.isOrderAdjustmentLoading) {
+                            CircularProgressIndicator(Modifier.size(18.dp), color = BrandColors.OnAccent, strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Default.Tune, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Ajustar pedido", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    Text(
+                        "Ponerle o quitarle pan a ${order.sellingBranchName} con los turnos ya repartidos.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.Gray,
+                        modifier = Modifier.padding(top = 4.dp, start = 8.dp)
+                    )
                 }
             }
             if (editable || canSend) {

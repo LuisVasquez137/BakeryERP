@@ -105,6 +105,20 @@ interface ProductionRepository {
     suspend fun updateOrderStatus(companyId: String, orderId: String, newStatus: String)
 
     /**
+     * Registro de un ajuste post-reparto (`companies/{c}/orderAdjustments`, plana).
+     * Solo se agrega: es la constancia de quién cambió qué con el lote ya armado.
+     */
+    suspend fun saveOrderAdjustment(
+        companyId: String,
+        adjustment: com.bakery.erp.model.ProductionOrderAdjustment
+    )
+
+    suspend fun getOrderAdjustments(
+        companyId: String,
+        orderId: String
+    ): List<com.bakery.erp.model.ProductionOrderAdjustment>
+
+    /**
      * Borrado real del pedido: el documento, su subcolección `lines/` y la muestra
      * que aportaba a las cantidades sugeridas (igual que
      * [updateOrderStatus] con CANCELLED, pero sin dejar el pedido a la vista).

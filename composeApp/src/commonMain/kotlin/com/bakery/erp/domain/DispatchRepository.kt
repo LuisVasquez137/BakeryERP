@@ -165,6 +165,21 @@ interface DispatchRepository {
      *  Usado cuando se desasigna una nota de una hoja de reparto. */
     suspend fun unassignFromRun(companyId: String, noteId: String)
 
+    /**
+     * Lleva a la nota DRAFT el ajuste que la planta le hizo al pedido de su sucursal
+     * con el lote ya armado (ver `model/OrderAdjustment.kt`): fija lo pedido de
+     * [orderLine] en [newRequested]. Crea la línea con su precio si la nota no la
+     * tenía, la borra si queda en cero, y borra la nota entera si se queda sin
+     * líneas. Falla sin escribir si la nota ya no es DRAFT o si esa línea ya se
+     * marcó como empacada.
+     */
+    suspend fun adjustNoteLineForOrder(
+        companyId: String,
+        noteId: String,
+        orderLine: com.bakery.erp.model.ProductionOrderLine,
+        newRequested: Double
+    )
+
     /** Encabezados de las notas creadas para ese pedido (una por lote/turno que lo produjo). */
     suspend fun getNotesForOrder(companyId: String, orderId: String): List<DispatchNote>
 

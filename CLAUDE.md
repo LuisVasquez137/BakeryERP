@@ -1547,6 +1547,44 @@ Una planta con exactamente 2 turnos activos no recibe un pedido por turno: las s
   - `removeOrderFromLot` resta la **porción de ese pedido en ese lote**, no la cantidad pedida completa (restar 200 de una línea de 100 vaciaba la línea y borraba de ese turno el pan de todas las demás sucursales).
 - `splitOrderAllocations` (`model/ShiftSplit.kt`, con tests en `ShiftSplitAllocationTest`) preserva el reparto manual de la encargada: una sucursal cuyo pedido **no cambió** queda fijada en la cantidad que ya tenía en el turno A (si tenía un encargo y le dieron 125 de mañana, que otra sucursal edite su pedido no se las mueve). `previousA + previousB` reconstruye lo que pedía antes — por eso ambos lotes hermanos guardan su desglose, no solo el turno A. El turno B siempre se deriva restando, así los dos suman exactamente lo pedido.
 
+**La exclusión de turno manda sobre todo, también al recalcular.** `splitOrderAllocations` y
+`tripRestrictionPins` reciben `allowedInA/allowedInB`: si un turno no hornea un pan, todo va al
+otro aunque la sucursal solo reciba en ese viaje o haya declarado encargo. Antes la restricción
+de viaje le ganaba en el recálculo: el 5/10 el lote de mañana salió con Cubo pequeño para Pacajá
+(excluido de la mañana) y el de noche lo perdió del empaque. `functions/tools/inspect-shift-exclusions.js`
+lista lotes con productos excluidos de su turno (solo lectura).
+
+#### Ajustar el pedido con los turnos ya repartidos (`model/OrderAdjustment.kt`)
+
+La sucursal se confundió y se entera con el lote ya armado. Llama a la planta; la encargada
+de planta usa **"Ajustar pedido"** en el detalle del pedido: producto, cuánto se le pone o se
+le quita, y **en qué turno**. Solo sobre el pedido de ESA sucursal (no se pasa pan entre
+sucursales) y nunca al inventario de la planta.
+
+- **Es un ajuste por diferencia, no una edición del pedido entero.** Editar el pedido dispara
+  el recálculo, que reparte solo y —con la noche ya en producción— cargaba todo al turno
+  abierto aunque no hiciera ese pan. Por eso "Editar pedido" se apaga en cuanto algún turno
+  arrancó: lo que la encargada dice es exactamente lo que se escribe.
+- **Si la masa ya se hizo lo verifica ella con el panadero**, no el sistema: abrir la receta
+  no prueba que se amasó (ni no abrirla que no). En un turno IN_PROGRESS el diálogo exige
+  marcar "Confirmé con el panadero que la masa X todavía no se ha hecho", y queda registrado.
+  Un turno OPEN se ajusta sin preguntar.
+- **El sistema bloquea solo lo que sabe con certeza** (`orderAdjustmentProblem`): el turno no
+  hace ese pan, la masa ya tiene conteo confirmado, se quita más de lo que esa sucursal tiene
+  en ese turno, la nota ya no es DRAFT o esa línea ya se empacó, lote terminado. Avisa sin
+  bloquear si la sucursal no recibe en ese viaje o si la masa queda bajo el mínimo.
+- **Escribe en orden**: pedido (`adjustedBy` mueve `earlyShiftQuantity` con el turno del primer
+  viaje, porque el recálculo respeta ese número siempre) → línea del lote (`adjustedFor` toca
+  solo el desglose de esa sucursal, así A+B sigue dando lo pedido y un recálculo posterior no
+  mueve nada) → nota DRAFT de esa sucursal en ese turno (`adjustNoteLineForOrder`; si no tenía
+  nota en ese turno se crea con `createDispatchNotesForLot`) → registro en
+  `companies/{c}/orderAdjustments` (plana, solo se agrega). Todo se relee y revalida antes de
+  escribir.
+- **El panadero ve "Cambió: +20 Democracia (1:20 AM)"** (`ProductionLotLine.adjustmentNote`)
+  en su lista: pudo haber impreso la orden y el papel dice el número viejo. En un lote en
+  producción una línea que queda en 0 no se borra, para que vea que ese pan se quitó.
+- El detalle del pedido lista los ajustes hechos (quién, cuándo, si se verificó).
+
 ### Notificaciones (`AppNotification`)
 
 `companies/{c}/notifications/{id}` es la **fuente de verdad**; el push es solo un canal de entrega. Si la Cloud Function falla o no está desplegada, el aviso sigue en la campana.

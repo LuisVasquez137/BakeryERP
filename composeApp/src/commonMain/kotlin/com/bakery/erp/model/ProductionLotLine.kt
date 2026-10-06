@@ -103,6 +103,13 @@ data class ProductionLotLine(
      * de `productsById` — todo lo demás (receta escalada, mínimo de amasada,
      * descuento en `completeLot`) funciona igual que cualquier otra línea.
      */
+    /**
+     * Ajustes que hizo la planta al pedido de una sucursal con el lote ya armado
+     * ("+20 Democracia (1:20 AM)"), separados por " · ". Va a la vista del panadero:
+     * pudo haber impreso la orden, y el papel dice el número viejo — sin esta marca
+     * hornea lo que dice el papel. Ver `model/OrderAdjustment.kt`.
+     */
+    val adjustmentNote: String = "",
     val isSpecial: Boolean = false,
     /** Foto de referencia que mandó la sucursal, para que el panadero vea la
      *  figura pedida en vez de deducirla de la descripción. */

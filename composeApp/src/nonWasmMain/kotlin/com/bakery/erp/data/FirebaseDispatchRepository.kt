@@ -481,6 +481,69 @@ class FirebaseDispatchRepository(
         )
     }
 
+    override suspend fun adjustNoteLineForOrder(
+        companyId: String,
+        noteId: String,
+        orderLine: com.bakery.erp.model.ProductionOrderLine,
+        newRequested: Double
+    ) {
+        val note = getNote(companyId, noteId) ?: error("No se encontró la nota de despacho")
+        if (note.status != DispatchStatus.DRAFT) error("La nota ya no está en preparación")
+        val existing = note.lines.find { it.productId == orderLine.productId && !it.isSpecial }
+        if (existing?.lineCheckedAt != null) error("Ese producto ya se empacó para esta sucursal")
+        val now = Clock.System.now().toEpochMilliseconds()
+        var priceMissing = note.hasPriceMissing
+
+        when {
+            existing != null && newRequested <= 0.0 ->
+                linesCol(companyId, noteId).document(existing.id).delete()
+            existing != null -> {
+                // Si el empaque todavía no tocó el número (sigue igual a lo pedido),
+                // acompaña al pedido; si ya lo cambió, se respeta y la diferencia
+                // queda a la vista para que la justifique.
+                val packed = if (existing.packedQuantity == existing.requestedQuantity) newRequested
+                    else existing.packedQuantity
+                linesCol(companyId, noteId).document(existing.id).update(
+                    mapOf("requestedQuantity" to newRequested, "packedQuantity" to packed).firestoreSafe()
+                )
+            }
+            newRequested > 0.0 -> {
+                val resolved = priceListRepository.resolveWholesalePrice(
+                    companyId, note.destinationBranchId, orderLine.productId
+                )
+                val lineRef = linesCol(companyId, noteId).document
+                lineRef.set(
+                    DispatchNoteLine(
+                        id = lineRef.id,
+                        productId = orderLine.productId,
+                        productName = orderLine.productName,
+                        productUnit = orderLine.productUnit,
+                        requestedQuantity = newRequested,
+                        packedQuantity = newRequested,
+                        unitWholesalePrice = resolved.unitPrice,
+                        priceSource = when (resolved.source) {
+                            PriceSource.PRODUCT_OVERRIDE -> PriceSourceTag.PRODUCT_OVERRIDE
+                            PriceSource.LIST_FACTOR -> PriceSourceTag.LIST_FACTOR
+                            else -> PriceSourceTag.NONE
+                        }
+                    ).toMap()
+                )
+                if (!resolved.found) priceMissing = true
+            }
+        }
+
+        val remaining = linesCol(companyId, noteId).get().documents.size
+        if (remaining == 0) {
+            // Sin pan para esta sucursal en este turno: una nota vacía quedaría en el
+            // empaque esperando que alguien la cierre. Es DRAFT, no documenta nada físico.
+            notesCol(companyId).document(noteId).delete()
+            return
+        }
+        notesCol(companyId).document(noteId).update(
+            mapOf("lineCount" to remaining, "hasPriceMissing" to priceMissing, "updatedAt" to now).firestoreSafe()
+        )
+    }
+
     override suspend fun getNotesForOrder(companyId: String, orderId: String): List<DispatchNote> {
         if (orderId.isEmpty()) return emptyList()
         return notesCol(companyId).where { "sourceOrderId" equalTo orderId }

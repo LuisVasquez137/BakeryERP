@@ -1985,6 +1985,17 @@ private fun MasaProductionCard(
                                             color = Color.Gray
                                         )
                                     }
+                                    // Ajuste de la planta con el lote ya armado: si el
+                                    // panadero imprimió la orden, el papel dice el número
+                                    // viejo y esto es lo único que se lo avisa.
+                                    if (line.adjustmentNote.isNotBlank()) {
+                                        Text(
+                                            "Cambió: ${line.adjustmentNote}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = BrandColors.AccentDeep
+                                        )
+                                    }
                                 }
                             }
                         }

@@ -244,6 +244,57 @@ class FirebaseProductionRepository(
         recordOrderInPattern(companyId, final, lines)
     }
 
+    private fun orderAdjustmentsCol(companyId: String) =
+        firestore.collection("companies/$companyId/orderAdjustments")
+
+    override suspend fun saveOrderAdjustment(
+        companyId: String,
+        adjustment: com.bakery.erp.model.ProductionOrderAdjustment
+    ) {
+        val ref = orderAdjustmentsCol(companyId).document
+        ref.set(
+            firestoreSafeOf(
+                "id" to ref.id,
+                "orderId" to adjustment.orderId,
+                "lotId" to adjustment.lotId,
+                "shiftName" to adjustment.shiftName,
+                "sellingBranchName" to adjustment.sellingBranchName,
+                "productId" to adjustment.productId,
+                "productName" to adjustment.productName,
+                "delta" to adjustment.delta,
+                "lotStatus" to adjustment.lotStatus,
+                "verifiedNotMade" to adjustment.verifiedNotMade,
+                "recipeName" to adjustment.recipeName,
+                "createdByUserId" to adjustment.createdByUserId,
+                "createdByUserName" to adjustment.createdByUserName,
+                "createdAt" to adjustment.createdAt
+            )
+        )
+    }
+
+    override suspend fun getOrderAdjustments(
+        companyId: String,
+        orderId: String
+    ): List<com.bakery.erp.model.ProductionOrderAdjustment> =
+        orderAdjustmentsCol(companyId).where { "orderId" equalTo orderId }.get().documents.map { d ->
+            com.bakery.erp.model.ProductionOrderAdjustment(
+                id = d.id,
+                orderId = d.get<String?>("orderId") ?: "",
+                lotId = d.get<String?>("lotId") ?: "",
+                shiftName = d.get<String?>("shiftName") ?: "",
+                sellingBranchName = d.get<String?>("sellingBranchName") ?: "",
+                productId = d.get<String?>("productId") ?: "",
+                productName = d.get<String?>("productName") ?: "",
+                delta = runCatching { d.get<Double?>("delta") }.getOrNull() ?: 0.0,
+                lotStatus = d.get<String?>("lotStatus") ?: "",
+                verifiedNotMade = runCatching { d.get<Boolean?>("verifiedNotMade") }.getOrNull() ?: false,
+                recipeName = d.get<String?>("recipeName") ?: "",
+                createdByUserId = d.get<String?>("createdByUserId") ?: "",
+                createdByUserName = d.get<String?>("createdByUserName") ?: "",
+                createdAt = d.readMillis("createdAt")
+            )
+        }.sortedBy { it.createdAt }
+
     override suspend fun updateOrderStatus(companyId: String, orderId: String, newStatus: String) {
         val order = getOrder(companyId, orderId) ?: return
         ordersCol(companyId).document(orderId).set(
@@ -1110,7 +1161,8 @@ class FirebaseProductionRepository(
         "soaBranchNames" to sourceOrderAllocations.map { it.branchName },
         "soaQuantities" to sourceOrderAllocations.map { it.quantity },
         "isSpecial" to isSpecial,
-        "specialPhotoUrl" to specialPhotoUrl
+        "specialPhotoUrl" to specialPhotoUrl,
+        "adjustmentNote" to adjustmentNote
     )
 
     @Suppress("UNCHECKED_CAST")
@@ -1145,6 +1197,7 @@ class FirebaseProductionRepository(
         plannedQuantity = runCatching { get<Double?>("plannedQuantity") }.getOrNull() ?: 0.0,
         producedQuantity = runCatching { get<Double?>("producedQuantity") }.getOrNull() ?: 0.0,
         producedCountConfirmed = runCatching { get<Boolean?>("producedCountConfirmed") }.getOrNull() ?: false,
+        adjustmentNote = runCatching { get<String?>("adjustmentNote") }.getOrNull() ?: "",
         wasteQuantity = runCatching { get<Double?>("wasteQuantity") }.getOrNull() ?: 0.0,
         wasteReason = get<String?>("wasteReason") ?: "",
         wasteNotes = get<String?>("wasteNotes") ?: "",

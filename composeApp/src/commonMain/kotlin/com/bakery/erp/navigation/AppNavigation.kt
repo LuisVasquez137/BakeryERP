@@ -1857,7 +1857,8 @@ fun AppNavigation(
                         navController.navigate(Screen.ProductionOrderForm.route(id))
                     },
                     authViewModel = viewModel,
-                    viewModel = productionViewModel
+                    viewModel = productionViewModel,
+                    productViewModel = productViewModel
                 )
             }
         }
