@@ -323,7 +323,8 @@ fun PackingMatrixContent(
                             companyId, noteId, lineId, qty, reason, donorNoteId, donorLineId
                         )
                     },
-                    shortfallByBranchProduct = state.shortfallFromEarlierShifts
+                    shortfallByBranchProduct = state.shortfallFromEarlierShifts,
+                    focusDestinationBranchId = state.focusDestinationBranchId
                 )
             }
         }
@@ -526,13 +527,14 @@ private fun MatrixOrTabs(
     recipeRefByProductId: Map<String, RecipeRef>,
     onToggleCheck: (noteId: String, lineId: String, currentlyChecked: Boolean) -> Unit,
     onEditQty: (noteId: String, lineId: String, qty: Double, reason: String?, donorNoteId: String?, donorLineId: String?) -> Unit,
-    shortfallByBranchProduct: Map<String, ShiftShortfall> = emptyMap()
+    shortfallByBranchProduct: Map<String, ShiftShortfall> = emptyMap(),
+    focusDestinationBranchId: String = ""
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         if (maxWidth >= 720.dp) {
             PackingMatrixTable(notes, recipeRefByProductId, onToggleCheck, onEditQty, shortfallByBranchProduct)
         } else {
-            PackingBranchTabs(notes, recipeRefByProductId, onToggleCheck, onEditQty, shortfallByBranchProduct)
+            PackingBranchTabs(notes, recipeRefByProductId, onToggleCheck, onEditQty, shortfallByBranchProduct, focusDestinationBranchId)
         }
     }
 }
@@ -815,9 +817,13 @@ private fun PackingBranchTabs(
     recipeRefByProductId: Map<String, RecipeRef>,
     onToggleCheck: (noteId: String, lineId: String, currentlyChecked: Boolean) -> Unit,
     onEditQty: (noteId: String, lineId: String, qty: Double, reason: String?, donorNoteId: String?, donorLineId: String?) -> Unit,
-    shortfallByBranchProduct: Map<String, ShiftShortfall> = emptyMap()
+    shortfallByBranchProduct: Map<String, ShiftShortfall> = emptyMap(),
+    focusDestinationBranchId: String = ""
 ) {
-    var selectedIdx by remember(notes.map { it.id }.joinToString()) { mutableIntStateOf(0) }
+    // Desde el tablero de Reparto se llega con una sucursal elegida: abrir en su pestaña.
+    var selectedIdx by remember(notes.map { it.id }.joinToString()) {
+        mutableIntStateOf(notes.indexOfFirst { it.destinationBranchId == focusDestinationBranchId }.coerceAtLeast(0))
+    }
     val safeIdx = selectedIdx.coerceIn(0, (notes.size - 1).coerceAtLeast(0))
 
     var editTarget by remember { mutableStateOf<EditTarget?>(null) }

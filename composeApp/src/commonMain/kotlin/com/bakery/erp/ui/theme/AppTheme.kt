@@ -47,6 +47,17 @@ object BrandColors {
     val MutedSlate = Color(0xFF5E6E7A) // texto secundario
     val Outline   = Color(0xFFC8A882) // borde sutil café latte
     // Semánticos que NO cambian: success verde / error rojo se mantienen inline donde aplica.
+
+    // ── Tablero de Reparto ───────────────────────────────────────────────────
+    // "En camino" va en teal (el mismo de la sección Ventas del inicio) para que no se
+    // confunda con "Lista para salir", que es el azul de estructura. Blanco encima: 5.1:1.
+    val Teal        = Color(0xFF0D7A8C)
+    val TealSoft    = Color(0xFFD4EFF3)
+    val RoadTrack   = Color(0xFFDCE8EC) // la carretera sin recorrer
+    val Success     = Color(0xFF2E7D32)
+    val SuccessSoft = Color(0xFFE8F5E9)
+    val Danger      = Color(0xFFC62828)
+    val DangerSoft  = Color(0xFFFDECEA)
 }
 
 private val BakeryLightColorScheme = lightColorScheme(

@@ -85,6 +85,12 @@ data class ReceptionResult(
  * listener mensual que alimenta a las demás pestañas.
  */
 data class PackingMatrixUiState(
+    /**
+     * Sucursal destino que la matriz abre seleccionada (pestaña en teléfono). La pone
+     * el tablero de Reparto al tocar una tarjeta "En empaque": la planta llega
+     * directo a esa sucursal en vez de buscarla entre las pestañas.
+     */
+    val focusDestinationBranchId: String = "",
     val producingBranches: List<Branch> = emptyList(),
     val producingBranchId: String = "",
     val shifts: List<ProductionShift> = emptyList(),
@@ -437,6 +443,23 @@ class DispatchViewModel(
             }.onFailure { err ->
                 _packingState.update { it.copy(isLoading = false, error = err.message) }
             }
+        }
+    }
+
+    /**
+     * Deja la matriz lista en la planta, el turno, el día y la sucursal de una tarjeta
+     * del tablero de Reparto. Se llama antes de navegar: `setupPackingFor` conserva la
+     * planta y `loadShiftsAndStartListener` el turno si siguen siendo válidos.
+     */
+    fun focusPacking(producingBranchId: String, shiftId: String, dayMillis: Long, destinationBranchId: String) {
+        _packingState.update {
+            it.copy(
+                producingBranchId = producingBranchId,
+                shiftId = shiftId,
+                dayMillis = startOfDay(dayMillis),
+                focusDestinationBranchId = destinationBranchId,
+                notes = if (it.producingBranchId == producingBranchId && it.shiftId == shiftId) it.notes else emptyList()
+            )
         }
     }
 

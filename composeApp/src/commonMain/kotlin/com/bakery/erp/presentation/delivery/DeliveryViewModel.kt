@@ -9,6 +9,15 @@ import com.bakery.erp.domain.DispatchRepository
 import com.bakery.erp.domain.FixedAssetRepository
 import com.bakery.erp.domain.ProductionRepository
 import com.bakery.erp.model.AssetStatus
+import com.bakery.erp.model.Branch
+import com.bakery.erp.model.DeliveryLegStat
+import com.bakery.erp.model.DeliveryRunStatus
+import com.bakery.erp.model.DispatchStatus
+import com.bakery.erp.model.StopProgress
+import com.bakery.erp.model.orderStopsByRoute
+import com.bakery.erp.model.stopProgress
+import com.bakery.erp.model.tripOfNote
+import com.bakery.erp.model.tripTitle
 import com.bakery.erp.model.DeliveryRun
 import com.bakery.erp.model.DISPATCH_TRIP_BOTH
 import com.bakery.erp.model.DispatchNote
@@ -20,6 +29,10 @@ import com.bakery.erp.model.hasPermission
 import com.bakery.erp.model.runFormLabel
 import com.bakery.erp.model.tripMismatchFor
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -58,7 +71,31 @@ data class DeliveryUiState(
     val dayAnchorMillis: Long = 0L,
     /** Hojas del rango visible en el historial (suelen ser de un mes). */
     val historyRuns: List<DeliveryRun> = emptyList(),
-    val isHistoryLoading: Boolean = false
+    val isHistoryLoading: Boolean = false,
+
+    // ── Tablero del día (ver model/DeliveryBoard.kt) ─────────────────────────
+    val boardNotes: List<DispatchNote> = emptyList(),
+    val boardBranches: Map<String, Branch> = emptyMap(),
+    /** `shiftId → viaje` ([ProductionShift.dispatchOrder]) de las plantas del día. */
+    val boardTripByShift: Map<String, Int> = emptyMap(),
+    /** `planta → (sucursal → tramo)`. */
+    val boardLegStats: Map<String, Map<String, DeliveryLegStat>> = emptyMap(),
+    val isBoardLoading: Boolean = false,
+    /** Hoja de despacho abierta: planta + viaje, con lo que propone. */
+    val dispatchSheet: DispatchSheetState? = null,
+    val isDispatching: Boolean = false,
+    /** Acuse del último despacho, para el snackbar. */
+    val boardMessage: String? = null
+)
+
+/** Lo que la hoja "Despachar viaje" necesita: candidatos y lo que propone de entrada. */
+data class DispatchSheetState(
+    val plantId: String,
+    val trip: Int,
+    val drivers: List<User>,
+    val vehicles: List<FixedAsset>,
+    val suggestedDriverId: String,
+    val suggestedVehicleId: String
 )
 
 class DeliveryViewModel(
@@ -109,6 +146,199 @@ class DeliveryViewModel(
 
     fun resetToToday(companyId: String) {
         observeDay(companyId, startOfToday())
+    }
+
+    // ── Tablero del día ─────────────────────────────────────────────────────
+
+    private var boardJob: Job? = null
+
+    /**
+     * Escucha las notas y las hojas del día. Las notas son las mismas que veía Despacho
+     * en sus pestañas; lo nuevo es cómo se muestran. Turnos, sucursales y tiempos de
+     * cada tramo se leen una vez por planta: cambian poco y no justifican un listener.
+     */
+    fun observeBoard(companyId: String, anchorMillis: Long = _uiState.value.dayAnchorMillis) {
+        boardJob?.cancel()
+        if (companyId.isEmpty()) return
+        val (from, until) = dayBounds(anchorMillis)
+        _uiState.update { it.copy(isBoardLoading = true, dayAnchorMillis = anchorMillis, error = null) }
+        boardJob = viewModelScope.launch {
+            if (_uiState.value.boardBranches.isEmpty()) {
+                val branches = runCatching { branchRepository.getBranches(companyId) }.getOrElse { emptyList() }
+                _uiState.update { it.copy(boardBranches = branches.associateBy { b -> b.id }) }
+            }
+            combine(
+                dispatchRepository.observeNotes(companyId, from, until),
+                repository.observeRuns(companyId, from, until)
+            ) { notes, runs -> notes to runs }
+                .catch { e -> _uiState.update { it.copy(isBoardLoading = false, error = e.message) } }
+                .collect { (notes, runs) ->
+                    _uiState.update { it.copy(boardNotes = notes, runs = runs, isBoardLoading = false) }
+                    loadPlantDataIfNeeded(companyId, notes.map { it.originBranchId }.toSet())
+                }
+        }
+    }
+
+    private val plantsLoaded = mutableSetOf<String>()
+
+    private suspend fun loadPlantDataIfNeeded(companyId: String, plantIds: Set<String>) {
+        val missing = plantIds.filter { it.isNotEmpty() && it !in plantsLoaded }
+        if (missing.isEmpty()) return
+        plantsLoaded += missing
+        val trips = mutableMapOf<String, Int>()
+        val legs = mutableMapOf<String, Map<String, DeliveryLegStat>>()
+        coroutineScope {
+            missing.map { plantId ->
+                async {
+                    val shifts = runCatching { productionRepository.getShiftsForBranch(companyId, plantId) }
+                        .getOrElse { emptyList() }
+                    val stats = dispatchRepository.getDeliveryLegStats(companyId, plantId)
+                    Triple(plantId, shifts, stats)
+                }
+            }.awaitAll()
+        }.forEach { (plantId, shifts, stats) ->
+            shifts.forEach { trips[it.id] = it.dispatchOrder }
+            legs[plantId] = stats
+        }
+        _uiState.update {
+            it.copy(boardTripByShift = it.boardTripByShift + trips, boardLegStats = it.boardLegStats + legs)
+        }
+    }
+
+    fun shiftBoardDay(companyId: String, deltaDays: Int) {
+        val tz = TimeZone.currentSystemDefault()
+        val current = Instant.fromEpochMilliseconds(_uiState.value.dayAnchorMillis).toLocalDateTime(tz).date
+        val target = if (deltaDays < 0) current.minusDays(-deltaDays) else current.plusDays(deltaDays)
+        observeBoard(companyId, LocalDateTime(target, LocalTime(0, 0)).toInstant(tz).toEpochMilliseconds())
+    }
+
+    fun boardToday(companyId: String) = observeBoard(companyId, startOfToday())
+
+    fun boardToDay(companyId: String, millis: Long) {
+        val tz = TimeZone.currentSystemDefault()
+        val date = Instant.fromEpochMilliseconds(millis).toLocalDateTime(tz).date
+        observeBoard(companyId, LocalDateTime(date, LocalTime(0, 0)).toInstant(tz).toEpochMilliseconds())
+    }
+
+    /** Viaje en que de verdad sale la nota (ver [tripOfNote]). */
+    fun tripOf(note: DispatchNote): Int {
+        val state = _uiState.value
+        return tripOfNote(
+            shiftTrip = state.boardTripByShift[note.shiftId] ?: 0,
+            destinationOnlyTrip = state.boardBranches[note.destinationBranchId]?.receivesOnlyInTrip ?: DISPATCH_TRIP_BOTH
+        )
+    }
+
+    /** Dónde va el camión para esta nota, o null si no está en camino. */
+    fun stopProgressOf(note: DispatchNote, nowMillis: Long): StopProgress? {
+        if (note.status != DispatchStatus.IN_TRANSIT) return null
+        val state = _uiState.value
+        val run = state.runs.find { note.id in it.dispatchNoteIds } ?: return null
+        val idx = run.dispatchNoteIds.indexOf(note.id).coerceAtLeast(0)
+        val leg = state.boardLegStats[note.originBranchId]?.get(note.destinationBranchId)
+        return stopProgress(idx, run.dispatchNoteIds.size, note.dispatchedAt ?: run.startedAt ?: nowMillis, nowMillis, leg)
+    }
+
+    /**
+     * Abre la hoja "Despachar viaje": repartidores y vehículos de la planta, y propone
+     * los del último viaje igual — normalmente el de la noche lo hace siempre el mismo.
+     */
+    fun openDispatchSheet(companyId: String, plantId: String, trip: Int) {
+        viewModelScope.launch {
+            runCatching {
+                val drivers = authRepository.getUsersForOrg(companyId)
+                    .filter { it.isApproved && it.isActive }
+                    .filter { it.hasPermission(Permission.DRIVE_DELIVERY) && it.canAccessBranch(plantId) }
+                    .sortedBy { it.displayName.lowercase() }
+                val vehicles = fixedAssetRepository.getAssets(companyId)
+                    .filter { it.active && it.status == AssetStatus.ACTIVE }
+                    .filter { it.category.contains("Vehículo", ignoreCase = true) ||
+                              it.category.contains("Vehiculo", ignoreCase = true) ||
+                              it.category.contains("Transporte", ignoreCase = true) }
+                    .sortedBy { it.name }
+                val now = Clock.System.now().toEpochMilliseconds()
+                val last = runCatching { repository.getRunsInRange(companyId, now - 21L * 24 * 60 * 60 * 1000, now + 24L * 60 * 60 * 1000) }
+                    .getOrElse { emptyList() }
+                    .filter { it.originBranchId == plantId && it.status != DeliveryRunStatus.CANCELLED }
+                    .sortedByDescending { it.createdAt }
+                val previous = last.firstOrNull { it.trip == trip } ?: last.firstOrNull()
+                DispatchSheetState(
+                    plantId = plantId,
+                    trip = trip,
+                    drivers = drivers,
+                    vehicles = vehicles,
+                    suggestedDriverId = previous?.driverUserId?.takeIf { id -> drivers.any { it.id == id } }
+                        ?: drivers.singleOrNull()?.id.orEmpty(),
+                    suggestedVehicleId = previous?.vehicleAssetId?.takeIf { id -> vehicles.any { it.id == id } }
+                        ?: vehicles.singleOrNull()?.id.orEmpty()
+                )
+            }.onSuccess { sheet -> _uiState.update { it.copy(dispatchSheet = sheet) } }
+                .onFailure { err -> _uiState.update { it.copy(error = err.message) } }
+        }
+    }
+
+    fun closeDispatchSheet() { _uiState.update { it.copy(dispatchSheet = null) } }
+    fun clearBoardMessage() { _uiState.update { it.copy(boardMessage = null) } }
+
+    /**
+     * "Salir con N paradas": arma la hoja con las paradas en el orden de la ruta fija y
+     * la inicia de una vez. Antes eran dos pasos —guardar y "Iniciar reparto"— y el
+     * segundo se olvidaba: la hoja quedaba pendiente con el camión ya en la calle.
+     */
+    fun dispatchTrip(
+        companyId: String,
+        currentUser: User,
+        trip: Int,
+        noteIds: List<String>,
+        driver: User,
+        vehicle: FixedAsset?
+    ) {
+        val sheet = _uiState.value.dispatchSheet ?: return
+        if (noteIds.isEmpty()) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isDispatching = true, error = null) }
+            runCatching {
+                val state = _uiState.value
+                val plant = state.boardBranches[sheet.plantId]
+                val notes = state.boardNotes.filter { it.id in noteIds }
+                val ordered = orderStopsByRoute(notes, plant?.deliveryRouteOrder.orEmpty()).map { it.id }
+                val run = repository.saveRun(
+                    companyId,
+                    DeliveryRun(
+                        originBranchId = sheet.plantId,
+                        originBranchName = plant?.name.orEmpty(),
+                        driverUserId = driver.id,
+                        driverName = driver.displayName,
+                        plannedDate = state.dayAnchorMillis,
+                        vehicleAssetId = vehicle?.id.orEmpty(),
+                        vehicleInfo = vehicle?.let { vehicleDisplayName(it) },
+                        trip = trip
+                    ),
+                    ordered,
+                    currentUser
+                )
+                repository.startRun(companyId, run.id, currentUser)
+                "${tripTitle(trip)} salió con ${ordered.size} parada${if (ordered.size == 1) "" else "s"} · ${driver.displayName}"
+            }.onSuccess { msg ->
+                _uiState.update { it.copy(isDispatching = false, dispatchSheet = null, boardMessage = msg) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(isDispatching = false, error = err.message ?: "No se pudo despachar") }
+            }
+        }
+    }
+
+    /** Guarda la ruta fija del camión de [plantId] (escritura parcial). */
+    fun saveDeliveryRoute(companyId: String, plantId: String, destinationIds: List<String>) {
+        _uiState.update { s ->
+            s.copy(boardBranches = s.boardBranches.mapValues { (id, b) ->
+                if (id == plantId) b.copy(deliveryRouteOrder = destinationIds) else b
+            })
+        }
+        viewModelScope.launch {
+            runCatching { branchRepository.updateDeliveryRouteOrder(companyId, plantId, destinationIds) }
+                .onSuccess { _uiState.update { it.copy(boardMessage = "Ruta guardada") } }
+                .onFailure { err -> _uiState.update { it.copy(error = "No se pudo guardar la ruta — ${err.message}") } }
+        }
     }
 
     private data class RunFormData(

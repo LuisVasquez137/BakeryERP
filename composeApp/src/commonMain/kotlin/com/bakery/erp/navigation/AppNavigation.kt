@@ -96,7 +96,7 @@ import com.bakery.erp.presentation.dispatch.DispatchNoteReceiveScreen
 import com.bakery.erp.presentation.dispatch.DispatchViewModel
 import com.bakery.erp.presentation.delivery.DeliveryHistoryScreen
 import com.bakery.erp.presentation.delivery.DeliveryRunFormScreen
-import com.bakery.erp.presentation.delivery.DeliveryRunListScreen
+import com.bakery.erp.presentation.delivery.DeliveryBoardScreen
 import com.bakery.erp.presentation.delivery.DeliveryRunScreen
 import com.bakery.erp.presentation.delivery.DeliveryViewModel
 import com.bakery.erp.presentation.finishedStock.BreadCountFormScreen
@@ -1100,17 +1100,23 @@ fun AppNavigation(
 
         // ── Hojas de Reparto ─────────────────────────────────────────────────
         composable(Screen.DeliveryList.route) {
+            // Reparto es el tablero del día de todos: la planta, las sucursales (que firman
+            // y cuentan desde acá), el repartidor y quien sigue la producción.
             RequirePermission(
                 state.user, Permission.MANAGE_DELIVERY_RUNS, Permission.DRIVE_DELIVERY,
+                Permission.RECEIVE_DISPATCH, Permission.VIEW_PRODUCTION,
                 onBack = { navController.popBackStack() }
             ) {
-                DeliveryRunListScreen(
+                DeliveryBoardScreen(
                     onNavigateBack = { navController.popBackStack() },
-                    onNavigateToForm = { runId -> navController.navigate(Screen.DeliveryForm.route(runId)) },
-                    onNavigateToRun = { runId -> navController.navigate(Screen.DeliveryRunDetail.route(runId)) },
-                    onNavigateToHistory = { navController.navigate(Screen.DeliveryHistory.route) },
+                    onOpenReceive = { noteId -> navController.navigate(Screen.DispatchReceive.route(noteId)) },
+                    onOpenDetail = { noteId -> navController.navigate(Screen.DispatchDetail.route(noteId)) },
+                    onOpenPacking = { navController.navigate(Screen.DispatchList.route) },
+                    onOpenRun = { runId -> navController.navigate(Screen.DeliveryRunDetail.route(runId)) },
+                    onOpenHistory = { navController.navigate(Screen.DeliveryHistory.route) },
                     authViewModel = viewModel,
-                    viewModel = deliveryViewModel
+                    viewModel = deliveryViewModel,
+                    dispatchViewModel = dispatchViewModel
                 )
             }
         }

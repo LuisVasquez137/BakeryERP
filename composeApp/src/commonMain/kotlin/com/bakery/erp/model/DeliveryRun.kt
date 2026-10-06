@@ -20,6 +20,12 @@ data class DeliveryRun(
     val dispatchNoteIds: List<String> = emptyList(),
     /** Contador denormalizado (= dispatchNoteIds.size) para listar rápido. */
     val stopCount: Int = 0,
+    /**
+     * Viaje del día que cubre esta hoja (1 = primero, 2 = segundo; 0 = sin viaje o hoja
+     * anterior). Sirve para proponer el repartidor y el vehículo del último viaje igual:
+     * normalmente el de la noche lo hace siempre el mismo.
+     */
+    val trip: Int = 0,
     val notes: String? = null,
     val createdByUserId: String = "",
     val createdByUserName: String = "",

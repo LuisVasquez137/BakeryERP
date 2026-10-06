@@ -625,7 +625,7 @@ private fun daysInMonth(year: Int, month: Int) = when (month) {
     else -> 30
 }
 
-private fun vehicleDisplayName(asset: FixedAsset): String {
+internal fun vehicleDisplayName(asset: FixedAsset): String {
     val plate = listOfNotNull(asset.assetCode.ifBlank { null }, asset.serialNumber).firstOrNull()
     return if (plate != null) "${asset.name} · $plate" else asset.name
 }
