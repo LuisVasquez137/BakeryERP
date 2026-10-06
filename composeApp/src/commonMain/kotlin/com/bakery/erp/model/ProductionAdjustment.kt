@@ -58,14 +58,18 @@ object ProductionExtraReason {
     const val CUSTOMER_ORDER = "CUSTOMER_ORDER"
     const val BRANCH_REQUEST = "BRANCH_REQUEST"
     const val PLANT_DECISION = "PLANT_DECISION"
+    /** Salió más de lo pedido y se vio al contar: no lo pidió nadie. */
+    const val COUNTED_MORE = "COUNTED_MORE"
     const val OTHER = "OTHER"
 
+    /** Lo que se ofrece al anotar "hacer más". [COUNTED_MORE] lo pone el conteo solo. */
     val ALL = listOf(CUSTOMER_ORDER, BRANCH_REQUEST, PLANT_DECISION, OTHER)
 
     fun label(raw: String): String = when (raw) {
         CUSTOMER_ORDER -> "Encargo de un cliente"
         BRANCH_REQUEST -> "Una sucursal pidió más"
         PLANT_DECISION -> "Decisión de la planta"
+        COUNTED_MORE -> "Salió de más al contar"
         OTHER -> "Otro"
         else -> raw.ifBlank { "Otro" }
     }
@@ -175,3 +179,79 @@ fun summarizeProductionWaste(lines: List<ProductionLotLine>): List<ProductionWas
             )
         }
         .sortedByDescending { it.wasteUnits }
+
+// ── El conteo final reparte lo que se contó ─────────────────────────────────
+//
+// En la práctica nadie abría "¿Qué pasó?": el panadero corregía el número en el
+// conteo (388 pedidos → contó 400; 460 → 440) y ahí se perdía el dato. Los 12 de
+// más no entraban a ninguna nota ni al stock de la planta, y los 20 de menos no
+// decían si se quemaron o si simplemente se amasó menos. Por eso el conteo es el
+// que ahora reparte: el panadero cuenta TODO el pan bueno que tiene enfrente, y
+// estas funciones lo separan en lo que va a las sucursales y lo que queda en la
+// planta, y detectan el faltante que hay que explicar.
+
+/**
+ * Lo que el panadero debería tener enfrente al contar: lo pedido (más el excedente
+ * del mínimo, que ya va en `plannedQuantity`) y lo que se anotó para hacer de más.
+ */
+fun ProductionLotLine.expectedGoodCount(): Double = plannedQuantity + extraQuantity
+
+/**
+ * El pan bueno contado hasta ahora, tal como el panadero lo vería en la mesa: lo de
+ * los pedidos más lo de más. Es el número con el que se prellena el conteo.
+ */
+fun ProductionLotLine.physicalGoodCount(): Double =
+    if (producedQuantity > 0.0) producedQuantity + extraQuantity else 0.0
+
+/**
+ * Reparto de un conteo físico [physicalGood].
+ *
+ * @property produced lo que va a las sucursales: nunca más que lo pedido.
+ * @property extra lo que pasa de lo pedido y queda en la planta (`plantIngestQuantity`).
+ * @property surplus cuánto pasó de lo esperado (pedido + lo anotado de más): es lo
+ *   que conviene decirle al panadero, porque lo anotado de más ya lo sabía.
+ * @property shortfall lo que falta contra lo esperado y que ninguna merma anotada
+ *   explica todavía. Es lo que hay que preguntar: ¿se perdió, o se amasó menos?
+ */
+data class CountReconciliation(
+    val produced: Double,
+    val extra: Double,
+    val surplus: Double,
+    val shortfall: Double
+)
+
+fun ProductionLotLine.reconcileCount(physicalGood: Double): CountReconciliation {
+    val good = physicalGood.coerceAtLeast(0.0)
+    val expected = expectedGoodCount()
+    return CountReconciliation(
+        produced = minOf(good, plannedQuantity),
+        extra = (good - plannedQuantity).coerceAtLeast(0.0),
+        surplus = (good - expected).coerceAtLeast(0.0),
+        // La merma ya anotada cuenta como explicada: 40 quemadas sin reponer dejan
+        // 60 buenas, y eso no hay que volver a preguntarlo.
+        shortfall = (expected - good - wasteQuantity).coerceAtLeast(0.0)
+    )
+}
+
+/**
+ * Red de seguridad para el cierre: una línea con más pan para las sucursales que lo
+ * pedido (conteo editado por otro camino) pasa el excedente a [ProductionLotLine.extraQuantity],
+ * que es lo único que entra al stock de la planta. Sin esto ese pan desaparecía de
+ * los libros: no va en ninguna nota y nadie lo ingresaba.
+ */
+fun ProductionLotLine.withSurplusAsExtra(): ProductionLotLine {
+    val surplus = producedQuantity - plannedQuantity
+    if (surplus <= 0.0) return this
+    return copy(
+        producedQuantity = plannedQuantity,
+        extraQuantity = extraQuantity + surplus,
+        extraReason = extraReason.ifBlank { ProductionExtraReason.COUNTED_MORE }
+    )
+}
+
+/**
+ * Respuesta al faltante del conteo que NO es merma: se amasó menos de lo pedido.
+ * Ahí no hay masa perdida que descontar — la diferencia la absorben las notas de
+ * despacho (las sucursales reciben menos). No se guarda como motivo de merma.
+ */
+const val SHORTFALL_LESS_DOUGH = "LESS_DOUGH"

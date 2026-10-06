@@ -58,6 +58,11 @@ import com.bakery.erp.model.ProductionOrderLine
 import com.bakery.erp.model.ProductionOrderPrintData
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.model.toBaseUnit
+import com.bakery.erp.model.ProductionWasteReason
+import com.bakery.erp.model.SHORTFALL_LESS_DOUGH
+import com.bakery.erp.model.expectedGoodCount
+import com.bakery.erp.model.physicalGoodCount
+import com.bakery.erp.model.reconcileCount
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.presentation.plantissues.PlantIssueDialog
 import com.bakery.erp.presentation.plantissues.PlantIssueViewModel
@@ -296,19 +301,33 @@ fun ProductionLotDetailScreen(
     // elegir por su cuenta cuál mostrar: la del total sirve si todavía no se amasó
     // nada, y la del incremento sirve si ya se amasó lo que pedían. No existe un
     // estado "ya amasé" que lo resuelva, así que lo decide el panadero con un toque.
-    var showOnlyExtra by remember(selectedGroupKey) { mutableStateOf(false) }
-    val extraUnits = selectedGroup?.let {
+    //
+    // Lo mismo con la merma: la receta para reponer lo perdido solo existía dentro de
+    // "¿Qué pasó?" mientras se anotaba, y al cerrar la hoja ya no había cómo volver a
+    // verla. Ahora es una tercera vista del mismo selector.
+    var recipeScope by remember(selectedGroupKey) { mutableStateOf(RecipeScope.ALL) }
+    val hasExtraToMake = (selectedGroup?.let {
         viewModel.extraUnitsInGroup(it.items, lines, it.key)
-    } ?: 0.0
-    val hasExtraToMake = extraUnits > 0.0
+    } ?: 0.0) > 0.0
+    val hasWasteToReplace = (selectedGroup?.let {
+        viewModel.extraUnitsInGroup(it.items, lines, it.key) { l -> l.wasteQuantity }
+    } ?: 0.0) > 0.0
+    val showScopeSelector = hasExtraToMake || hasWasteToReplace
     val scaledView = selectedGroup?.let {
-        if (showOnlyExtra && hasExtraToMake) {
+        if (recipeScope == RecipeScope.EXTRA && hasExtraToMake) {
             viewModel.buildExtraOnlyRecipeForGroup(
                 groupLines = it.items,
                 allLines = lines,
                 fallbackRecipeId = it.key,
                 fallbackRecipeName = it.title
             )
+        } else if (recipeScope == RecipeScope.REPLACE && hasWasteToReplace) {
+            viewModel.buildExtraOnlyRecipeForGroup(
+                groupLines = it.items,
+                allLines = lines,
+                fallbackRecipeId = it.key,
+                fallbackRecipeName = it.title
+            ) { l -> l.wasteQuantity }
         } else {
             viewModel.buildScaledRecipeViewForGroup(
                 it.items,
@@ -717,10 +736,12 @@ fun ProductionLotDetailScreen(
                                 modifier = Modifier.fillMaxSize(),
                                 onClose = { selectedGroupKey = null },
                                 headerExtra = {
-                                    if (hasExtraToMake) {
+                                    if (showScopeSelector) {
                                         RecipeScopeSelector(
-                                            showOnlyExtra = showOnlyExtra,
-                                            onChange = { showOnlyExtra = it }
+                                            scope = recipeScope,
+                                            hasExtra = hasExtraToMake,
+                                            hasWaste = hasWasteToReplace,
+                                            onChange = { recipeScope = it }
                                         )
                                     }
                                     if (canEditSponge && selectedGroup != null) {
@@ -764,10 +785,12 @@ fun ProductionLotDetailScreen(
                                 view = scaledView,
                                 onClose = { selectedGroupKey = null },
                                 headerExtra = {
-                                    if (hasExtraToMake) {
+                                    if (showScopeSelector) {
                                         RecipeScopeSelector(
-                                            showOnlyExtra = showOnlyExtra,
-                                            onChange = { showOnlyExtra = it }
+                                            scope = recipeScope,
+                                            hasExtra = hasExtraToMake,
+                                            hasWaste = hasWasteToReplace,
+                                            onChange = { recipeScope = it }
                                         )
                                     }
                                     if (canEditSponge && selectedGroup != null) {
@@ -817,9 +840,9 @@ fun ProductionLotDetailScreen(
                     unitsPerTrayByProduct = unitsPerTrayByProduct,
                     sheetState = registerSheetState,
                     onDismiss = { registerSheetTarget = null },
-                    onSave = { quantities ->
+                    onSave = { counts, shortfallReasons ->
                         val confirmedIds = targetGroups.flatMap { it.items }.map { it.id }.toSet()
-                        viewModel.saveProducedQuantities(companyId, lot.id, quantities, confirmedIds)
+                        viewModel.saveProducedQuantities(companyId, lot.id, counts, confirmedIds, shortfallReasons)
                         registerSheetTarget = null
                     }
                 )
@@ -962,7 +985,8 @@ private fun buildProductionOrderPrintData(
 
 /** Misma regla que la tarjeta de masa: lo producido manda una vez que existe. */
 private fun qtyToShow(line: ProductionLotLine, showProduced: Boolean): Double =
-    if (showProduced && line.producedQuantity > 0.0) line.producedQuantity else line.plannedQuantity
+    (if (showProduced && line.producedQuantity > 0.0) line.producedQuantity else line.plannedQuantity) +
+        line.extraQuantity
 
 private fun formatDateTimeNow(): String = runCatching {
     val ldt = Instant.fromEpochMilliseconds(KotlinClock.System.now().toEpochMilliseconds())
@@ -1631,42 +1655,53 @@ private fun ElapsedTimeBanner(startedAtMillis: Long) {
  * amasó o no — y leer "parcial" no contesta esa pregunta.
  */
 @Composable
-private fun RecipeScopeSelector(showOnlyExtra: Boolean, onChange: (Boolean) -> Unit) {
+private fun RecipeScopeSelector(
+    scope: RecipeScope,
+    hasExtra: Boolean,
+    hasWaste: Boolean,
+    onChange: (RecipeScope) -> Unit
+) {
     Column(
         modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(
-                selected = !showOnlyExtra,
-                onClick = { onChange(false) },
-                label = { Text("Todo el día") },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = BrandColors.PrimaryContainer,
-                    selectedLabelColor = BrandColors.Primary
+            val options = buildList {
+                add(RecipeScope.ALL to "Todo el día")
+                if (hasExtra) add(RecipeScope.EXTRA to "Solo lo extra")
+                if (hasWaste) add(RecipeScope.REPLACE to "Reponer lo perdido")
+            }
+            options.forEach { (option, label) ->
+                FilterChip(
+                    selected = scope == option,
+                    onClick = { onChange(option) },
+                    label = { Text(label) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = BrandColors.PrimaryContainer,
+                        selectedLabelColor = BrandColors.Primary
+                    )
                 )
-            )
-            FilterChip(
-                selected = showOnlyExtra,
-                onClick = { onChange(true) },
-                label = { Text("Solo lo extra") },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = BrandColors.PrimaryContainer,
-                    selectedLabelColor = BrandColors.Primary
-                )
-            )
+            }
         }
         Text(
-            if (showOnlyExtra)
-                "Receta solo del pan que se agregó después. Usala si ya amasaste lo que pedían."
-            else
-                "Receta de todo lo del día, incluido lo que se agregó después. " +
-                    "Usala si todavía no has amasado esta masa.",
+            when (scope) {
+                RecipeScope.EXTRA ->
+                    "Receta solo del pan que se agregó después. Usala si ya amasaste lo que pedían."
+                RecipeScope.REPLACE ->
+                    "Receta solo para reponer lo que se perdió. Si el pan lleva relleno de otra " +
+                        "masa (como el Pan de Capa), abrí también esa masa en \"Reponer lo perdido\"."
+                RecipeScope.ALL ->
+                    "Receta de todo lo del día, incluido lo que se agregó después. " +
+                        "Usala si todavía no has amasado esta masa."
+            },
             style = MaterialTheme.typography.labelSmall,
             color = BrandColors.MutedSlate
         )
     }
 }
+
+/** Qué receta muestra el panel de la masa — ver [RecipeScopeSelector]. */
+private enum class RecipeScope { ALL, EXTRA, REPLACE }
 
 /**
  * Una masa de la orden de producción.
@@ -1890,8 +1925,9 @@ private fun MasaProductionCard(
                     verticalArrangement = Arrangement.spacedBy(7.dp)
                 ) {
                     group.items.forEach { line ->
-                        val qty = if (showProduced && line.producedQuantity > 0.0) line.producedQuantity
-                                  else line.plannedQuantity
+                        // Lo de más va sumado: es pan que hay que hacer (o que salió) igual.
+                        val qty = (if (showProduced && line.producedQuantity > 0.0) line.producedQuantity
+                                  else line.plannedQuantity) + line.extraQuantity
                         val missing = line.productId in missingRawWeight
                         Surface(
                             shape = RoundedCornerShape(50),
@@ -2180,9 +2216,18 @@ private fun RegisterProductionSheet(
     unitsPerTrayByProduct: Map<String, Int>,
     sheetState: SheetState,
     onDismiss: () -> Unit,
-    onSave: (Map<String, Double>) -> Unit
+    /**
+     * Conteo físico por línea (TODO el pan bueno, incluido el de más) y, para las
+     * líneas donde faltó pan, lo que el panadero dijo que pasó (`lineId → motivo`;
+     * vacío = se amasó menos, no se perdió nada).
+     */
+    onSave: (counts: Map<String, Double>, shortfallReasons: Map<String, String>) -> Unit
 ) {
     val lines = remember(masaGroups) { masaGroups.flatMap { it.items } }
+    // Paso de revisión: solo aparece si al contar sobró o faltó pan contra lo
+    // esperado. Es donde el dato se perdía — ver `reconcileCount`.
+    var review by remember(masaGroups) { mutableStateOf<Map<String, Double>?>(null) }
+    var shortfallReasons by remember(masaGroups) { mutableStateOf(mapOf<String, String>()) }
     val lineIdsKey = remember(lines) { lines.joinToString(",") { it.id } }
 
     // Dos modos de captura por línea, según si el producto tiene bandeja
@@ -2193,7 +2238,7 @@ private fun RegisterProductionSheet(
         mutableStateOf(
             lines.filter { (unitsPerTrayByProduct[it.productId] ?: 0) <= 0 }
                 .associate { line ->
-                    line.id to (line.producedQuantity.takeIf { it > 0.0 }?.toInt()?.toString() ?: "")
+                    line.id to (line.physicalGoodCount().takeIf { it > 0.0 }?.toInt()?.toString() ?: "")
                 }
         )
     }
@@ -2201,8 +2246,8 @@ private fun RegisterProductionSheet(
         mutableStateOf(
             lines.mapNotNull { line ->
                 val perTray = unitsPerTrayByProduct[line.productId] ?: 0
-                if (perTray <= 0 || line.producedQuantity <= 0.0) return@mapNotNull null
-                line.id to (line.producedQuantity.toInt() / perTray).toString()
+                if (perTray <= 0 || line.physicalGoodCount() <= 0.0) return@mapNotNull null
+                line.id to (line.physicalGoodCount().toInt() / perTray).toString()
             }.toMap()
         )
     }
@@ -2210,8 +2255,8 @@ private fun RegisterProductionSheet(
         mutableStateOf(
             lines.mapNotNull { line ->
                 val perTray = unitsPerTrayByProduct[line.productId] ?: 0
-                if (perTray <= 0 || line.producedQuantity <= 0.0) return@mapNotNull null
-                line.id to (line.producedQuantity.toInt() % perTray).toString()
+                if (perTray <= 0 || line.physicalGoodCount() <= 0.0) return@mapNotNull null
+                line.id to (line.physicalGoodCount().toInt() % perTray).toString()
             }.toMap()
         )
     }
@@ -2222,6 +2267,18 @@ private fun RegisterProductionSheet(
         containerColor = BrandColors.Ivory
     ) {
         Column(modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 20.dp)) {
+            val pendingReview = review
+            if (pendingReview != null) {
+                CountReviewContent(
+                    lines = lines,
+                    counts = pendingReview,
+                    reasons = shortfallReasons,
+                    onReasonChange = { id, reason -> shortfallReasons = shortfallReasons + (id to reason) },
+                    onBack = { review = null },
+                    onConfirm = { onSave(pendingReview, shortfallReasons) }
+                )
+                return@Column
+            }
             Text(
                 "Registrar producción",
                 fontWeight = FontWeight.Bold,
@@ -2229,8 +2286,8 @@ private fun RegisterProductionSheet(
                 color = BrandColors.Primary
             )
             Text(
-                "Anota las unidades reales que han salido. Lo que registres aquí se guarda " +
-                    "al instante. Deja en blanco lo que aún no salga.",
+                "Contá TODO el pan bueno que salió, también el que se hizo de más. Lo que " +
+                    "pase de lo pedido queda en la planta. Dejá en blanco lo que aún no salga.",
                 style = MaterialTheme.typography.bodySmall,
                 color = Color.Gray,
                 modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
@@ -2252,7 +2309,9 @@ private fun RegisterProductionSheet(
                     }
                     items(group.items, key = { it.id }) { line ->
                         val perTray = unitsPerTrayByProduct[line.productId] ?: 0
-                        val planned = line.plannedQuantity.toInt()
+                        // Lo esperado incluye lo anotado de más: si se anotaron 50 extra,
+                        // contar 438 sobre 388 pedidos es lo correcto, no un sobrante.
+                        val planned = line.expectedGoodCount().toInt()
                         Surface(
                             color = Color.White,
                             shape = RoundedCornerShape(10.dp),
@@ -2271,7 +2330,12 @@ private fun RegisterProductionSheet(
                                             color = BrandColors.Primary
                                         )
                                         Text(
-                                            "Pedido: $planned ${line.productUnit}".trim(),
+                                            buildString {
+                                                append("Pedido: ${line.plannedQuantity.toInt()}")
+                                                if (line.extraQuantity > 0.0) append(" + ${line.extraQuantity.toInt()} de más")
+                                                if (line.wasteQuantity > 0.0) append(" · perdidas: ${line.wasteQuantity.toInt()}")
+                                                append(" ${line.productUnit}")
+                                            }.trim(),
                                             style = MaterialTheme.typography.labelSmall,
                                             color = Color.Gray
                                         )
@@ -2409,7 +2473,13 @@ private fun RegisterProductionSheet(
                             val net = (trayTxt.toIntOrNull() ?: 0) * perTray + (looseTxt.toIntOrNull() ?: 0)
                             line.id to net.toDouble()
                         }
-                        onSave((fromNet + fromTrays).toMap())
+                        val counts = (fromNet + fromTrays).toMap()
+                        val needsReview = lines.any { line ->
+                            val c = counts[line.id] ?: return@any false
+                            val r = line.reconcileCount(c)
+                            r.surplus > 0.0 || r.shortfall > 0.0
+                        }
+                        if (needsReview) review = counts else onSave(counts, emptyMap())
                     },
                     modifier = Modifier.weight(1.5f).height(48.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = BrandColors.AccentDeep)
@@ -2570,5 +2640,110 @@ private fun SpecialPhotoDialog(
                 }
             }
         }
+    }
+}
+
+/**
+ * Revisión del conteo cuando sobró o faltó pan contra lo esperado. Es el único lugar
+ * donde ese dato se puede atrapar: el panadero ya no abre "¿Qué pasó?", corrige el
+ * número contando, y sin esta pregunta los 12 de más desaparecían de los libros y
+ * los 20 de menos nunca decían si se quemaron.
+ *
+ * Lo de más no pregunta nada (queda en la planta, solo se informa). Lo de menos sí:
+ * hay que elegir por línea qué pasó, porque "se quemó" descuenta masa y "se amasó
+ * menos" no.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ColumnScope.CountReviewContent(
+    lines: List<ProductionLotLine>,
+    counts: Map<String, Double>,
+    reasons: Map<String, String>,
+    onReasonChange: (lineId: String, reason: String) -> Unit,
+    onBack: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    val reviewed = lines.mapNotNull { line ->
+        val c = counts[line.id] ?: return@mapNotNull null
+        val r = line.reconcileCount(c)
+        if (r.surplus > 0.0 || r.shortfall > 0.0) Triple(line, c, r) else null
+    }
+    val allAnswered = reviewed.all { (line, _, r) -> r.shortfall <= 0.0 || reasons[line.id] != null }
+
+    Text(
+        "Revisá antes de guardar",
+        fontWeight = FontWeight.Bold,
+        style = MaterialTheme.typography.titleLarge,
+        color = BrandColors.Primary
+    )
+    Text(
+        "Algunos productos no dan lo esperado.",
+        style = MaterialTheme.typography.bodySmall,
+        color = Color.Gray,
+        modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
+    )
+    LazyColumn(
+        modifier = Modifier.weight(1f, fill = false),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items(reviewed, key = { it.first.id }) { (line, counted, r) ->
+            Surface(color = Color.White, shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(line.productName, fontWeight = FontWeight.SemiBold, color = BrandColors.Primary)
+                    Text(
+                        "Contaste ${counted.toInt()} · se esperaban ${line.expectedGoodCount().toInt()}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.Gray
+                    )
+                    if (r.surplus > 0.0) {
+                        Text(
+                            "${r.surplus.toInt()} de más → quedan en el inventario de la planta.",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFF2E7D32)
+                        )
+                    }
+                    if (r.shortfall > 0.0) {
+                        Text(
+                            "Faltan ${r.shortfall.toInt()}. ¿Qué pasó?",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFFC62828)
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            (ProductionWasteReason.ALL + SHORTFALL_LESS_DOUGH).forEach { option ->
+                                FilterChip(
+                                    selected = reasons[line.id] == option,
+                                    onClick = { onReasonChange(line.id, option) },
+                                    label = {
+                                        Text(
+                                            if (option == SHORTFALL_LESS_DOUGH) "No se perdió: se amasó menos"
+                                            else ProductionWasteReason.label(option)
+                                        )
+                                    },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = BrandColors.PrimaryContainer,
+                                        selectedLabelColor = BrandColors.Primary
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Spacer(Modifier.height(12.dp))
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = onBack, modifier = Modifier.weight(1f).height(48.dp)) { Text("Corregir conteo") }
+        Button(
+            onClick = onConfirm,
+            enabled = allAnswered,
+            modifier = Modifier.weight(1.5f).height(48.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = BrandColors.AccentDeep)
+        ) { Text("Guardar todo", fontWeight = FontWeight.Bold) }
     }
 }

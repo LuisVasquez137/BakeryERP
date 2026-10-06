@@ -1489,6 +1489,35 @@ En la lista principal el extra ya se propaga solo: `extraDoughGramsForRecipe` us
 `effectiveQuantity`, que ahora es `quantityToKnead()`. Agregar 100 Pan de Capa hace crecer
 la tarjeta de Suave por las 100 bolitas, sin código nuevo.
 
+#### El conteo reparte lo contado (`reconcileCount`)
+
+En 20 días de lotes reales nadie abrió "¿Qué pasó?": los panaderos corregían el número
+en el conteo (388 pedidos → contaron 400; 460 → 440). Los 12 de más no entraban a ninguna
+nota ni al stock de la planta, y los 20 de menos no decían si se quemaron. Por eso el
+**conteo es físico** —todo el pan bueno que hay en la mesa, incluido el de más— y se reparte:
+
+- `producedQuantity` = hasta lo pedido (va a las sucursales); lo que pasa va a
+  `extraQuantity` (motivo `COUNTED_MORE`) y entra al stock de la planta como cualquier extra.
+- Si sobra o falta contra lo esperado (`expectedGoodCount` = pedido + lo anotado de más), la
+  hoja muestra un paso **"Revisá antes de guardar"**: lo de más solo se informa; lo de menos
+  exige elegir por producto un motivo de merma (suma a `wasteQuantity` y descuenta la masa) o
+  "No se perdió: se amasó menos" (`SHORTFALL_LESS_DOUGH`, no descuenta nada). La merma ya
+  anotada en "¿Qué pasó?" cuenta como explicada y no se vuelve a preguntar.
+- El prellenado y la pantalla "Completar" usan el mismo conteo físico (`physicalGoodCount`,
+  `setPhysicalCount`), y `completeLot` pasa cualquier excedente que quede a extra
+  (`withSurplusAsExtra`) como red de seguridad.
+
+**Cierre con todo perdido**: `completeLot` toma las líneas por lo AMASADO
+(`kneadedQuantity > 0`), no por lo bueno. Con 40 Pan de Capa quemados sin reponer el conteo
+quedaba en 0 y la línea se saltaba entera: ni Capa, ni Suave, ni concha. Las notas de
+despacho siguen tomando solo lo bueno.
+
+**"Reponer lo perdido"** es la tercera vista del selector del panel de la masa (junto a
+"Todo el día" y "Solo lo extra"): la receta de reposición solo existía dentro de la hoja
+mientras se anotaba. Con el Pan de Capa, la masa Suave también la ofrece, con las bolitas de
+las piezas perdidas. Los cargadores del detalle del lote traen también las recetas de los
+rellenos: sin eso, un turno sin productos propios de Suave dejaba esa receta vacía.
+
 #### Merma de horno en el reporte
 
 `ProductionSummary.wasteTotal` / `.extraTotal` / `.wasteByProduct` y una sección "Pan

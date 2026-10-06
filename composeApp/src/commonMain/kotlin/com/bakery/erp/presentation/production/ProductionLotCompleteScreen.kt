@@ -252,7 +252,7 @@ fun ProductionLotCompleteScreen(
                         lines = lines,
                         editMode = editMode,
                         onProducedQuantityChange = { line, qty ->
-                            viewModel.updateEditableLotLine(line.copy(producedQuantity = qty))
+                            viewModel.setPhysicalCount(line, qty)
                         },
                         modifier = Modifier.weight(1f).fillMaxWidth()
                     )
@@ -267,7 +267,7 @@ fun ProductionLotCompleteScreen(
                                 line = line,
                                 editMode = editMode,
                                 onProducedQuantityChange = { qty ->
-                                    viewModel.updateEditableLotLine(line.copy(producedQuantity = qty))
+                                    viewModel.setPhysicalCount(line, qty)
                                 }
                             )
                         }
@@ -399,7 +399,8 @@ private fun CompleteTableRow(
     onProducedQuantityChange: (Double) -> Unit
 ) {
     val planned = line.plannedQuantity.toInt()
-    val produced = line.producedQuantity.toInt()
+    // Conteo físico: lo de las sucursales más lo de más, que es lo que hay en la mesa.
+    val produced = (line.producedQuantity + line.extraQuantity).toInt()
     val diff = produced - planned
     val diffColor = when {
         diff > 0 -> Color(0xFF2E7D32)
@@ -484,7 +485,8 @@ private fun LotLineSummaryCard(
     onProducedQuantityChange: (Double) -> Unit
 ) {
     val planned = line.plannedQuantity.toInt()
-    val produced = line.producedQuantity.toInt()
+    // Conteo físico: lo de las sucursales más lo de más, que es lo que hay en la mesa.
+    val produced = (line.producedQuantity + line.extraQuantity).toInt()
     val diff = produced - planned
     val diffColor = when {
         diff > 0 -> Color(0xFF2E7D32)

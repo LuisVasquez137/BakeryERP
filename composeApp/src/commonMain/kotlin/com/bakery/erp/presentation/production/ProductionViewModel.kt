@@ -50,6 +50,9 @@ import com.bakery.erp.model.ProductionExtraReason
 import com.bakery.erp.model.ProductionWasteReason
 import com.bakery.erp.model.effectiveProducedQuantity
 import com.bakery.erp.model.kneadedQuantity
+import com.bakery.erp.model.reconcileCount
+import com.bakery.erp.model.withSurplusAsExtra
+import com.bakery.erp.model.SHORTFALL_LESS_DOUGH
 import com.bakery.erp.model.quantityToKnead
 import com.bakery.erp.model.plantIngestQuantity
 import com.bakery.erp.model.plantIngestReason
@@ -606,7 +609,11 @@ class ProductionViewModel(
             val lines = runCatching {
                 productionRepository.getLotLines(companyId, lotId)
             }.getOrElse { emptyList() }
-            val recipeIds = lines.map { it.recipeId }.filter { it.isNotEmpty() }.distinct()
+            // Incluye las masas de relleno (Pan de Capa → Suave): sin su receta, la
+            // tarjeta de esa masa y la "masa del relleno" de "¿Qué pasó?" salen vacías
+            // en silencio cuando el turno no tiene ningún producto propio de Suave.
+            val recipeIds = (lines.map { it.recipeId } + lines.flatMap { l -> l.doughFillingsSnapshot.map { it.recipeId } })
+                .filter { it.isNotEmpty() }.distinct()
             val recipesById = recipeIds.mapNotNull { id ->
                 runCatching { recipeRepository.getRecipe(companyId, id) }.getOrNull()?.let { id to it }
             }.toMap()
@@ -702,11 +709,21 @@ class ProductionViewModel(
      * correcto sigue contando como conteo confirmado, no como "no lo conté".
      * Ver `producedCountConfirmed` en el modelo — bloquea "Terminar lote".
      */
+    /**
+     * Guarda el conteo. [quantities] es el conteo FÍSICO por línea —todo el pan bueno,
+     * incluido el de más— y `reconcileCount` lo reparte: hasta lo pedido va a las
+     * sucursales, lo que pasa queda en la planta como producción extra.
+     *
+     * [shortfallReasons] es lo que el panadero contestó donde faltó pan: un motivo de
+     * merma suma ese faltante a `wasteQuantity` (la masa se gastó igual y se descuenta
+     * en `completeLot`); [SHORTFALL_LESS_DOUGH] no suma nada.
+     */
     fun saveProducedQuantities(
         companyId: String,
         lotId: String,
         quantities: Map<String, Double>,
-        confirmedLineIds: Set<String> = emptySet()
+        confirmedLineIds: Set<String> = emptySet(),
+        shortfallReasons: Map<String, String> = emptyMap()
     ) {
         val touchedIds = quantities.keys + confirmedLineIds
         if (touchedIds.isEmpty()) return
@@ -715,10 +732,20 @@ class ProductionViewModel(
                 val current = _uiState.value.editableLotLines
                 val updated = current.map { line ->
                     when {
-                        line.id in quantities -> line.copy(
-                            producedQuantity = quantities.getValue(line.id),
-                            producedCountConfirmed = true
-                        )
+                        line.id in quantities -> {
+                            val r = line.reconcileCount(quantities.getValue(line.id))
+                            val lostReason = shortfallReasons[line.id]
+                                ?.takeIf { it != SHORTFALL_LESS_DOUGH && r.shortfall > 0.0 }
+                            line.copy(
+                                producedQuantity = r.produced,
+                                extraQuantity = r.extra,
+                                extraReason = if (r.extra > line.extraQuantity && line.extraReason.isBlank())
+                                    ProductionExtraReason.COUNTED_MORE else line.extraReason,
+                                wasteQuantity = line.wasteQuantity + (if (lostReason != null) r.shortfall else 0.0),
+                                wasteReason = lostReason ?: line.wasteReason,
+                                producedCountConfirmed = true
+                            )
+                        }
                         line.id in confirmedLineIds -> line.copy(
                             // Nada escrito para esta línea = el prellenado (lo ya
                             // registrado, o si no, lo pedido) ya era correcto.
@@ -909,11 +936,13 @@ class ProductionViewModel(
     fun extraUnitsInGroup(
         groupLines: List<ProductionLotLine>,
         allLines: List<ProductionLotLine>,
-        recipeId: String
+        recipeId: String,
+        /** Qué unidades contar: lo de más (default) o lo perdido, para "Reponer lo perdido". */
+        quantityOf: (ProductionLotLine) -> Double = { it.extraQuantity }
     ): Double {
-        val own = groupLines.sumOf { it.extraQuantity }
+        val own = groupLines.sumOf(quantityOf)
         val fromFillings = allLines.sumOf { line ->
-            line.extraQuantity * line.doughFillingsSnapshot
+            quantityOf(line) * line.doughFillingsSnapshot
                 .filter { it.recipeId == recipeId }
                 .sumOf { it.rawWeightGrams }
         }
@@ -937,13 +966,21 @@ class ProductionViewModel(
         groupLines: List<ProductionLotLine>,
         allLines: List<ProductionLotLine>,
         fallbackRecipeId: String,
-        fallbackRecipeName: String
+        fallbackRecipeName: String,
+        /**
+         * Qué unidades escalar: lo de más (default), o lo perdido para la receta de
+         * reposición — que antes solo se veía mientras se anotaba la merma y se perdía
+         * al cerrar la hoja. Con el Pan de Capa incluye la bolita de Suave de las
+         * piezas perdidas, igual que con las extra.
+         */
+        quantityOf: (ProductionLotLine) -> Double = { it.extraQuantity }
     ): ScaledRecipeView? {
         val synthetic = groupLines.mapNotNull { line ->
-            if (line.extraQuantity <= 0.0) null
+            val qty = quantityOf(line)
+            if (qty <= 0.0) null
             else line.copy(
-                plannedQuantity = line.extraQuantity,
-                producedQuantity = line.extraQuantity,
+                plannedQuantity = qty,
+                producedQuantity = qty,
                 extraQuantity = 0.0,
                 wasteQuantity = 0.0,
                 spongeBatchId = "",
@@ -955,7 +992,7 @@ class ProductionViewModel(
         // otras masas. Sin esto, pedir 100 Pan de Capa de más mostraría la hojaldre pero
         // no las 100 bolitas de Suave que llevan adentro.
         val fillingGrams = allLines.sumOf { line ->
-            line.extraQuantity * line.doughFillingsSnapshot
+            quantityOf(line) * line.doughFillingsSnapshot
                 .filter { it.recipeId == fallbackRecipeId }
                 .sumOf { it.rawWeightGrams }
         }
@@ -3748,7 +3785,11 @@ class ProductionViewModel(
             else emptyList()
 
             // Cargar datos auxiliares para mostrar la receta escalada en el detalle.
-            val recipeIds = lines.map { it.recipeId }.filter { it.isNotEmpty() }.distinct()
+            // Incluye las masas de relleno (Pan de Capa → Suave): sin su receta, la
+            // tarjeta de esa masa y la "masa del relleno" de "¿Qué pasó?" salen vacías
+            // en silencio cuando el turno no tiene ningún producto propio de Suave.
+            val recipeIds = (lines.map { it.recipeId } + lines.flatMap { l -> l.doughFillingsSnapshot.map { it.recipeId } })
+                .filter { it.isNotEmpty() }.distinct()
             val recipesById = recipeIds.mapNotNull { id ->
                 runCatching { recipeRepository.getRecipe(companyId, id) }.getOrNull()?.let { id to it }
             }.toMap()
@@ -4011,6 +4052,24 @@ class ProductionViewModel(
                 }
             }.onFailure { err -> _uiState.update { it.copy(error = err.message) } }
         }
+    }
+
+    /**
+     * Conteo físico desde la pantalla de "Completar": mismo reparto que la hoja de
+     * conteo (`reconcileCount`), para que editar ahí no vuelva a mezclar el pan de más
+     * con el de las sucursales. El faltante no se pregunta acá: se pregunta en el
+     * conteo por masa, que es el obligatorio.
+     */
+    fun setPhysicalCount(line: ProductionLotLine, physicalGood: Double) {
+        val r = line.reconcileCount(physicalGood)
+        updateEditableLotLine(
+            line.copy(
+                producedQuantity = r.produced,
+                extraQuantity = r.extra,
+                extraReason = if (r.extra > line.extraQuantity && line.extraReason.isBlank())
+                    ProductionExtraReason.COUNTED_MORE else line.extraReason
+            )
+        )
     }
 
     fun updateEditableLotLine(line: ProductionLotLine) {
@@ -4512,7 +4571,10 @@ class ProductionViewModel(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null, stockWarnings = emptyList()) }
             runCatching {
-                val lines = _uiState.value.editableLotLines
+                // Un conteo editado por otro camino puede traer más pan para las
+                // sucursales que lo pedido; ese excedente pasa a "de más" para que
+                // entre al stock de la planta en vez de desaparecer de los libros.
+                val lines = _uiState.value.editableLotLines.map { it.withSurplusAsExtra() }
 
                 // 1. Marcar lote como COMPLETADO
                 productionRepository.completeLot(companyId, lot.id, lines)
@@ -4540,7 +4602,15 @@ class ProductionViewModel(
 
                 // 3. Descontar insumos del stock + consumir batches de esponja/adorno
                 val warnings = mutableListOf<String>()
-                val activeLines = lines.filter { it.producedQuantity > 0 }
+                // Todo lo que se AMASÓ, aunque no haya salido nada bueno. Antes filtraba
+                // por `producedQuantity > 0`: si se quemaban los 40 Pan de Capa y no se
+                // reponían, el conteo quedaba en 0 y la línea desaparecía del cierre —
+                // ni la Capa, ni la bolita de Suave, ni la concha se descontaban, aunque
+                // la merma estuviera declarada.
+                val activeLines = lines.filter { it.kneadedQuantity(fallbackToPlanned = false) > 0.0 }
+                // Para las notas de despacho sí cuenta solo lo bueno: pan que se quemó
+                // entero no se le puede prometer a ninguna sucursal.
+                val producedLines = lines.filter { it.producedQuantity > 0 }
                 // Incluye las recetas de doughFillingsSnapshot (Pan de Capa → Suave):
                 // esa masa se descuenta como si fuera un Pan Suave más, así que su
                 // receta también hay que cargarla aunque no tenga línea propia en el lote.
@@ -4793,7 +4863,7 @@ class ProductionViewModel(
                     dispatchRepository.createDispatchNotesForLot(
                         companyId,
                         lot.copy(status = ProductionLotStatus.COMPLETED),
-                        activeLines,
+                        producedLines,
                         currentUser
                     )
                 }.onFailure {
