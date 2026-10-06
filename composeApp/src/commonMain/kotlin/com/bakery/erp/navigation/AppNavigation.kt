@@ -652,7 +652,7 @@ fun AppNavigation(
             NotificationTarget.DISPATCH_NOTE_DETAIL ->
                 if (targetId.isNotEmpty())
                     navController.navigate(Screen.DispatchDetail.route(targetId))
-                else navController.navigate(Screen.DispatchList.route)
+                else navController.navigate(Screen.DeliveryList.route)
             NotificationTarget.CASH_AUDIT ->
                 navController.navigate(Screen.CashAudit.route(targetId))
             else -> Unit
@@ -1029,23 +1029,16 @@ fun AppNavigation(
 
         // ── Despacho ─────────────────────────────────────────────────────────
         composable(Screen.DispatchList.route) {
-            // Los tres permisos, no solo VIEW_PRODUCTION: es exactamente la misma
-            // condición con la que HomeScreen decide mostrar el módulo "Despacho".
-            // Cuando pedía solo VIEW_PRODUCTION, quien empaca o recibe (DISPATCH_PACK
-            // / RECEIVE_DISPATCH) veía el botón y al tocarlo lo rebotaba con "no
-            // tienes permiso" — parecía un problema de la cuenta y era del guard.
+            // Misma condición con la que HomeScreen muestra el módulo: Despacho es solo
+            // de la planta. Las sucursales siguen su pan en Reparto.
             RequirePermission(
                 state.user,
-                Permission.VIEW_PRODUCTION,
                 Permission.DISPATCH_PACK,
-                Permission.RECEIVE_DISPATCH,
                 onBack = { navController.popBackStack() }
             ) {
                 DispatchNoteListScreen(
                     onNavigateBack = { navController.popBackStack() },
-                    onNavigateToPack = { noteId -> navController.navigate(Screen.DispatchPack.route(noteId)) },
-                    onNavigateToReceive = { noteId -> navController.navigate(Screen.DispatchReceive.route(noteId)) },
-                    onNavigateToDetail = { noteId -> navController.navigate(Screen.DispatchDetail.route(noteId)) },
+                    onNavigateToBoard = { navController.navigate(Screen.DeliveryList.route) },
                     authViewModel = viewModel,
                     viewModel = dispatchViewModel,
                     productionViewModel = productionViewModel

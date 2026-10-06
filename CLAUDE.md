@@ -1739,6 +1739,43 @@ volver atrás. Y el pan cancelado —que ya estaba horneado— desaparecía del 
 
 **Agrupado por masa en empaque/recepción/detalle**: `DispatchNoteLine` no trae `recipeId` (viene de `ProductionOrderLine`, que tampoco lo tiene), así que en vez de snapshotearlo se resuelve en cliente reutilizando `ProductionUiState.recipeRefByProductId` (`ProductionViewModel.loadRecipeRefByProductIdIfNeeded`, ya cacheado) + `groupByMasa` de `presentation/production/MasaGrouping.kt` — ambos son `internal`, visibles igual desde `presentation/dispatch` porque `internal` en Kotlin es de módulo, no de paquete. `DispatchNotePackScreen`, las dos secciones de `DispatchNoteReceiveScreen` (`ArrivalChecklistSection`, `CountSection`), `DispatchNoteDetailScreen` (`LinesSection`) **y `PackingMatrixScreen.kt`** (`PackingMatrixTable` para tablet, `PackingBranchTabs` para móvil — la pestaña "Por empacar", que es la que se abre por defecto al entrar a Despacho, así que es la que más importa) reciben `productionViewModel` como parámetro nuevo solo para esto — mismo patrón que ya usaba `ProductWeightsScreen`. **Ojo**: "Despacho" tiene 4 pantallas con lista de productos, no 3 — la matriz `PackingMatrixContent` (pestaña "Por empacar" por defecto) es la que más se usa y es fácil pasarla por alto porque vive en un archivo separado (`PackingMatrixScreen.kt`) y no en `DispatchNote*Screen.kt`.
 
+### Reparto — el tablero del día (oct 2026)
+
+**Despacho es solo de la planta** (`DISPATCH_PACK`): la matriz de empaque de siempre y
+"Cerrar turno". Sus pestañas (Listas, En tránsito, Pendiente conteo, Recibidas) se fueron:
+**Reparto es el tablero de todos** (`DeliveryBoardScreen`, permisos
+`MANAGE_DELIVERY_RUNS`/`DRIVE_DELIVERY`/`RECEIVE_DISPATCH`/`VIEW_PRODUCTION`). La sucursal
+firma la llegada y cuenta desde ahí; las pantallas de recepción y detalle no cambiaron, solo
+desde dónde se llega. Diseño aprobado con prototipo antes de construir.
+
+- **Una tarjeta por sucursal y viaje**, agrupadas por viaje (`tripOfNote`: el pan de noche de
+  Pacajá aparece en el 2º viaje, que es cuando sale). Etapas (`boardStage`): En empaque
+  (barra que crece por panes) · Lista para salir · En camino (carretera mínima, camión blanco,
+  pin) · Llegó-falta contar · Recibida/cancelada (plegadas al final).
+- **Solo late lo que te toca** (`BoardViewer.isMyTurn`): a la planta lo listo sin camión, a la
+  sucursal lo que falta contar. El dueño lo ve en **modo supervisión**: tiene todos los
+  permisos y si le latiera todo lo que puede hacer, no le serviría para ver lo atrasado.
+- **Excepción de paleta aprobada por el dueño:** el chip "Llegó · falta contar" lleva letra
+  BLANCA sobre `Accent` (2.6:1, contra la regla de abajo). Acotada a esta pantalla, en
+  `styleOf` de `DeliveryBoardScreen`; el resto de la app sigue con `OnAccent`.
+- **Avance de empaque en vivo**: `DispatchNote.plannedUnits/packedUnits`, caché recalculada
+  desde las líneas (`refreshPackedUnits`) en cada marca/corrección. Recalcular y no sumar:
+  varias pantallas reescriben el encabezado entero y un contador se desfasaría para siempre.
+- **Estimado de llegada sin GPS**: `deliveryLegStats/{origen}_{destino}` guarda lo que suele
+  tardar cada tramo; se actualiza al firmar cada llegada (`recordLegSample`, pesa 25% la
+  última, descarta firmas de más de 4 h). Con menos de 3 muestras no se promete un minuto
+  ("Salió hace X min") pero el camión igual avanza, con 15 min por parada de supuesto.
+  Nunca llega al pin solo: llega cuando la sucursal firma.
+- **Ruta fija por planta** (`Branch.deliveryRouteOrder`, ícono de ruta en la barra): orden de
+  las paradas al despachar. Separada de `dispatchBranchOrder` porque el camión se carga al
+  revés de como entrega.
+- **Hoja de reparto en un toque**: "Despachar Nº viaje" en el encabezado del viaje abre una
+  hoja con todo lo listo ya marcado en orden de ruta y el repartidor/vehículo del último viaje
+  igual (`DeliveryRun.trip`). "Salir" = `saveRun` + `startRun`; el "Iniciar reparto" aparte se
+  olvidaba y dejaba la hoja pendiente con el camión en la calle.
+- La planta toca una tarjeta en empaque → la matriz abre ya en esa sucursal, turno y día
+  (`DispatchViewModel.focusPacking`).
+
 ### Reparto (`DeliveryRun`)
 Agrupa N `DispatchNote` para repartidor + vehículo + día.
 

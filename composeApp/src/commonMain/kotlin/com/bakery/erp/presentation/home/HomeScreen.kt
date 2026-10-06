@@ -93,8 +93,8 @@ private val ALL_SECTIONS = listOf(
     ModuleSection("Inventario", Icons.Default.Inventory, BrandColors.Primary, BrandColors.PrimaryContainer, listOf(
         ModuleItem("Insumos",    "Costos y stock",       Icons.Default.Kitchen),
         ModuleItem("Compras",    "Facturas de proveedor",     Icons.Default.ShoppingCart),
-        ModuleItem("Despacho",   "Empaque y recepción",  Icons.Default.LocalShipping),
-        ModuleItem("Reparto",    "Hojas de ruta",        Icons.Default.LocalShipping),
+        ModuleItem("Despacho",   "Empaque de la planta", Icons.Default.AllInbox),
+        ModuleItem("Reparto",    "Cómo va el pan del día", Icons.Default.LocalShipping),
         ModuleItem("Inventario tienda", "Stock terminado y mermas", Icons.Default.Inventory),
         ModuleItem("Conteo de pan", "Cierre de día con merma",   Icons.Default.Inventory),
     )),
@@ -164,11 +164,14 @@ private fun hasModuleAccess(title: String, user: User) = with(user) {
                             hasPermission(Permission.EDIT_ASSETS) ||
                             hasPermission(Permission.MANAGE_ASSETS)
         "Listas de Precios" -> hasPermission(Permission.MANAGE_PRICE_LISTS)
-        "Despacho"          -> hasPermission(Permission.VIEW_PRODUCTION) ||
-                               hasPermission(Permission.DISPATCH_PACK) ||
-                               hasPermission(Permission.RECEIVE_DISPATCH)
+        // Despacho es solo de la planta: empacar. Lo que antes eran sus pestañas
+        // (listas, en tránsito, por contar, recibidas) es ahora el tablero de Reparto,
+        // que es donde la sucursal firma la llegada y cuenta.
+        "Despacho"          -> hasPermission(Permission.DISPATCH_PACK)
         "Reparto"           -> hasPermission(Permission.MANAGE_DELIVERY_RUNS) ||
-                               hasPermission(Permission.DRIVE_DELIVERY)
+                               hasPermission(Permission.DRIVE_DELIVERY) ||
+                               hasPermission(Permission.RECEIVE_DISPATCH) ||
+                               hasPermission(Permission.VIEW_PRODUCTION)
         "Punto de Venta"    -> hasPermission(Permission.OPERATE_POS)
         "Historial de Ventas" -> hasPermission(Permission.VIEW_SALES)
         "Cajas Registradoras" -> hasPermission(Permission.MANAGE_POS_CONFIG)
@@ -747,7 +750,7 @@ private fun navigateAlert(alert: HomeAlert, navigate: (String) -> Unit) {
     val title = when (alert.target) {
         AlertTarget.LOW_STOCK_INGREDIENTS  -> "Insumos"
         AlertTarget.UPCOMING_MAINTENANCE   -> "Activos Fijos"
-        AlertTarget.IN_TRANSIT_DISPATCH    -> "Despacho"
+        AlertTarget.IN_TRANSIT_DISPATCH    -> "Reparto"
         AlertTarget.STALE_PRODUCTION_LOT   -> "Producción"
         AlertTarget.LATE_PRODUCTION_ORDER  -> "Pedidos"
         AlertTarget.OVERDUE_CASH_SESSION   -> "Cierre del día"
