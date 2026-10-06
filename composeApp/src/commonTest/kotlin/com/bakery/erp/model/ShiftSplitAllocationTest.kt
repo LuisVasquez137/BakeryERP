@@ -420,4 +420,57 @@ class ShiftSplitAllocationTest {
         assertConserves(requested, result)
         assertEquals(60.0, result.first["calvario"])
     }
+
+    @Test
+    fun recalculo_productoSoloDeNoche_pacajaNoLoMandaAlTurnoDeDia() {
+        // Caso real del 5/10: Cubo pequeño solo se hace de noche (excluido de la
+        // mañana) y Pacajá solo recibe en el segundo viaje. Al editarse un pedido
+        // con los dos lotes abiertos, la restricción de viaje le ganaba a la
+        // exclusión: el lote de mañana aparecía con 20 Cubos para Pacajá y el de
+        // noche los perdía — no salían en su empaque.
+        val requested = mapOf("pacaja" to 20.0, "democracia" to 150.0)
+        val previousA = mapOf("pacaja" to 20.0, "democracia" to 150.0)
+
+        val (a, b) = splitOrderAllocations(
+            requestedNow = requested,
+            previousA = previousA,
+            previousB = emptyMap(),
+            shiftTotalA = 170.0,
+            restrictedTrip = mapOf("pacaja" to DISPATCH_TRIP_SECOND),
+            allowedInA = true,
+            allowedInB = false
+        )
+
+        assertEquals(20.0, a["pacaja"])
+        assertEquals(150.0, a["democracia"])
+        assertTrue(b.isEmpty(), "El turno que no hornea el producto no puede recibir nada: $b")
+    }
+
+    @Test
+    fun recalculo_encargoDeclarado_noMandaAlTurnoQueNoHorneaElProducto() {
+        // Sheca con jamón y queso: excluida de la mañana. Un encargo en 0 para el
+        // primer viaje la mandaba entera a la mañana.
+        val requested = mapOf("democracia" to 10.0)
+
+        val (a, b) = splitOrderAllocations(
+            requestedNow = requested,
+            previousA = emptyMap(),
+            previousB = emptyMap(),
+            shiftTotalA = 10.0,
+            declaredEarly = mapOf("democracia" to 0.0),
+            allowedInA = true,
+            allowedInB = false
+        )
+
+        assertEquals(10.0, a["democracia"])
+        assertTrue(b.isEmpty())
+    }
+
+    @Test
+    fun pinesDeViaje_cedenAnteLaExclusion() {
+        val requested = mapOf("pacaja" to 20.0)
+        val restricted = mapOf("pacaja" to DISPATCH_TRIP_SECOND)
+        assertEquals(mapOf("pacaja" to 0.0), tripRestrictionPins(requested, restricted))
+        assertTrue(tripRestrictionPins(requested, restricted, allowedInA = true, allowedInB = false).isEmpty())
+    }
 }

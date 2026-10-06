@@ -3145,7 +3145,11 @@ class ProductionViewModel(
                 requested,
                 orderedA,
                 (state.shiftSplitPinnedA[productId] ?: emptyMap()) +
-                    tripRestrictionPins(requested, state.shiftSplitRestrictedTrip)
+                    tripRestrictionPins(
+                        requested, state.shiftSplitRestrictedTrip,
+                        allowedInA = productId !in state.shiftSplitShiftA?.excludedProductIds.orEmpty(),
+                        allowedInB = productId !in state.shiftSplitShiftB?.excludedProductIds.orEmpty()
+                    )
             )
             state.copy(
                 shiftSplitQuantityA = newA,
@@ -4052,6 +4056,8 @@ class ProductionViewModel(
                     shiftTotalA = orderedA,
                     declaredEarly = declaredEarlyByProductAndOrder[productId].orEmpty(),
                     restrictedTrip = restrictedTrip,
+                    allowedInA = productId !in excludedA,
+                    allowedInB = productId !in excludedB,
                     branchNameByOrderId = branchNameByOrderId
                 )
             }
@@ -4128,6 +4134,8 @@ class ProductionViewModel(
         shiftTotalA: Double,
         declaredEarly: Map<String, Double>,
         restrictedTrip: Map<String, Int>,
+        allowedInA: Boolean,
+        allowedInB: Boolean,
         branchNameByOrderId: Map<String, String>
     ): Pair<List<SourceOrderAllocation>, List<SourceOrderAllocation>> {
         val (mapA, mapB) = splitOrderAllocations(
@@ -4136,7 +4144,9 @@ class ProductionViewModel(
             previousB = previousAllocationsB.associate { it.orderId to it.quantity },
             shiftTotalA = shiftTotalA,
             declaredEarly = declaredEarly,
-            restrictedTrip = restrictedTrip
+            restrictedTrip = restrictedTrip,
+            allowedInA = allowedInA,
+            allowedInB = allowedInB
         )
 
         fun nameOf(orderId: String) = branchNameByOrderId[orderId]

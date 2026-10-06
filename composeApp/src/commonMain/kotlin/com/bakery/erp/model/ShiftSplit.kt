@@ -182,14 +182,23 @@ const val DISPATCH_TRIP_SECOND = 2
  * "esto no se mueve", la sucursal de horario restringido tampoco se mueve.
  *
  * [restrictedTrip] es `orderId → viaje` y solo trae las órdenes restringidas.
+ *
+ * **Cede ante la exclusión del producto** ([allowedInA]/[allowedInB]): si el turno
+ * del único viaje que la sucursal recibe no hornea ese pan, no hay pin — el pan
+ * sale del turno que sí lo hace (ver [tripRestrictionConflicts]). Sin esta guarda,
+ * Pacajá (solo segundo viaje) mandaba al turno de día panes que solo se hacen de
+ * noche: el lote de día aparecía con productos excluidos y el de noche perdía la
+ * porción de Pacajá, que entonces no salía en su empaque.
  */
 fun tripRestrictionPins(
     orderRequested: Map<String, Double>,
-    restrictedTrip: Map<String, Int>
+    restrictedTrip: Map<String, Int>,
+    allowedInA: Boolean = true,
+    allowedInB: Boolean = true
 ): Map<String, Double> = orderRequested.mapNotNull { (orderId, requested) ->
     when (restrictedTrip[orderId]) {
-        DISPATCH_TRIP_FIRST -> orderId to requested
-        DISPATCH_TRIP_SECOND -> orderId to 0.0
+        DISPATCH_TRIP_FIRST -> if (allowedInA) orderId to requested else null
+        DISPATCH_TRIP_SECOND -> if (allowedInB) orderId to 0.0 else null
         else -> null
     }
 }.toMap()
@@ -312,6 +321,11 @@ fun pinOrderAllocation(
  * @param requestedNow `orderId → cantidad pedida ahora` de este producto.
  * @param shiftTotalA unidades de este producto que produce el turno A (sin contar
  *   `plantRetainedQuantity`, que no se despacha a nadie).
+ * La exclusión del producto ([allowedInA]/[allowedInB]) manda sobre todo lo
+ * demás —reparto previo, encargo declarado y viaje restringido—, igual que en
+ * [defaultOrderAllocationsForShiftA]: si un turno no hornea ese pan, todo va al
+ * otro. Excluido de ambos → todo a A, con el mismo criterio.
+ *
  * @return `(desglose del turno A, desglose del turno B)`, sin entradas en cero.
  */
 fun splitOrderAllocations(
@@ -320,9 +334,14 @@ fun splitOrderAllocations(
     previousB: Map<String, Double>,
     shiftTotalA: Double,
     declaredEarly: Map<String, Double> = emptyMap(),
-    restrictedTrip: Map<String, Int> = emptyMap()
+    restrictedTrip: Map<String, Int> = emptyMap(),
+    allowedInA: Boolean = true,
+    allowedInB: Boolean = true
 ): Pair<Map<String, Double>, Map<String, Double>> {
     if (requestedNow.isEmpty() || shiftTotalA < 0.0) return emptyMap<String, Double>() to emptyMap()
+    val positive = requestedNow.filterValues { it > 0.0 }
+    if (!allowedInB) return positive to emptyMap()
+    if (!allowedInA) return emptyMap<String, Double>() to positive
 
     val previousRequested = (previousA.keys + previousB.keys).associateWith {
         (previousA[it] ?: 0.0) + (previousB[it] ?: 0.0)
