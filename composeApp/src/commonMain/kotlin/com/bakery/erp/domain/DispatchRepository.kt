@@ -180,6 +180,16 @@ interface DispatchRepository {
         newRequested: Double
     )
 
+    /**
+     * Lo que suele tardar cada tramo de [originBranchId] (`destinationBranchId → stat`),
+     * de `companies/{c}/deliveryLegStats/{origin}_{destination}`. Se actualiza solo al
+     * firmar cada llegada; ver `model/DeliveryBoard.kt`.
+     */
+    suspend fun getDeliveryLegStats(
+        companyId: String,
+        originBranchId: String
+    ): Map<String, com.bakery.erp.model.DeliveryLegStat>
+
     /** Encabezados de las notas creadas para ese pedido (una por lote/turno que lo produjo). */
     suspend fun getNotesForOrder(companyId: String, orderId: String): List<DispatchNote>
 

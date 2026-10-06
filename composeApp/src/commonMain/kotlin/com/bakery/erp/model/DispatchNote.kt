@@ -60,6 +60,15 @@ data class DispatchNote(
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L,
     val lineCount: Int = 0,
+    /**
+     * Panes de la nota y panes ya marcados como empacados en la matriz. Caché del
+     * encabezado para que el tablero de Reparto dibuje la barra de empaque en vivo
+     * sin leer las líneas de cada nota; la recalcula `refreshPackedUnits` desde las
+     * líneas cada vez que se marca o corrige una, así un descuadre se corrige solo.
+     * En 0 en notas anteriores: el tablero cae a contar productos marcados.
+     */
+    val plannedUnits: Double = 0.0,
+    val packedUnits: Double = 0.0,
     val lines: List<DispatchNoteLine> = emptyList()
 )
 

@@ -159,6 +159,8 @@ fun BranchFormScreen(
         // updateBranch hace set(): sin arrastrarlo, guardar la ficha borraria el
         // orden de empaque que configuro la planta.
         dispatchBranchOrder = existing?.dispatchBranchOrder ?: emptyList(),
+        // La ruta del camión se configura desde Reparto; mismo motivo.
+        deliveryRouteOrder = existing?.deliveryRouteOrder ?: emptyList(),
         closedWeekdays = closedWeekdays.toList(),
         receivesOnlyInTrip = receivesOnlyInTrip,
         // La facturación se asigna desde su propio módulo; mismo motivo que los órdenes.

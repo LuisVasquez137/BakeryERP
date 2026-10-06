@@ -184,6 +184,7 @@ class FirebaseDispatchRepository(
                 priceListName = listName,
                 hasPriceMissing = hasPriceMissing,
                 lineCount = orderLinesForNote.size,
+                plannedUnits = orderLinesForNote.sumOf { it.requestedQuantity },
                 createdAt = now,
                 updatedAt = now
             )
@@ -262,6 +263,7 @@ class FirebaseDispatchRepository(
                 updatedAt = now
             ).toMap()
         )
+        refreshPackedUnits(companyId, noteId)
     }
 
     override suspend fun setLineChecked(
@@ -275,10 +277,29 @@ class FirebaseDispatchRepository(
         linesCol(companyId, noteId).document(lineId).update(
             mapOf("lineCheckedAt" to checkedAtMillis).firestoreSafe()
         )
-        // Bump updatedAt en la nota para que el listener vivo refresque a otros usuarios.
-        notesCol(companyId).document(noteId).update(
-            mapOf("updatedAt" to Clock.System.now().toEpochMilliseconds()).firestoreSafe()
-        )
+        // Recalcula el avance (y de paso sube updatedAt, que es lo que hace refrescar
+        // el listener vivo de los demás aparatos).
+        refreshPackedUnits(companyId, noteId)
+    }
+
+    /**
+     * Recalcula `plannedUnits`/`packedUnits` del encabezado desde las líneas. Escritura
+     * parcial: varias pantallas reescriben el encabezado completo, y un contador que
+     * sumara y restara quedaría desfasado para siempre con la primera carrera; el
+     * recálculo se corrige solo en la siguiente marca. Nunca lanza: que falle no puede
+     * deshacer la marca del empaque, que es lo que importa.
+     */
+    private suspend fun refreshPackedUnits(companyId: String, noteId: String) {
+        runCatching {
+            val lines = linesCol(companyId, noteId).get().documents.map { it.toLine() }
+            notesCol(companyId).document(noteId).update(
+                mapOf(
+                    "plannedUnits" to lines.sumOf { it.requestedQuantity },
+                    "packedUnits" to lines.filter { it.lineCheckedAt != null }.sumOf { it.packedQuantity },
+                    "updatedAt" to Clock.System.now().toEpochMilliseconds()
+                ).firestoreSafe()
+            )
+        }
     }
 
     override suspend fun setLinePackedQuantity(
@@ -293,9 +314,7 @@ class FirebaseDispatchRepository(
                 "packedReason" to reason?.takeIf { it.isNotBlank() }
             ).firestoreSafe()
         )
-        notesCol(companyId).document(noteId).update(
-            mapOf("updatedAt" to Clock.System.now().toEpochMilliseconds()).firestoreSafe()
-        )
+        refreshPackedUnits(companyId, noteId)
     }
 
     override suspend fun ensureNotesForStartedLots(
@@ -542,6 +561,59 @@ class FirebaseDispatchRepository(
         notesCol(companyId).document(noteId).update(
             mapOf("lineCount" to remaining, "hasPriceMissing" to priceMissing, "updatedAt" to now).firestoreSafe()
         )
+        refreshPackedUnits(companyId, noteId)
+    }
+
+    private fun legStatsCol(companyId: String) =
+        firestore.collection("companies/$companyId/deliveryLegStats")
+
+    override suspend fun getDeliveryLegStats(
+        companyId: String,
+        originBranchId: String
+    ): Map<String, com.bakery.erp.model.DeliveryLegStat> = runCatching {
+        legStatsCol(companyId).where { "originBranchId" equalTo originBranchId }.get().documents
+            .map { d ->
+                com.bakery.erp.model.DeliveryLegStat(
+                    originBranchId = originBranchId,
+                    destinationBranchId = d.get<String?>("destinationBranchId") ?: "",
+                    avgMinutes = runCatching { d.get<Double?>("avgMinutes") }.getOrNull() ?: 0.0,
+                    samples = runCatching { d.get<Double?>("samples") }.getOrNull()?.toInt() ?: 0
+                )
+            }
+            .associateBy { it.destinationBranchId }
+    }.getOrElse { emptyMap() }
+
+    /**
+     * Suma la llegada de [note] al promedio de su tramo (planta → sucursal). Es lo que
+     * permite decirle a la sucursal cuánto le falta al camión sin GPS. Nunca lanza: un
+     * fallo acá no puede deshacer la firma de la llegada, que es lo que importa.
+     */
+    private suspend fun recordLegSample(companyId: String, note: DispatchNote, arrivedAt: Long) {
+        runCatching {
+            val dispatchedAt = note.dispatchedAt ?: return
+            if (note.originBranchId == note.destinationBranchId) return
+            val docId = "${note.originBranchId}_${note.destinationBranchId}"
+            val ref = legStatsCol(companyId).document(docId)
+            val snap = ref.get()
+            val current = if (!snap.exists) null else com.bakery.erp.model.DeliveryLegStat(
+                originBranchId = note.originBranchId,
+                destinationBranchId = note.destinationBranchId,
+                avgMinutes = runCatching { snap.get<Double?>("avgMinutes") }.getOrNull() ?: 0.0,
+                samples = runCatching { snap.get<Double?>("samples") }.getOrNull()?.toInt() ?: 0
+            )
+            val sample = (arrivedAt - dispatchedAt) / 60_000.0
+            val (avg, samples) = com.bakery.erp.model.updatedLegMinutes(current, sample) ?: return
+            ref.set(
+                firestoreSafeOf(
+                    "originBranchId" to note.originBranchId,
+                    "destinationBranchId" to note.destinationBranchId,
+                    "destinationBranchName" to note.destinationBranchName,
+                    "avgMinutes" to avg,
+                    "samples" to samples.toDouble(),
+                    "updatedAt" to arrivedAt
+                )
+            )
+        }
     }
 
     override suspend fun getNotesForOrder(companyId: String, orderId: String): List<DispatchNote> {
@@ -597,6 +669,7 @@ class FirebaseDispatchRepository(
                 updatedAt = now
             ).toMap()
         )
+        recordLegSample(companyId, note, now)
     }
 
     override suspend fun confirmReception(
@@ -626,6 +699,8 @@ class FirebaseDispatchRepository(
                 updatedAt = now
             ).toMap()
         )
+        // Flujo rápido (se contó sin firmar antes la llegada): la llegada es ahora.
+        if (note.status == DispatchStatus.IN_TRANSIT) recordLegSample(companyId, note, now)
 
         // Aplicar movimientos al stock terminado de la sucursal destino.
         lines.filter { it.receivedQuantity > 0 }.forEach { line ->
@@ -968,7 +1043,9 @@ class FirebaseDispatchRepository(
         "plantAbsorbedAtCancel" to plantAbsorbedAtCancel,
         "createdAt" to if (createdAt == 0L) Clock.System.now().toEpochMilliseconds() else createdAt,
         "updatedAt" to Clock.System.now().toEpochMilliseconds(),
-        "lineCount" to lineCount
+        "lineCount" to lineCount,
+        "plannedUnits" to plannedUnits,
+        "packedUnits" to packedUnits
     )
 
     private fun DocumentSnapshot.toNote() = DispatchNote(
@@ -1011,7 +1088,9 @@ class FirebaseDispatchRepository(
         plantAbsorbedAtCancel = get<Boolean?>("plantAbsorbedAtCancel") ?: false,
         createdAt = readMillis("createdAt"),
         updatedAt = readMillis("updatedAt"),
-        lineCount = (get<Double?>("lineCount") ?: 0.0).toInt()
+        lineCount = (get<Double?>("lineCount") ?: 0.0).toInt(),
+        plannedUnits = runCatching { get<Double?>("plannedUnits") }.getOrNull() ?: 0.0,
+        packedUnits = runCatching { get<Double?>("packedUnits") }.getOrNull() ?: 0.0
     )
 
     private fun DispatchNoteLine.toMap(): Map<String, Any?> = firestoreSafeOf(

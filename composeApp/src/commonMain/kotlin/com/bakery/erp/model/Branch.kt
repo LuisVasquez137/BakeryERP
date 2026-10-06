@@ -47,6 +47,16 @@ data class Branch(
      */
     val dispatchBranchOrder: List<String> = emptyList(),
     /**
+     * Ruta fija del camión que sale de esta planta: `branchId` de las sucursales en el
+     * orden en que se entregan. Decide el orden de las paradas al despachar un viaje y,
+     * con el promedio de cada tramo, cuánto le falta al repartidor a cada sucursal.
+     *
+     * Separada de [dispatchBranchOrder] a propósito: el camión se carga al revés de como
+     * se entrega (lo primero que se baja va atrás, a la mano), así que el orden en que se
+     * arman las canastas y el de la ruta no tienen por qué coincidir.
+     */
+    val deliveryRouteOrder: List<String> = emptyList(),
+    /**
      * Días de la semana (ISO 1=lunes…7=domingo) en que esta planta NO recibe
      * pedidos — su día de descanso. Vacío = trabaja todos los días. Solo
      * aplica cuando esta sucursal actúa como planta productora: bloquea la
