@@ -1,0 +1,95 @@
+# Reportes y dashboard
+
+> Detalle movido desde CLAUDE.md. Leer antes de tocar este módulo.
+
+## Reportes y Dashboard
+
+Pieza nueva (Fase 1 de reportería). Tres reportes formales + HomeScreen con datos vivos + banner de alertas.
+
+### Permisos (`Permission.kt`, grupo "Reportes")
+`VIEW_OPERATIONS_REPORT`, `VIEW_SALES_REPORT`, `VIEW_PRODUCTION_REPORT`, `VIEW_FINANCIAL_REPORT`, `VIEW_INVENTORY_REPORT`. OWNER los hereda implícito. Los permisos de monto (`VIEW_SALES_VALUE`, `VIEW_DISPATCH_VALUE`) siguen controlando si los $ se muestran dentro de cada reporte.
+
+### Agregaciones (cliente, no servidor)
+Firestore (y especialmente JS) no tiene group-by. Patrón: cada repo expone `aggregateXxxInRange(...)` que devuelve un `data class XxxSummary` ya agrupado. Viven en `domain/report/ReportSummaries.kt`:
+
+- `SaleRepository.aggregateSalesInRange(companyId, branchIds?, from, until): SalesSummary`
+- `ProductionRepository.aggregateProductionInRange(companyId, branchIds?, from, until): ProductionSummary` + `getLotsForBranchInRange(...)`
+- `DispatchRepository.aggregateDispatchInRange(companyId, from, until): DispatchSummary` — `inTransitLoss = packedQty − receivedQty` cuando hay SHORT/DAMAGED
+- `ExpenseRepository.getExpensesForPeriod(period)` + `aggregateExpensesForPeriod(...): ExpenseSummary` (period = "YYYY-MM"); corta `fromPurchases` vs `standalone`
+- `PurchaseRepository.aggregatePurchasesInRange(companyId, from, until): PurchaseSummary` — filtra en memoria (mismo motivo que `getPurchases`: `date` puede ser `Timestamp` o `Long`)
+- `PayrollRepository.getPayrollForPeriod(from, until)` + `aggregatePayrollForPeriod(...): PayrollSummary` — itera empleados (no `collectionGroup`) para evitar requerir índice nuevo. APPROVED+PAID solamente.
+- `FinishedStockRepository.aggregateMovementsInRange(branchId, from, until): StockMovementSummary`
+- `BreadCountRepository.aggregateMermasForMonth(branchId, yearMonth): MermaSummary`
+
+### Reportes (`presentation/reports/`)
+- **SalesReport**: día/semana/mes + sucursal. KPIs (ingresos, tickets, ticket promedio, unidades), barras por día, horizontales por método de pago, top productos, cajeros, histograma horario.
+- **ProductionReport**: día/semana/mes + planta. KPIs (lotes completados, unidades, % eficiencia, merma en tránsito), paired bars planeado vs producido, por turno, por producto (badge de variación %), discrepancias por sucursal destino.
+- **FinancialReport**: mensual. KPIs (ingresos, egresos, utilidad operativa, margen %, comprado, salió de caja). P&L card. Ingresos = `SalesSummary.totalRevenue`. Egresos = `ExpenseSummary.total + PayrollSummary.totalEmployerCost`. Utilidad = ingresos − egresos − planilla − mermas. Compras y flujo de caja en secciones aparte (ver abajo). Por sucursal y mermas por razón.
+
+**Las compras entran como FLUJO DE CAJA, no como egreso del P&L.** El reporte no las conocía:
+egresos eran gastos + planilla, así que la harina y el azúcar —la mayor salida de efectivo de
+una panadería— no aparecían en ningún lado. Restarlas de la utilidad habría sido peor: son un
+activo hasta que se venden, y un mes en el que se llena la bodega saldría en pérdida y el
+siguiente en ganancia inventada. Por eso viven en dos secciones propias ("Compras del mes" y
+"Salida de dinero del mes") y la utilidad operativa queda igual, con una nota que dice cuánto
+se compró de inventario y por qué no está ahí.
+
+**El doble conteo es el modo de fallo real, y se evita con dos cortes:**
+- `Purchase.inventoryAmount` / `expensedAmount` denormalizan qué parte del total entró a
+  inventario (INGREDIENT + RESALE_PRODUCT) y qué parte ya se gastó (SUPPLY + SERVICE, que
+  además generaron su propio `Expense`). Van en el encabezado y no se calculan leyendo las
+  líneas porque el reporte recorre un mes entero — mismo criterio que `totalAmount`.
+- `ExpenseSummary.fromPurchases` / `.standalone` separan los gastos que nacieron de una compra
+  de los capturados aparte. El flujo de caja resta `purchases.paidTotal + expenses.standalone`,
+  así que el cloro no se resta dos veces.
+
+`Purchase.amountSplit()` deduce el reparto del encabezado cuando los campos faltan: **sin
+`lineKinds` es materia prima por definición** (era lo único que el módulo registraba), un solo
+grupo de tipos va entero a su lado, y una compra MIXTA anterior al campo cae en
+`unclassified` — que la pantalla muestra como "Sin desglosar" en vez de repartirlo a ojo.
+Adivinar ahí sería mentir justo en el número que la sección existe para dar.
+`functions/tools/backfill-purchases.js` los rellena desde las líneas y resuelve ese caso.
+
+**`paidTotal` es lo abonado de las compras FECHADAS en el mes**, no el efectivo exacto que
+salió: un abono de hoy a una factura de agosto cuenta en agosto. Se acepta a sabiendas —
+lo contrario obliga a abrir la subcolección de abonos de cada compra— y la pantalla lo dice
+en vez de dar a entender que es un flujo de caja exacto. Una compra `PENDING_RECEIPT` no
+cuenta: no entró a la bodega ni generó gasto todavía.
+
+Lógica pura en `domain/report/PurchaseAggregation.kt`, con tests en `PurchaseAggregationTest`.
+
+- **Pedido vs. recibido** (`presentation/reports/branchsupply/`, permiso `VIEW_BRANCH_SUPPLY_REPORT`): por sucursal y producto, agrupado por masa — pedido → asignado por turno → empacado → recibido → vendido. Una sucursal a la vez (`BranchFilterRow(allowAll = false)`): sumar varias mezcla el faltante de una con el sobrante de otra. Permiso propio y no `VIEW_PRODUCTION_REPORT` porque ése es de la planta; la encargada de sucursal ve solo lo suyo.
+  - **No hay colección nueva**: la nota de despacho es el puente, porque es lo único que sabe cuánto de un pedido le tocó a cada turno. `buildBranchSupplyReport` (`model/BranchSupplyReport.kt`, tests en `BranchSupplyReportTest`) es lógica pura; `loadBranchSupplyData` hace las lecturas (notas por `getNotesForOrder` + `getNote`, no la colección entera).
+  - Enviado solo cuenta notas fuera de DRAFT; recibido y diferencia solo las ya contadas (DELIVERED*). Lo que salió y no se contó se muestra "sin contar" en vez de un 0 que se lea como faltante. Canceladas van aparte.
+  - "Los turnos no suman lo pedido" se marca cuando el pedido ya tiene todas sus notas y no cuadran. Si falta la nota del segundo turno (su lote no arrancó; `expectedShiftsForOrder` = 2 para un pedido sin turno a planta de 2 turnos activos) la diferencia es "sin lote todavía", no un reparto roto.
+  - **Una pestaña por planta productora** (`PlantSupply`, un `buildBranchSupplyReport` por planta): cada una despacha con sus propios turnos y juntas mezclaban columnas de turnos ajenos y alargaban la lista. KPIs y tabla siguen a la pestaña elegida; sin pestañas si la sucursal le pidió a una sola.
+  - Vendido sale de `SalesSummary.unitsByProduct` (nuevo: `topProducts` se corta en 20). Los especiales no tienen ventas.
+  - La misma tabla (`BranchSupplyTable`) sale como sección **"Seguimiento"** en el detalle del pedido (`ProductionViewModel.loadOrderSupply`), en cuanto existen notas.
+
+Helpers compartidos en `presentation/reports/shared/ReportComponents.kt`: `ReportPeriodSelector`, `PeriodNavigator`, `BranchFilterRow`, `KpiTile`, `ReportSection`, `VerticalBars`, `PairedBars`, `HorizontalBars`, `EmptyDataNote`.
+
+### HomeScreen renovado
+- `HomeViewModel` combina sales/production/stock/dispatch/cash flows. KPIs vivos, gráfica de ventas reales de los últimos 7 días, banner de alertas filtrado por permisos del user.
+- Sección "Reportes" — chips a Ventas / Producción / Financiero, visibles solo según `VIEW_*_REPORT`.
+- Refresh manual vía `HomeViewModel.refresh(user)`; `ensureLoadedFor(user)` carga una vez al login.
+
+### Banner de alertas (`presentation/home/AlertsBanner.kt`)
+Banner rotatorio cada 6s entre alertas. Tap → navega a módulo correspondiente. Pager dots si hay >1. Color de borde por severity. Si `alerts.isEmpty()` no se renderiza.
+
+**Modelos**: `domain/report/HomeAlert.kt` con `AlertSeverity` (INFO/WARNING/CRITICAL) y `AlertTarget` (enum que mapea a `Screen` desde HomeScreen — evita acoplar `domain/` con `navigation/`).
+
+**Tipos de alerta** (cada uno gateado por permiso, computados in-memory en HomeViewModel):
+
+| Alerta | Datos fuente | Permiso |
+|---|---|---|
+| Stock bajo | `BranchStock < ingredient.stockAlert` | `VIEW_INGREDIENTS` |
+| Mantenimiento próximo | `FixedAsset.nextMaintenanceDate ≤ +7d` | `VIEW_ASSETS` |
+| Despacho sin acuse | `DispatchNote.status==IN_TRANSIT && now − packedAt > 12h` | `MANAGE_DELIVERY_RUNS` o `DISPATCH_PACK` |
+| Lote estancado | `ProductionLot.status==IN_PROGRESS && productionDate < hoy` | `MANAGE_PRODUCTION_LOTS` |
+| Pedido tardío PENDING | `ProductionOrder.isLateOrder && status==PENDING` | `MANAGE_PRODUCTION_LOTS` |
+| Caja abierta vencida | `CashSession.status==OPEN && now − openedAt > 14h` | `SPOT_CHECK_CASH` o `MANAGE_DAILY_CASH_CLOSE` |
+| Precio sin definir | `DispatchNote.hasPriceMissing` en DRAFT/READY | `MANAGE_PRICE_LISTS` |
+
+No hay colección `alerts/` en Firestore — son proyecciones derivadas. Evita sincronización y stale data.
+
+---
