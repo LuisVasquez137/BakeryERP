@@ -150,7 +150,7 @@ fun ShiftClockInScreen(
         topBar = {
             if (kioskStep == KioskStep.LIST) {
                 TopAppBar(
-                    title = { Text("Ingreso a Turno", fontWeight = FontWeight.SemiBold) },
+                    title = { Text("Asistencia", fontWeight = FontWeight.SemiBold) },
                     navigationIcon = {
                         IconButton(onClick = onNavigateBack) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, "Volver")
