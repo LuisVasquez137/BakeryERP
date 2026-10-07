@@ -1,5 +1,6 @@
 package com.bakery.erp.presentation.employees
 
+import com.bakery.erp.model.canAccessBranch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -82,8 +83,10 @@ fun JobPositionDetailScreen(
     val position = remember(posState.positions, positionId) {
         posState.positions.find { it.id == positionId }
     }
-    val positionEmployees = remember(empState.employees, positionId) {
-        empState.employees.filter { it.positionId == positionId }
+    val positionEmployees = remember(empState.employees, positionId, authState.user) {
+        empState.employees.filter {
+            it.positionId == positionId && authState.user?.canAccessBranch(it.branchId) == true
+        }
     }
 
     Scaffold(

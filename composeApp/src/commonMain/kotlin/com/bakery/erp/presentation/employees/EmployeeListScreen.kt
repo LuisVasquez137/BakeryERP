@@ -1,5 +1,6 @@
 package com.bakery.erp.presentation.employees
 
+import com.bakery.erp.model.canAccessBranch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -102,10 +103,19 @@ fun EmployeeListScreen(
         state.error?.let { snackbarHostState.showSnackbar(it); viewModel.clearError() }
     }
 
+    // Solo las sucursales del usuario: la encargada de una sucursal ve y edita a
+    // su gente, no la planilla entera. El dueño (o un usuario sin sucursales
+    // asignadas) sigue viendo todas — mismo criterio que canAccessBranch.
+    val user = authState.user
+    val myBranches = remember(state.branches, user) {
+        state.branches.filter { user?.canAccessBranch(it.id) == true }
+    }
+
     // Filtrado en memoria: sucursal + búsqueda
-    val displayed = remember(state.employees, state.branchFilter, state.searchQuery) {
+    val displayed = remember(state.employees, state.branchFilter, state.searchQuery, user) {
         val q = state.searchQuery.trim()
         state.employees
+            .filter { user?.canAccessBranch(it.branchId) == true }
             .filter { state.branchFilter == null || it.branchId == state.branchFilter }
             .filter {
                 q.isBlank() ||
@@ -192,7 +202,7 @@ fun EmployeeListScreen(
             }
 
             // ── Chips de sucursal (usa state.branches del VM, no empleados) ─
-            if (state.branches.size > 1) {
+            if (myBranches.size > 1) {
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -205,7 +215,7 @@ fun EmployeeListScreen(
                             label = { Text("Todas") }
                         )
                     }
-                    items(state.branches) { branch ->
+                    items(myBranches) { branch ->
                         FilterChip(
                             selected = state.branchFilter == branch.id,
                             onClick = {

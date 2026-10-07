@@ -1,5 +1,6 @@
 ﻿package com.bakery.erp.presentation.employees
 
+import com.bakery.erp.model.canAccessBranch
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -153,7 +154,11 @@ fun EmployeeFormScreen(
         existing = existing,
         isNew = isNew,
         companyId = companyId,
-        branches = state.branches,
+        // Solo las sucursales a las que el usuario tiene acceso: si no, la encargada
+        // de Democracia podría dar de alta (o mover) a alguien en otra sucursal.
+        branches = state.branches.filter { b ->
+            authState.user?.canAccessBranch(b.id) == true || (!isNew && b.id == state.selectedEmployee?.branchId)
+        },
         jobPositions = state.jobPositions,
         users = state.users,
         isLoading = state.isLoading,
