@@ -8,11 +8,13 @@ import com.bakery.erp.model.AppNotification
 import com.bakery.erp.model.User
 import com.bakery.erp.model.isReadBy
 import com.bakery.erp.model.isVisibleTo
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -33,6 +35,8 @@ class NotificationViewModel(
     val uiState: StateFlow<NotificationUiState> = _uiState.asStateFlow()
 
     private var observationJob: Job? = null
+    private var observedKey: Pair<String, User>? = null
+    private var registeredDeviceKey: Pair<String, String>? = null
 
     /**
      * Suscribe la campana. Un solo listener por organización: el filtro por
@@ -41,10 +45,18 @@ class NotificationViewModel(
      */
     fun observe(companyId: String, user: User) {
         if (companyId.isEmpty()) return
+        // Home lo llama cada vez que vuelve a entrar en composición (al regresar
+        // de cualquier pantalla). Reabrir el listener releía la colección entera
+        // de avisos justo mientras Home se dibujaba.
+        val key = companyId to user
+        if (observedKey == key && observationJob?.isActive == true) return
+        observedKey = key
         observationJob?.cancel()
         observationJob = viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
             notificationRepository.observeNotifications(companyId)
+                // Decodificar la colección de avisos fuera del hilo de UI.
+                .flowOn(Dispatchers.Default)
                 .catch { err -> _uiState.update { it.copy(error = err.message, isLoading = false) } }
                 .collect { all ->
                     // El propio autor no recibe su aviso: ya sabe lo que hizo.
@@ -93,18 +105,22 @@ class NotificationViewModel(
      */
     fun registerCurrentDevice(companyId: String, userId: String) {
         if (companyId.isEmpty() || userId.isEmpty()) return
+        // Una vez por sesión basta: el token no cambia por volver a Home.
+        val key = companyId to userId
+        if (registeredDeviceKey == key) return
         viewModelScope.launch {
             val token = runCatching { pushTokenProvider.currentToken() }.getOrNull() ?: return@launch
             runCatching {
                 notificationRepository.registerDeviceToken(
                     companyId, userId, token, pushTokenProvider.platform
                 )
-            }
+            }.onSuccess { registeredDeviceKey = key }
         }
     }
 
     /** Al cerrar sesión: deja de recibir push de esa empresa en este aparato. */
     fun unregisterCurrentDevice(companyId: String) {
+        registeredDeviceKey = null
         viewModelScope.launch {
             val token = runCatching { pushTokenProvider.currentToken() }.getOrNull() ?: return@launch
             runCatching { notificationRepository.unregisterDeviceToken(companyId, token) }

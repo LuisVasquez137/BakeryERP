@@ -34,7 +34,9 @@ import com.bakery.erp.model.hasPermission
 import com.bakery.erp.presentation.purchases.formatPurchaseDate
 import com.bakery.erp.util.fmtMoney
 import kotlin.time.Clock
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -92,7 +94,10 @@ class HomeViewModel(
     fun refresh(user: User) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
-            runCatching { loadAll(user) }
+            // Fuera del hilo de UI: loadAll lee colecciones enteras (ventas de la
+            // semana, pedidos, compras, insumos) y decodificar esos documentos en
+            // Main trababa el scroll de Home los primeros segundos.
+            runCatching { withContext(Dispatchers.Default) { loadAll(user) } }
                 .onFailure { e ->
                     _uiState.update { it.copy(isLoading = false, error = e.message) }
                 }

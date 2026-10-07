@@ -118,6 +118,10 @@ fun AlertsBanner(
                             text = alert.message,
                             style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFF607585),
+                            // Alto fijo de 2 líneas: una alerta de 1 línea y otra de 2
+                            // cambiaban la altura del banner cada 6 s y toda la lista de
+                            // Home se recolocaba (se sentía como un tirón al hacer scroll).
+                            minLines = 2,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis
                         )

@@ -3,6 +3,9 @@ package com.bakery.erp.navigation
 import com.bakery.erp.presentation.credit.CreditAccountDetailScreen
 import com.bakery.erp.presentation.credit.CreditAccountFormScreen
 import com.bakery.erp.presentation.credit.CreditAccountListScreen
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -674,7 +677,17 @@ fun AppNavigation(
     var showSplash by rememberSaveable { mutableStateOf(true) }
 
     Box(Modifier.fillMaxSize()) {
-    NavHost(navController = navController, startDestination = Screen.Login.route) {
+    // Sin transiciones explícitas, NavHost cruza las dos pantallas con un fade de
+    // 700 ms: al volver a Home se veían las dos encimadas, "neblinosas", casi un
+    // segundo. Entrada corta y salida inmediata.
+    NavHost(
+        navController = navController,
+        startDestination = Screen.Login.route,
+        enterTransition = { fadeIn(tween(150)) },
+        exitTransition = { ExitTransition.None },
+        popEnterTransition = { fadeIn(tween(150)) },
+        popExitTransition = { ExitTransition.None }
+    ) {
 
         composable(Screen.PendingApproval.route) {
             PendingApprovalScreen(viewModel = viewModel)
