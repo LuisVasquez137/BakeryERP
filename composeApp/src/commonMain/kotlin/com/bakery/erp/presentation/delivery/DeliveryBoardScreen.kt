@@ -248,7 +248,8 @@ fun DeliveryBoardScreen(
                         progress = viewModel.stopProgressOf(note, now),
                         nowMillis = now,
                         onClick = {
-                            routeTap(note, user, dispatchViewModel, onOpenReceive, onOpenDetail, onOpenPacking)
+                            if (canSeeChain(user, note)) viewModel.openNoteChain(companyId, note.id)
+                            else routeTap(note, user, dispatchViewModel, onOpenReceive, onOpenDetail, onOpenPacking)
                         }
                     )
                 }
@@ -278,7 +279,10 @@ fun DeliveryBoardScreen(
                             BoardCard(
                                 note = note, mine = false, viewer = viewer, held = false,
                                 progress = null, nowMillis = now,
-                                onClick = { onOpenDetail(note.id) }
+                                onClick = {
+                                    if (canSeeChain(user, note)) viewModel.openNoteChain(companyId, note.id)
+                                    else onOpenDetail(note.id)
+                                }
                             )
                         }
                     }
@@ -311,6 +315,14 @@ fun DeliveryBoardScreen(
         )
     }
 
+    state.noteChain?.let { chain ->
+        NoteChainSheet(
+            chain = chain,
+            onDismiss = { viewModel.closeNoteChain() },
+            onOpenDetail = { viewModel.closeNoteChain(); onOpenDetail(chain.note.id) }
+        )
+    }
+
     if (showRouteDialog) {
         DeliveryRouteDialog(
             plants = plants,
@@ -319,6 +331,19 @@ fun DeliveryBoardScreen(
             onSave = { plantId, order -> viewModel.saveDeliveryRoute(companyId, plantId, order); showRouteDialog = false }
         )
     }
+}
+
+/**
+ * Quién ve la cadena de una entrega (ver `NoteChainSheet`): el dueño, y quien maneja la
+ * planta que la mandó. No la encargada de la sucursal: ver quién perdió su pan genera
+ * roces que no ayudan a encontrarlo. Una nota todavía en empaque no tiene cadena que
+ * mirar: la planta va a la matriz, como siempre.
+ */
+private fun canSeeChain(user: User?, note: DispatchNote): Boolean {
+    user ?: return false
+    if (note.boardStage() == BoardStage.PACKING) return false
+    return user.role == UserRole.OWNER ||
+        (user.hasPermission(Permission.MANAGE_PRODUCTION_LOTS) && user.canAccessBranch(note.originBranchId))
 }
 
 /** La nota de un turno que sale con el otro viaje (Pacajá, pan de noche). */

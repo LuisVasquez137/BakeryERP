@@ -1776,6 +1776,27 @@ desde dónde se llega. Diseño aprobado con prototipo antes de construir.
 - La planta toca una tarjeta en empaque → la matriz abre ya en esa sucursal, turno y día
   (`DispatchViewModel.focusPacking`).
 
+#### La cadena de cada entrega (`model/UnitChain.kt`, `NoteChainSheet`)
+
+El dueño (y quien maneja la planta que la mandó) toca una entrega en el tablero y ve, por
+producto, **pedido → empacado → contado**, con el eslabón donde empezó a faltar
+(`ChainLine.firstBreak`: producción, empaque, o camino/recepción) y quién estaba en cada paso
+(empacó, llevó, firmó la llegada, contó). La encargada de sucursal no la ve: saber quién perdió
+su pan genera roces que no ayudan a encontrarlo.
+
+- **Motivos de lista fija** (`PackingReason`, `ReceptionReason`, selector `ReasonPicker` con
+  "Otro" + detalle obligatorio). En dos semanas de datos reales el empaque decía "no se iso",
+  "nose iso", "f" y "no salio" para lo mismo: con texto libre no se podía sumar nada. Se
+  guardan como texto legible para que las notas viejas se lean igual.
+- **El traspaso entre sucursales dice a quién**: "Se tomó de Calvario" / "Se pasó a Democracia"
+  (antes "reasignadas a otra sucursal"). No cuenta como pérdida (`isTransfer`).
+- Un empaque corto se atribuye a **producción** si dice "No alcanzó la producción" o si el turno
+  horneó menos de lo planeado de ese pan (con conteo confirmado); si no, a empaque.
+- El horno no sabe para quién es cada pan: el dato del turno es contexto, no se reparte.
+- Pendiente: reporte "Dónde se pierde el pan" por período, y conteo de canastas al cerrar el
+  empaque y al firmar la llegada (cada canasta va a una sola sucursal, aunque lleve varios
+  panes), que es lo que separa camión de sucursal dentro de "camino o recepción".
+
 ### Reparto (`DeliveryRun`)
 Agrupa N `DispatchNote` para repartidor + vehículo + día.
 

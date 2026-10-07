@@ -9,6 +9,10 @@ import com.bakery.erp.domain.DispatchRepository
 import com.bakery.erp.domain.FixedAssetRepository
 import com.bakery.erp.domain.ProductionRepository
 import com.bakery.erp.model.AssetStatus
+import com.bakery.erp.model.ChainLine
+import com.bakery.erp.model.ChainSummary
+import com.bakery.erp.model.chainLineOf
+import com.bakery.erp.model.summarizeChain
 import com.bakery.erp.model.Branch
 import com.bakery.erp.model.DeliveryLegStat
 import com.bakery.erp.model.DeliveryRunStatus
@@ -85,7 +89,19 @@ data class DeliveryUiState(
     val dispatchSheet: DispatchSheetState? = null,
     val isDispatching: Boolean = false,
     /** Acuse del último despacho, para el snackbar. */
-    val boardMessage: String? = null
+    val boardMessage: String? = null,
+    /** La cadena de una entrega abierta por el dueño (ver model/UnitChain.kt). */
+    val noteChain: NoteChain? = null,
+    val isChainLoading: Boolean = false
+)
+
+/** Una entrega con sus eslabones y quién estaba en cada uno. */
+data class NoteChain(
+    val note: DispatchNote,
+    val lines: List<ChainLine>,
+    val summary: ChainSummary,
+    val driverName: String,
+    val vehicleInfo: String
 )
 
 /** Lo que la hoja "Despachar viaje" necesita: candidatos y lo que propone de entrada. */
@@ -326,6 +342,46 @@ class DeliveryViewModel(
             }
         }
     }
+
+    /**
+     * Arma la cadena de una entrega: la nota con sus líneas, el lote que la horneó (para
+     * saber si el turno salió corto de ese pan) y la hoja de reparto (quién la llevó).
+     * Tres lecturas puntuales, solo cuando el dueño la abre.
+     */
+    fun openNoteChain(companyId: String, noteId: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isChainLoading = true) }
+            runCatching {
+                val note = dispatchRepository.getNote(companyId, noteId) ?: error("No se encontró la entrega")
+                val (lotLines, run) = coroutineScope {
+                    val lots = async {
+                        if (note.lotId.isEmpty()) emptyList()
+                        else runCatching { productionRepository.getLotLines(companyId, note.lotId) }.getOrElse { emptyList() }
+                    }
+                    val r = async {
+                        if (note.deliveryRunId.isEmpty()) null
+                        else runCatching { repository.getRun(companyId, note.deliveryRunId) }.getOrNull()
+                    }
+                    lots.await() to r.await()
+                }
+                val byProduct = lotLines.filter { !it.isSpecial }.associateBy { it.productId }
+                val counted = note.status == DispatchStatus.DELIVERED || note.status == DispatchStatus.DELIVERED_WITH_DISCREPANCY
+                val lines = note.lines.map { chainLineOf(it, byProduct[it.productId], counted) }
+                    // Lo que tiene diferencia primero: es lo que se vino a ver.
+                    .sortedWith(compareByDescending<ChainLine> { it.hasDifference }.thenBy { it.productName.lowercase() })
+                NoteChain(
+                    note = note,
+                    lines = lines,
+                    summary = summarizeChain(lines),
+                    driverName = run?.driverName.orEmpty(),
+                    vehicleInfo = run?.vehicleInfo.orEmpty()
+                )
+            }.onSuccess { chain -> _uiState.update { it.copy(noteChain = chain, isChainLoading = false) } }
+                .onFailure { err -> _uiState.update { it.copy(isChainLoading = false, error = err.message) } }
+        }
+    }
+
+    fun closeNoteChain() { _uiState.update { it.copy(noteChain = null) } }
 
     /** Guarda la ruta fija del camión de [plantId] (escritura parcial). */
     fun saveDeliveryRoute(companyId: String, plantId: String, destinationIds: List<String>) {

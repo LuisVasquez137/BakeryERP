@@ -1,5 +1,9 @@
 package com.bakery.erp.presentation.dispatch
 
+import com.bakery.erp.model.isCompleteReason
+
+import com.bakery.erp.model.ReceptionReason
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -377,21 +381,25 @@ private fun ReceiveLineCard(
                         DiscrepancyType.all.forEach { t ->
                             DropdownMenuItem(
                                 text = { Text(DiscrepancyType.label(t)) },
-                                onClick = { onChange(state.copy(discrepancyType = t)); typeExpanded = false }
+                                onClick = {
+                                    // Los motivos son por tipo: "No llegó la canasta" no explica algo quebrado.
+                                    val keep = state.reason.takeIf { it in ReceptionReason.optionsFor(t) || it.startsWith("Otro") }
+                                    onChange(state.copy(discrepancyType = t, reason = keep.orEmpty()))
+                                    typeExpanded = false
+                                }
                             )
                         }
                     }
                 }
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = state.reason,
-                    onValueChange = { onChange(state.copy(reason = it)) },
-                    label = { Text("Detalle / razón *") },
-                    placeholder = { Text("ej. Llegaron 2 panes quebrados") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    isError = state.reason.isBlank()
-                )
+                if (state.discrepancyType != null) {
+                    Spacer(Modifier.height(8.dp))
+                    ReasonPicker(
+                        title = "¿Qué pasó? *",
+                        options = ReceptionReason.optionsFor(state.discrepancyType),
+                        value = state.reason,
+                        onValueChange = { onChange(state.copy(reason = it)) }
+                    )
+                }
                 val deltaQty = received - state.original.packedQuantity
                 AssistChip(
                     onClick = {},
@@ -658,7 +666,8 @@ private fun ColumnScope.CountSection(
 
     val needsReason = lineStates.filter {
         val v = it.receivedInput.toDoubleOrNull() ?: 0.0
-        v != it.original.packedQuantity && (it.reason.isBlank() || it.discrepancyType == null)
+        v != it.original.packedQuantity && (it.discrepancyType == null ||
+            !isCompleteReason(it.reason, ReceptionReason.optionsFor(it.discrepancyType)))
     }
     val canSubmit = needsReason.isEmpty()
     if (needsReason.isNotEmpty()) {

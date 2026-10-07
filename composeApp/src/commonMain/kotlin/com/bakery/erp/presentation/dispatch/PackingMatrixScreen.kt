@@ -1,5 +1,8 @@
 package com.bakery.erp.presentation.dispatch
 
+import com.bakery.erp.model.PackingReason
+import com.bakery.erp.model.isCompleteReason
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -1072,7 +1075,9 @@ private fun EditPackedQuantityDialog(
     val parsed = qtyInput.toDoubleOrNull() ?: -1.0
     val isValid = parsed >= 0.0
     val differs = parsed != target.requested
-    val reasonRequired = differs
+    // Mandar MENOS pide un motivo de la lista; mandar MÁS sale siempre de otra sucursal,
+    // y el motivo lo escribe el traspaso solo ("Se tomó de Calvario").
+    val reasonRequired = differs && parsed < target.requested
     // Solo hace falta donante para lo que pase de lo que a esta sucursal le TOCABA.
     // Volver a subir después de haber bajado no le quita nada a nadie: ese pan es
     // suyo y sigue reservado mientras el empaque del turno esté abierto — pedir
@@ -1081,7 +1086,7 @@ private fun EditPackedQuantityDialog(
     val needsDonor = extra > 0.0
     val donorFits = donor != null && donor!!.available >= extra
     val canSave = isValid &&
-        (!reasonRequired || reason.isNotBlank()) &&
+        (!reasonRequired || isCompleteReason(reason, PackingReason.WHEN_LESS)) &&
         (!needsDonor || donorFits)
 
     AlertDialog(
@@ -1129,10 +1134,7 @@ private fun EditPackedQuantityDialog(
                         TextButton(
                             onClick = {
                                 qtyInput = (target.requested + shortfall.units).fmt(0)
-                                if (reason.isBlank()) {
-                                    reason = "Reposición de ${shortfall.shiftName}" +
-                                        if (shortfall.reason.isNotBlank()) " — ${shortfall.reason}" else ""
-                                }
+                                reason = "${PackingReason.REPLENISH}: ${shortfall.shiftName}"
                             },
                             contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)
                         ) {
@@ -1211,20 +1213,17 @@ private fun EditPackedQuantityDialog(
                     }
                 }
                 if (reasonRequired) {
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
+                    Spacer(Modifier.height(10.dp))
+                    ReasonPicker(
+                        title = "¿Por qué va menos? *",
+                        options = PackingReason.WHEN_LESS,
                         value = reason,
-                        onValueChange = { reason = it },
-                        label = { Text("Razón del ajuste *") },
-                        placeholder = { Text("La verá la encargada que recibe") },
-                        singleLine = false,
-                        isError = reason.isBlank(),
-                        modifier = Modifier.fillMaxWidth()
+                        onValueChange = { reason = it }
                     )
                     Text(
-                        "Si la cantidad difiere de lo pedido, escribe el motivo.",
+                        "Lo verá la encargada que recibe y el dueño en el reparto.",
                         style = MaterialTheme.typography.labelSmall,
-                        color = BrandColors.AccentDeep,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 4.dp)
                     )
                 }
@@ -1242,7 +1241,17 @@ private fun EditPackedQuantityDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    onSave(parsed, if (reasonRequired) reason.trim() else null, donor)
+                    val finalReason = when {
+                        reasonRequired -> reason.trim()
+                        // Lo de más sale de otra sucursal: queda dicho de cuál, y si era una
+                        // reposición de un viaje anterior, también.
+                        needsDonor -> listOfNotNull(
+                            reason.takeIf { it.startsWith(PackingReason.REPLENISH) },
+                            donor?.let { PackingReason.takenFrom(it.branchName) }
+                        ).joinToString(" · ").ifBlank { null }
+                        else -> null
+                    }
+                    onSave(parsed, finalReason, donor)
                 },
                 enabled = canSave
             ) { Text("Guardar") }

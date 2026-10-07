@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.dispatch
 
+import com.bakery.erp.model.PackingReason
+
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bakery.erp.domain.BranchRepository
@@ -663,9 +665,12 @@ class DispatchViewModel(
                 .find { it.id == donorNoteId }?.lines?.find { it.id == donorLineId }
             if (extra > 0.0 && donorLine != null) {
                 val donorNewQty = (donorLine.packedQuantity - extra).coerceAtLeast(0.0)
+                // Dice a QUIÉN: con "reasignadas a otra sucursal" la encargada que recibe
+                // corto no sabía a dónde fue su pan, y el dueño no podía seguirlo.
+                val receiverName = _packingState.value.notes.find { it.id == noteId }?.destinationBranchName.orEmpty()
                 val donorReason = listOfNotNull(
                     donorLine.packedReason?.takeIf { it.isNotBlank() },
-                    "${extra.toInt()} reasignadas a otra sucursal"
+                    "${PackingReason.givenTo(receiverName)} (${extra.toInt()})"
                 ).joinToString(" · ")
                 applyPackedQuantity(companyId, donorNoteId, donorLineId, donorNewQty, donorReason)
             }

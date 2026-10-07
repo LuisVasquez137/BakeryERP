@@ -1,5 +1,9 @@
 package com.bakery.erp.presentation.dispatch
 
+import com.bakery.erp.model.isCompleteReason
+
+import com.bakery.erp.model.PackingReason
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -79,6 +83,14 @@ private data class PackLineState(
             packedReason = if (qty != original.requestedQuantity && reason.isNotBlank()) reason.trim() else null
         )
     }
+
+    fun reasonOptions(): List<String> =
+        if ((packedInput.toDoubleOrNull() ?: 0.0) < original.requestedQuantity) PackingReason.WHEN_LESS
+        else PackingReason.WHEN_MORE
+
+    /** Le falta el motivo: difiere de lo pedido y no hay uno de la lista (o "Otro" con detalle). */
+    fun needsReason(): Boolean =
+        (packedInput.toDoubleOrNull() ?: 0.0) != original.requestedQuantity && !isCompleteReason(reason, reasonOptions())
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -223,10 +235,7 @@ fun DispatchNotePackScreen(
                         }
 
                         val totalLines = lineStates.size
-                        val withReasonsNeeded = lineStates.filter {
-                            val v = it.packedInput.toDoubleOrNull() ?: 0.0
-                            v != it.original.requestedQuantity && it.reason.isBlank()
-                        }
+                        val withReasonsNeeded = lineStates.filter { it.needsReason() }
                         val hasUnpriced = lineStates.any {
                             it.original.priceSource == PriceSourceTag.NONE &&
                                 (it.packedInput.toDoubleOrNull() ?: 0.0) > 0
@@ -375,14 +384,11 @@ private fun PackLineCard(
             }
             if (diff) {
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
+                ReasonPicker(
+                    title = if (packed < state.original.requestedQuantity) "¿Por qué va menos? *" else "¿Por qué va más? *",
+                    options = state.reasonOptions(),
                     value = state.reason,
-                    onValueChange = { onChange(state.copy(reason = it)) },
-                    label = { Text("Razón del ajuste *") },
-                    placeholder = { Text("ej. No alcanzó la producción") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    isError = state.reason.isBlank()
+                    onValueChange = { onChange(state.copy(reason = it)) }
                 )
             }
             if (noPrice && packed > 0) {
