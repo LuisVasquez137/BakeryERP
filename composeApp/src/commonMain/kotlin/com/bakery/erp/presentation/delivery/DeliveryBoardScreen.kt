@@ -615,7 +615,11 @@ private fun BoardCard(
 
 private fun detailFor(note: DispatchNote, stage: BoardStage): String? = when (stage) {
     BoardStage.READY -> if (note.originBranchId == note.destinationBranchId) "Se queda en el mostrador de la planta"
-        else "${note.lineCount} productos · espera camión"
+        else listOfNotNull(
+            "${note.lineCount} productos",
+            note.basketsSent.takeIf { it > 0 }?.let { "$it canasta${if (it == 1) "" else "s"}" },
+            "espera camión"
+        ).joinToString(" · ")
     BoardStage.RECEIVED -> note.receivedAt?.let { "Recibida ${clockLabel(it)}" + if (note.hasDiscrepancy) "" else " · todo cuadró" }
     BoardStage.CANCELLED -> note.cancelReason?.takeIf { it.isNotBlank() } ?: "Cancelada"
     else -> null
@@ -909,7 +913,10 @@ private fun DispatchTripSheet(
                                 when {
                                     !isReady -> "Todavía en empaque: no puede subir"
                                     isHeld(n) -> "Pan de ${n.shiftName.lowercase()} guardado para este viaje"
-                                    else -> "${n.lineCount} productos"
+                                    else -> listOfNotNull(
+                                        "${n.lineCount} productos",
+                                        n.basketsSent.takeIf { it > 0 }?.let { b -> "$b canasta${if (b == 1) "" else "s"}" }
+                                    ).joinToString(" · ")
                                 },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = if (isReady && isHeld(n)) BrandColors.AccentDeep else BrandColors.MutedSlate

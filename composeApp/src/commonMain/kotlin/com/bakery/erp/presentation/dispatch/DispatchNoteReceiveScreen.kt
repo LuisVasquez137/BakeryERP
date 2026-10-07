@@ -34,6 +34,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
@@ -190,11 +191,15 @@ fun DispatchNoteReceiveScreen(
                             // que ya movió inventario.
                             ClosedNoteSection(note)
                         } else if (note.status == DispatchStatus.IN_TRANSIT) {
+                            var basketsArrived by remember(note.id) { mutableStateOf("") }
                             ArrivalChecklistSection(
                                 lines = note.lines,
                                 recipeRefByProductId = productionState.recipeRefByProductId,
                                 arrivalChecks = arrivalChecks,
                                 isLoading = state.isLoading,
+                                basketsSent = note.basketsSent,
+                                basketsArrived = basketsArrived,
+                                onBasketsArrivedChange = { basketsArrived = it },
                                 onToggle = { lineId, checked ->
                                     val now = if (checked) Clock.System.now().toEpochMilliseconds() else null
                                     arrivalChecks = arrivalChecks + (lineId to now)
@@ -202,7 +207,10 @@ fun DispatchNoteReceiveScreen(
                                 onAcknowledge = {
                                     user ?: return@ArrivalChecklistSection
                                     val updated = note.lines.map { it.copy(lineArrivedConfirmedAt = arrivalChecks[it.id]) }
-                                    viewModel.acknowledgeArrival(companyId, noteId, updated, user)
+                                    viewModel.acknowledgeArrival(
+                                        companyId, noteId, updated, user,
+                                        basketsReceived = if (note.basketsSent > 0) basketsArrived.toIntOrNull() else null
+                                    )
                                 }
                             )
                         } else {
@@ -470,12 +478,19 @@ private fun ColumnScope.ArrivalChecklistSection(
     recipeRefByProductId: Map<String, RecipeRef>,
     arrivalChecks: Map<String, Long?>,
     isLoading: Boolean,
+    /** Canastas que salieron de la planta; 0 en notas anteriores (no se pregunta). */
+    basketsSent: Int = 0,
+    basketsArrived: String = "",
+    onBasketsArrivedChange: (String) -> Unit = {},
     onToggle: (lineId: String, checked: Boolean) -> Unit,
     onAcknowledge: () -> Unit
 ) {
     val total = lines.size
     val checkedCount = lines.count { arrivalChecks[it.id] != null }
-    val allChecked = total > 0 && checkedCount == total
+    // Con canastas, la llegada se firma también con cuántas llegaron: es el único dato
+    // que separa "se perdió en el camión" de "faltó dentro de la canasta".
+    val basketsAnswered = basketsSent <= 0 || basketsArrived.toIntOrNull() != null
+    val allChecked = total > 0 && checkedCount == total && basketsAnswered
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -552,6 +567,10 @@ private fun ColumnScope.ArrivalChecklistSection(
         }
     }
 
+    if (basketsSent > 0) {
+        Spacer(Modifier.height(10.dp))
+        BasketsArrivedCard(basketsSent, basketsArrived, onBasketsArrivedChange)
+    }
     Spacer(Modifier.height(12.dp))
     Button(
         onClick = onAcknowledge,
@@ -692,6 +711,54 @@ private fun ColumnScope.CountSection(
             Icon(Icons.Default.CheckCircle, null)
             Spacer(Modifier.width(8.dp))
             Text("Confirmar conteo final", fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+
+/**
+ * "Salieron 6 canastas. ¿Cuántas llegaron?" — sin prellenar el número, para que no se firme
+ * sin contar. El botón "Llegaron las 6" es el caso normal y cuesta un toque.
+ */
+@Composable
+private fun BasketsArrivedCard(sent: Int, value: String, onChange: (String) -> Unit) {
+    val n = value.toIntOrNull()
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        elevation = CardDefaults.cardElevation(1.dp)
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                "Salieron $sent canasta${if (sent == 1) "" else "s"}. ¿Cuántas llegaron?",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = DeepSeaBlue
+            )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                FilterChip(
+                    selected = n == sent,
+                    onClick = { onChange(sent.toString()) },
+                    label = { Text("Llegaron las $sent") }
+                )
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = { v -> onChange(v.filter { it.isDigit() }.take(3)) },
+                    placeholder = { Text("Otra cantidad") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.width(150.dp)
+                )
+            }
+            if (n != null && n < sent) {
+                Text(
+                    "Faltan ${sent - n} canasta${if (sent - n == 1) "" else "s"}: queda anotado que se perdió en el camino.",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = BrandColors.AccentDeep
+                )
+            }
         }
     }
 }

@@ -1793,9 +1793,13 @@ su pan genera roces que no ayudan a encontrarlo.
 - Un empaque corto se atribuye a **producción** si dice "No alcanzó la producción" o si el turno
   horneó menos de lo planeado de ese pan (con conteo confirmado); si no, a empaque.
 - El horno no sabe para quién es cada pan: el dato del turno es contexto, no se reparte.
-- Pendiente: reporte "Dónde se pierde el pan" por período, y conteo de canastas al cerrar el
-  empaque y al firmar la llegada (cada canasta va a una sola sucursal, aunque lleve varios
-  panes), que es lo que separa camión de sucursal dentro de "camino o recepción".
+- **Canastas** (`DispatchNote.basketsSent/basketsReceived`): al cerrar el turno de empaque
+  se anota cuántas van a cada sucursal (obligatorio, solo lo que viaja); al firmar la llegada
+  la sucursal ve "Salieron 6" y contesta "Llegaron las 6" o cuántas — sin prellenar, para que
+  no se firme sin contar. Cada canasta va a una sola sucursal aunque lleve varios panes, así
+  que `basketCheck` separa el tramo camino/recepción en **Camión** (faltó canasta) o
+  **Dentro de la canasta** (empaque o conteo). Notas anteriores: sin dato, no se afirma nada.
+- Pendiente: reporte "Dónde se pierde el pan" por período (eslabón, sucursal, producto, persona).
 
 ### Reparto (`DeliveryRun`)
 Agrupa N `DispatchNote` para repartidor + vehículo + día.

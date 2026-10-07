@@ -200,12 +200,15 @@ class DispatchViewModel(
         companyId: String,
         noteId: String,
         lines: List<DispatchNoteLine>,
-        currentUser: User
+        currentUser: User,
+        /** Canastas que salen; 0 = no se pidió (la nota de la propia planta no viaja). */
+        baskets: Int = 0
     ) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             runCatching {
                 repository.savePackedLines(companyId, noteId, lines, currentUser)
+                if (baskets > 0) repository.setBasketsSent(companyId, noteId, baskets)
                 // Cierra con la regla de "pan que no viaja" adentro: la nota de la
                 // propia planta no se queda en Listas esperando un reparto que no
                 // existe, entra al inventario de su tienda.
@@ -230,12 +233,13 @@ class DispatchViewModel(
         companyId: String,
         noteId: String,
         lines: List<DispatchNoteLine>,
-        currentUser: User
+        currentUser: User,
+        basketsReceived: Int? = null
     ) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             runCatching {
-                repository.acknowledgeArrival(companyId, noteId, lines, currentUser)
+                repository.acknowledgeArrival(companyId, noteId, lines, currentUser, basketsReceived)
                 // Auto-cierre del run: el repartidor cumplió su parte al reportar llegada.
                 val noteFresh = repository.getNote(companyId, noteId)
                 noteFresh?.deliveryRunId
@@ -721,7 +725,12 @@ class DispatchViewModel(
         }
     }
 
-    fun closePackingTurn(companyId: String, currentUser: User) {
+    /**
+     * Cierra el empaque del turno. [baskets] es `noteId → canastas` de cada sucursal que
+     * sale: se guarda ANTES de cerrar, así ninguna nota llega a Reparto sin su número de
+     * canastas (ver `DispatchNote.basketsSent`).
+     */
+    fun closePackingTurn(companyId: String, currentUser: User, baskets: Map<String, Int> = emptyMap()) {
         val s = _packingState.value
         if (s.producingBranchId.isEmpty() || s.shiftId.isEmpty()) return
         viewModelScope.launch {
@@ -731,6 +740,9 @@ class DispatchViewModel(
             val notesAtClose = s.notes
             val shiftName = s.shifts.find { it.id == s.shiftId }?.name.orEmpty()
             runCatching {
+                baskets.filterValues { it > 0 }.forEach { (noteId, count) ->
+                    repository.setBasketsSent(companyId, noteId, count)
+                }
                 repository.closePackingForBranchDateShift(
                     companyId, s.producingBranchId, s.dayMillis, s.shiftId, currentUser
                 )

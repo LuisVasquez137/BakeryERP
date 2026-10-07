@@ -20,6 +20,9 @@ import com.bakery.erp.model.ChainStage
 import com.bakery.erp.model.DiscrepancyType
 import com.bakery.erp.model.ProductionWasteReason
 import com.bakery.erp.model.label
+import com.bakery.erp.model.BasketCheck
+import com.bakery.erp.model.basketCheck
+import com.bakery.erp.model.transitStageLabel
 import com.bakery.erp.ui.theme.BrandColors
 
 /**
@@ -39,6 +42,8 @@ internal fun NoteChainSheet(
 ) {
     val note = chain.note
     var showAll by remember(note.id) { mutableStateOf(false) }
+    val baskets = basketCheck(note.basketsSent, note.basketsReceived)
+    val transitLabel = transitStageLabel(baskets)
     val withDiff = chain.lines.filter { it.hasDifference }
     val shown = if (showAll || withDiff.isEmpty()) chain.lines else withDiff
 
@@ -56,8 +61,9 @@ internal fun NoteChainSheet(
                     style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate)
             }
             item { People(chain) }
-            item { Summary(chain) }
-            items(shown, key = { it.productId }) { ChainRow(it) }
+            if (note.basketsSent > 0) item { Baskets(note.basketsSent, note.basketsReceived, baskets) }
+            item { Summary(chain, transitLabel) }
+            items(shown, key = { it.productId }) { ChainRow(it, transitLabel) }
             if (withDiff.isNotEmpty() && withDiff.size < chain.lines.size) {
                 item {
                     TextButton(onClick = { showAll = !showAll }) {
@@ -99,7 +105,7 @@ private fun People(chain: NoteChain) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun Summary(chain: NoteChain) {
+private fun Summary(chain: NoteChain, transitLabel: String) {
     val s = chain.summary
     val parts = listOf(
         ChainStage.PRODUCTION to s.production,
@@ -122,7 +128,8 @@ private fun Summary(chain: NoteChain) {
             val (bg, fg) = stageColors(stage)
             Surface(color = bg, shape = RoundedCornerShape(10.dp)) {
                 Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                    Text(stage.label(), style = MaterialTheme.typography.labelSmall, color = fg)
+                    Text(if (stage == ChainStage.TRANSIT_OR_BRANCH) transitLabel else stage.label(),
+                        style = MaterialTheme.typography.labelSmall, color = fg)
                     Text(signed(units), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = fg)
                 }
             }
@@ -131,7 +138,7 @@ private fun Summary(chain: NoteChain) {
 }
 
 @Composable
-private fun ChainRow(line: ChainLine) {
+private fun ChainRow(line: ChainLine, transitLabel: String) {
     val breakAt = line.firstBreak()
     Surface(
         color = Color.White, shape = RoundedCornerShape(12.dp),
@@ -143,7 +150,8 @@ private fun ChainRow(line: ChainLine) {
                 breakAt?.let {
                     val (bg, fg) = stageColors(it)
                     Surface(color = bg, shape = RoundedCornerShape(50)) {
-                        Text("Empezó en: ${it.label().lowercase()}", style = MaterialTheme.typography.labelSmall,
+                        val where = if (it == ChainStage.TRANSIT_OR_BRANCH) transitLabel else it.label()
+                        Text("Empezó en: ${where.lowercase()}", style = MaterialTheme.typography.labelSmall,
                             color = fg, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
                     }
                 }
@@ -170,6 +178,23 @@ private fun ChainRow(line: ChainLine) {
                 Note("Recepción: " + listOfNotNull(type, line.receivedReason?.takeIf { it.isNotBlank() }).joinToString(" · ").ifBlank { "sin motivo" })
             }
         }
+    }
+}
+
+/** Lo que dicen las canastas del tramo camino/recepción (ver `basketCheck`). */
+@Composable
+private fun Baskets(sent: Int, received: Int?, check: BasketCheck) {
+    val (bg, fg, text) = when (check) {
+        BasketCheck.MISSING_BASKETS -> Triple(BrandColors.DangerSoft, BrandColors.Danger,
+            "Salieron $sent canastas y llegaron $received: faltó ${sent - (received ?: 0)} en el camión.")
+        BasketCheck.ALL_ARRIVED -> Triple(BrandColors.TealSoft, BrandColors.Teal,
+            "Salieron $sent canastas y llegaron todas: lo que falte se perdió dentro de la canasta (empaque o conteo), no en el camino.")
+        BasketCheck.UNKNOWN -> Triple(BrandColors.Sand, BrandColors.MutedSlate,
+            "Salieron $sent canastas. Todavía no se firmó cuántas llegaron.")
+    }
+    Surface(color = bg, shape = RoundedCornerShape(12.dp)) {
+        Text(text, color = fg, fontWeight = FontWeight.Medium, style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.fillMaxWidth().padding(12.dp))
     }
 }
 

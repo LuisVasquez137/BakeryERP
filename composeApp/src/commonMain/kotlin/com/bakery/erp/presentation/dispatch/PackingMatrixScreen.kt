@@ -364,7 +364,7 @@ fun PackingMatrixContent(
             CloseTurnFooter(
                 notes = state.notes,
                 isClosing = state.isClosing,
-                onClose = { viewModel.closePackingTurn(companyId, user) }
+                onClose = { baskets -> viewModel.closePackingTurn(companyId, user, baskets) }
             )
         }
     }
@@ -1299,15 +1299,22 @@ private fun UnmarkConfirmDialog(
 private fun CloseTurnFooter(
     notes: List<DispatchNote>,
     isClosing: Boolean,
-    onClose: () -> Unit
+    onClose: (baskets: Map<String, Int>) -> Unit
 ) {
-    val ready = notes.count { n ->
+    val readyNotes = notes.filter { n ->
         n.lines.isNotEmpty() &&
             n.lines.all { it.lineCheckedAt != null } &&
             n.lines.none { it.priceSource == PriceSourceTag.NONE && it.packedQuantity > 0 }
     }
+    val ready = readyNotes.size
     val total = notes.size
     var showConfirm by remember { mutableStateOf(false) }
+    // Canastas por sucursal que sale. La nota de la propia planta no viaja: no se pregunta.
+    val travelling = readyNotes.filter { it.originBranchId != it.destinationBranchId }
+    var basketInputs by remember(showConfirm) {
+        mutableStateOf(travelling.associate { it.id to (it.basketsSent.takeIf { b -> b > 0 }?.toString().orEmpty()) })
+    }
+    val basketsOk = travelling.all { (basketInputs[it.id]?.toIntOrNull() ?: 0) > 0 }
 
     Card(
         modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -1355,14 +1362,45 @@ private fun CloseTurnFooter(
             onDismissRequest = { showConfirm = false },
             title = { Text("Cerrar empaque del turno") },
             text = {
-                Text(
-                    "Se enviarán $ready nota(s) a la pestaña \"Listas\". " +
-                        if (ready < total) "Las sucursales con cantidades pendientes seguirán en \"Por empacar\"."
-                        else "Todas las sucursales pasan a \"Listas\"."
-                )
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "$ready sucursal(es) pasan a Reparto como listas para salir. " +
+                            if (ready < total) "Las que tienen cantidades pendientes siguen aquí." else ""
+                    )
+                    if (travelling.isNotEmpty()) {
+                        Text(
+                            "¿Cuántas canastas van para cada una? La sucursal las cuenta al firmar la llegada: " +
+                                "así se sabe si algo se perdió en el camión o dentro de la canasta.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        travelling.forEach { n ->
+                            val value = basketInputs[n.id].orEmpty()
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(n.destinationBranchName, modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium)
+                                OutlinedTextField(
+                                    value = value,
+                                    onValueChange = { v -> basketInputs = basketInputs + (n.id to v.filter { it.isDigit() }.take(3)) },
+                                    placeholder = { Text("0") },
+                                    suffix = { Text("canastas") },
+                                    isError = (value.toIntOrNull() ?: 0) <= 0,
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    modifier = Modifier.width(150.dp)
+                                )
+                            }
+                        }
+                    }
+                }
             },
             confirmButton = {
-                Button(onClick = { showConfirm = false; onClose() }) {
+                Button(
+                    onClick = {
+                        showConfirm = false
+                        onClose(basketInputs.mapValues { it.value.toIntOrNull() ?: 0 })
+                    },
+                    enabled = basketsOk
+                ) {
                     Text("Cerrar empaque")
                 }
             },

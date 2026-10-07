@@ -240,7 +240,27 @@ fun DispatchNotePackScreen(
                             it.original.priceSource == PriceSourceTag.NONE &&
                                 (it.packedInput.toDoubleOrNull() ?: 0.0) > 0
                         }
-                        val canSubmit = withReasonsNeeded.isEmpty() && !hasUnpriced
+                        // Canastas: solo para lo que viaja. La nota de la propia planta se
+                        // queda en el mostrador.
+                        val travels = note.originBranchId != note.destinationBranchId
+                        var basketsInput by remember(note.id) {
+                            mutableStateOf(note.basketsSent.takeIf { it > 0 }?.toString().orEmpty())
+                        }
+                        val baskets = basketsInput.toIntOrNull() ?: 0
+                        val canSubmit = withReasonsNeeded.isEmpty() && !hasUnpriced && (!travels || baskets > 0)
+                        if (travels) {
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = basketsInput,
+                                onValueChange = { basketsInput = it.filter { c -> c.isDigit() }.take(3) },
+                                label = { Text("Canastas para ${note.destinationBranchName} *") },
+                                supportingText = { Text("La sucursal las cuenta al firmar la llegada.") },
+                                isError = baskets <= 0,
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
 
                         if (withReasonsNeeded.isNotEmpty()) {
                             Text(
@@ -266,7 +286,8 @@ fun DispatchNotePackScreen(
                                 viewModel.confirmPacking(
                                     companyId, noteId,
                                     lineStates.map { it.toLine() },
-                                    user
+                                    user,
+                                    baskets = if (travels) baskets else 0
                                 )
                             },
                             modifier = Modifier.fillMaxWidth(),

@@ -641,8 +641,15 @@ class FirebaseDispatchRepository(
 
     // ── Llegada y recepción ───────────────────────────────────────────────────
 
+    override suspend fun setBasketsSent(companyId: String, noteId: String, count: Int) {
+        notesCol(companyId).document(noteId).update(
+            mapOf("basketsSent" to count, "updatedAt" to Clock.System.now().toEpochMilliseconds()).firestoreSafe()
+        )
+    }
+
     override suspend fun acknowledgeArrival(
-        companyId: String, noteId: String, lines: List<DispatchNoteLine>, currentUser: User
+        companyId: String, noteId: String, lines: List<DispatchNoteLine>, currentUser: User,
+        basketsReceived: Int?
     ) {
         val note = getNoteHeader(companyId, noteId) ?: return
         if (note.status != DispatchStatus.IN_TRANSIT) {
@@ -664,6 +671,7 @@ class FirebaseDispatchRepository(
             note.copy(
                 status = DispatchStatus.ARRIVED,
                 arrivedAt = now,
+                basketsReceived = basketsReceived ?: note.basketsReceived,
                 arrivedByUserId = currentUser.id,
                 arrivedByUserName = currentUser.displayName,
                 updatedAt = now
@@ -1045,7 +1053,9 @@ class FirebaseDispatchRepository(
         "updatedAt" to Clock.System.now().toEpochMilliseconds(),
         "lineCount" to lineCount,
         "plannedUnits" to plannedUnits,
-        "packedUnits" to packedUnits
+        "packedUnits" to packedUnits,
+        "basketsSent" to basketsSent,
+        "basketsReceived" to basketsReceived
     )
 
     private fun DocumentSnapshot.toNote() = DispatchNote(
@@ -1090,7 +1100,9 @@ class FirebaseDispatchRepository(
         updatedAt = readMillis("updatedAt"),
         lineCount = (get<Double?>("lineCount") ?: 0.0).toInt(),
         plannedUnits = runCatching { get<Double?>("plannedUnits") }.getOrNull() ?: 0.0,
-        packedUnits = runCatching { get<Double?>("packedUnits") }.getOrNull() ?: 0.0
+        packedUnits = runCatching { get<Double?>("packedUnits") }.getOrNull() ?: 0.0,
+        basketsSent = runCatching { get<Double?>("basketsSent") }.getOrNull()?.toInt() ?: 0,
+        basketsReceived = runCatching { get<Double?>("basketsReceived") }.getOrNull()?.toInt()
     )
 
     private fun DispatchNoteLine.toMap(): Map<String, Any?> = firestoreSafeOf(

@@ -200,6 +200,9 @@ interface DispatchRepository {
      */
     suspend fun deleteNote(companyId: String, noteId: String)
 
+    /** Canastas que salen para la sucursal de esta nota. Escritura parcial, al cerrar el empaque. */
+    suspend fun setBasketsSent(companyId: String, noteId: String, count: Int)
+
     /** Reporta la llegada del repartidor sin contar cantidades. Pasa de IN_TRANSIT → ARRIVED
      *  con timestamp `arrivedAt`. Persiste el checklist de llegada (lineArrivedConfirmedAt
      *  por producto) que la encargada marcó visualmente al recibir al repartidor. El conteo
@@ -208,7 +211,9 @@ interface DispatchRepository {
         companyId: String,
         noteId: String,
         lines: List<DispatchNoteLine>,
-        currentUser: User
+        currentUser: User,
+        /** Canastas que llegaron, contadas al firmar. null = no se preguntó (nota sin canastas). */
+        basketsReceived: Int? = null
     )
 
     /** Confirma recepción: actualiza líneas con receivedQty + reason, ajusta status, dispara

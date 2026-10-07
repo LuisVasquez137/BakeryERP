@@ -126,6 +126,29 @@ data class ChainLine(
     }
 }
 
+/**
+ * Lo que dicen las canastas sobre el tramo camino/recepción.
+ *
+ * - [MISSING_BASKETS]: llegaron menos de las que salieron — el pan se perdió en el camión.
+ * - [ALL_ARRIVED]: llegaron todas — lo que falte se perdió DENTRO de la canasta (se empacó
+ *   menos de lo que se marcó, o se contó mal al recibir), no en el camino.
+ * - [UNKNOWN]: nota sin canastas (anterior) o todavía sin firmar.
+ */
+enum class BasketCheck { MISSING_BASKETS, ALL_ARRIVED, UNKNOWN }
+
+fun basketCheck(sent: Int, received: Int?): BasketCheck = when {
+    sent <= 0 || received == null -> BasketCheck.UNKNOWN
+    received < sent -> BasketCheck.MISSING_BASKETS
+    else -> BasketCheck.ALL_ARRIVED
+}
+
+/** Nombre del tramo camino/recepción según las canastas. */
+fun transitStageLabel(check: BasketCheck): String = when (check) {
+    BasketCheck.MISSING_BASKETS -> "Camión"
+    BasketCheck.ALL_ARRIVED -> "Dentro de la canasta"
+    BasketCheck.UNKNOWN -> ChainStage.TRANSIT_OR_BRANCH.label()
+}
+
 /** Resumen de una entrega: cuánto se perdió en cada eslabón, sin contar traspasos. */
 data class ChainSummary(
     val production: Double,

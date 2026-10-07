@@ -69,6 +69,15 @@ data class DispatchNote(
      */
     val plannedUnits: Double = 0.0,
     val packedUnits: Double = 0.0,
+    /**
+     * Canastas que salieron para esta sucursal (al cerrar el empaque) y las que llegaron
+     * (al firmar la llegada). Cada canasta va a una sola sucursal aunque lleve varios
+     * panes, así que contarlas separa "se perdió una canasta en el camino" de "faltó pan
+     * dentro de la canasta" — que con solo el conteo de panes no se distinguían. 0 / null
+     * en notas anteriores. Ver `basketCheck`.
+     */
+    val basketsSent: Int = 0,
+    val basketsReceived: Int? = null,
     val lines: List<DispatchNoteLine> = emptyList()
 )
 

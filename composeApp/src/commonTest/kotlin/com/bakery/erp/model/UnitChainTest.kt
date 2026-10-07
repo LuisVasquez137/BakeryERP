@@ -77,4 +77,15 @@ class UnitChainTest {
         assertEquals(listOf(ReceptionReason.SHORT_IN_BASKET, ReceptionReason.BASKET_MISSING), ReceptionReason.optionsFor(DiscrepancyType.SHORT))
         assertTrue(ReceptionReason.optionsFor(null).isEmpty())
     }
+
+    @Test
+    fun lasCanastasSeparanCamionDeSucursal() {
+        assertEquals(BasketCheck.MISSING_BASKETS, basketCheck(sent = 6, received = 5))
+        assertEquals("Camión", transitStageLabel(basketCheck(6, 5)))
+        assertEquals(BasketCheck.ALL_ARRIVED, basketCheck(6, 6))
+        assertEquals("Dentro de la canasta", transitStageLabel(basketCheck(6, 6)))
+        // Nota vieja sin canastas, o todavía sin firmar: no se afirma nada.
+        assertEquals(BasketCheck.UNKNOWN, basketCheck(0, null))
+        assertEquals(BasketCheck.UNKNOWN, basketCheck(6, null))
+    }
 }
