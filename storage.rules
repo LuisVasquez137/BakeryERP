@@ -1,0 +1,76 @@
+rules_version = '2';
+
+// Reglas de Firebase Storage de BakeOS. Se publican con
+//   firebase deploy --only storage
+// Antes cualquier cuenta de Firebase (de cualquier empresa, o recién creada desde
+// la app pública) podía leer, subir y BORRAR cualquier archivo, incluidos los
+// documentos de los colaboradores.
+//
+// Las imágenes que la app muestra se abren por su URL de descarga (lleva token),
+// que no pasa por estas reglas: cerrarlas no rompe fotos ya guardadas.
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function profile() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isEnabled(u) {
+      return u.get('isApproved', true) == true && u.get('isActive', true) == true;
+    }
+
+    // Personal aprobado y activo de esa empresa.
+    function isStaffOf(orgId) {
+      return request.auth != null
+        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
+        && profile().orgId == orgId
+        && profile().role in ['OWNER', 'ADMIN', 'MANAGER', 'EMPLOYEE']
+        && isEnabled(profile());
+    }
+
+    // Personal aprobado de cualquier empresa. Solo para las rutas viejas que no
+    // llevan la empresa en el camino (products/, assets/, recipes/).
+    function isAnyStaff() {
+      return request.auth != null
+        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
+        && profile().orgId != ''
+        && profile().role in ['OWNER', 'ADMIN', 'MANAGER', 'EMPLOYEE']
+        && isEnabled(profile());
+    }
+
+    // 20 MB alcanza para una foto o un PDF escaneado; corta subidas abusivas.
+    function sizeOk() {
+      return request.resource == null || request.resource.size < 20 * 1024 * 1024;
+    }
+
+    match /companies/{companyId}/{allPaths=**} {
+      allow read: if isStaffOf(companyId);
+      allow write: if isStaffOf(companyId) && sizeOk();
+    }
+
+    match /purchaseInvoices/{companyId}/{allPaths=**} {
+      allow read: if isStaffOf(companyId);
+      allow write: if isStaffOf(companyId) && sizeOk();
+    }
+
+    match /specialOrders/{companyId}/{allPaths=**} {
+      allow read: if isStaffOf(companyId);
+      allow write: if isStaffOf(companyId) && sizeOk();
+    }
+
+    match /products/{allPaths=**} {
+      allow read: if isAnyStaff();
+      allow write: if isAnyStaff() && sizeOk();
+    }
+
+    match /assets/{allPaths=**} {
+      allow read: if isAnyStaff();
+      allow write: if isAnyStaff() && sizeOk();
+    }
+
+    match /recipes/{allPaths=**} {
+      allow read: if isAnyStaff();
+      allow write: if isAnyStaff() && sizeOk();
+    }
+  }
+}

@@ -136,6 +136,7 @@ nonWasmMain/  data/ (impls compartidas), di/AppModule.kt
 | `arquitectura/fel.md` | FEL Guatemala / Digifact: servidor, configuración, facturar al cobrar, ticket con QR, anular/reemitir, restaurante (ComandaYa) |
 | `arquitectura/reportes.md` | Agregaciones `aggregateXxxInRange`, reportes, Home y banner de alertas |
 | `arquitectura/otros.md` | Notificaciones/push, activos fijos |
+| `arquitectura/seguridad-accesos.md` | Reglas Firestore/Storage (se publican desde el repo, pruebas en `rules-tests/`), roles, plan cuenta de sucursal + PIN |
 | `arquitectura/decisiones-y-paleta.md` | Paleta completa, `BrandChip`, colores del Home, decisiones de diseño históricas |
 
 ### Reglas transversales que no se pueden olvidar

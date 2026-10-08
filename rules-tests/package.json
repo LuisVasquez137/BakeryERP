@@ -1,0 +1,12 @@
+{
+  "name": "bakeos-rules-tests",
+  "private": true,
+  "description": "Pruebas de firestore.rules y storage.rules contra el emulador",
+  "scripts": {
+    "test": "cd .. && firebase emulators:exec --only firestore,storage,auth --project demo-bakeos \"node --test rules-tests/rules.test.js\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "firebase": "^11.0.0"
+  }
+}

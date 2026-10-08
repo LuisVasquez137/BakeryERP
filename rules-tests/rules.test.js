@@ -1,0 +1,268 @@
+/**
+ * Pruebas de firestore.rules y storage.rules. Corren contra el emulador:
+ *   cd rules-tests && npm test
+ *
+ * Cada flujo real de la app (FirebaseAuthRepository, aprobar usuario, revendedor,
+ * regenerar código) tiene una prueba que DEBE pasar; cada hueco que existía en las
+ * reglas publicadas antes de oct 2026 tiene una prueba que DEBE fallar.
+ */
+const { test, before, after, beforeEach, describe } = require('node:test');
+const fs = require('node:fs');
+const path = require('node:path');
+const {
+  initializeTestEnvironment, assertSucceeds, assertFails,
+} = require('@firebase/rules-unit-testing');
+const {
+  doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, query, where,
+} = require('firebase/firestore');
+
+let env;
+const root = path.join(__dirname, '..');
+
+before(async () => {
+  env = await initializeTestEnvironment({
+    projectId: 'demo-bakeos',
+    firestore: { rules: fs.readFileSync(path.join(root, 'firestore.rules'), 'utf8'), host: '127.0.0.1', port: 8085 },
+    storage: { rules: fs.readFileSync(path.join(root, 'storage.rules'), 'utf8'), host: '127.0.0.1', port: 9199 },
+  });
+});
+after(async () => { await env.cleanup(); });
+
+// ── Datos de partida ───────────────────────────────────────────────────────
+
+const profile = (over) => ({
+  orgId: 'orgA', email: 'x@x.com', displayName: 'X', role: 'EMPLOYEE',
+  branchIds: [], permissions: [], isActive: true, isApproved: true, photoUrl: null, ...over,
+});
+
+beforeEach(async () => {
+  await env.clearFirestore();
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    const users = {
+      // El OWNER original no trae isApproved (doc viejo).
+      ownerA: { orgId: 'orgA', email: 'owner@a.com', displayName: 'Dueño', role: 'OWNER', branchIds: [], permissions: [], isActive: true, photoUrl: null },
+      adminA: profile({ role: 'ADMIN', email: 'admin@a.com' }),
+      managerUsersA: profile({ permissions: ['MANAGE_USERS'] }),
+      encargadaA: profile({ permissions: ['OPERATE_POS', 'MANAGE_EXTERNAL_CUSTOMERS'], branchIds: ['b1'] }),
+      cajeraA: profile({ permissions: ['OPERATE_POS'], branchIds: ['b1'] }),
+      pendingA: profile({ isApproved: false, isActive: false }),
+      inactiveA: profile({ isActive: false }),
+      resellerPendingA: profile({ role: 'RESELLER', isApproved: false }),
+      ownerB: profile({ orgId: 'orgB', role: 'OWNER', email: 'owner@b.com' }),
+      googleNoOrg: profile({ orgId: '', role: 'OWNER', email: 'g@x.com' }),
+    };
+    for (const [id, data] of Object.entries(users)) await setDoc(doc(db, 'users', id), data);
+    await setDoc(doc(db, 'organizations/orgA'), { name: 'Sabropan', ownerEmail: 'owner@a.com', inviteCode: 'AAAAAA' });
+    await setDoc(doc(db, 'organizations/orgB'), { name: 'Otra', ownerEmail: 'owner@b.com', inviteCode: 'BBBBBB' });
+    await setDoc(doc(db, 'inviteCodes/AAAAAA'), { orgId: 'orgA', orgName: 'Sabropan' });
+    await setDoc(doc(db, 'inviteCodes/BBBBBB'), { orgId: 'orgB', orgName: 'Otra' });
+    await setDoc(doc(db, 'companies/orgA/sales/s1'), { total: 10 });
+    await setDoc(doc(db, 'companies/orgA/branches/b1'), { name: 'Bombero' });
+    await setDoc(doc(db, 'companies/orgB/sales/s1'), { total: 99 });
+  });
+});
+
+const as = (uid, email) => env.authenticatedContext(uid, { email: email || `${uid}@test.com` }).firestore();
+const stranger = () => as('stranger', 'stranger@evil.com');
+
+// ── Flujos de la app que tienen que seguir funcionando ─────────────────────
+
+describe('flujos de la app', () => {
+  test('registro de empresa nueva: perfil OWNER, organización y código', async () => {
+    const db = as('nuevo', 'nuevo@x.com');
+    await assertSucceeds(setDoc(doc(db, 'users/nuevo'), profile({ orgId: 'orgNueva', role: 'OWNER', email: 'Nuevo@x.com' })));
+    await assertSucceeds(setDoc(doc(db, 'organizations/orgNueva'), { name: 'P', ownerEmail: 'Nuevo@X.com', subscriptionPlan: 'free', inviteCode: 'NNNNNN' }));
+    await assertSucceeds(setDoc(doc(db, 'inviteCodes/NNNNNN'), { orgId: 'orgNueva', orgName: 'P' }));
+    await assertSucceeds(setDoc(doc(db, 'companies/orgNueva/products/p1'), { name: 'Pan' }));
+  });
+
+  test('Google primera vez: perfil sin empresa y luego crea la suya', async () => {
+    const db = as('g1', 'g1@x.com');
+    await assertSucceeds(setDoc(doc(db, 'users/g1'), profile({ orgId: '', role: 'OWNER', email: 'g1@x.com' })));
+    await assertSucceeds(setDoc(doc(db, 'users/g1'), profile({ orgId: 'orgG', role: 'OWNER', email: 'g1@x.com' })));
+    await assertSucceeds(setDoc(doc(db, 'organizations/orgG'), { name: 'G', ownerEmail: 'g1@x.com' }));
+  });
+
+  test('Google sin empresa se une con código y queda pendiente', async () => {
+    const db = as('googleNoOrg', 'g@x.com');
+    await assertSucceeds(getDoc(doc(db, 'inviteCodes/AAAAAA')));
+    await assertSucceeds(setDoc(doc(db, 'users/googleNoOrg'), profile({ isApproved: false, isActive: false, email: 'g@x.com' })));
+  });
+
+  test('unirse con código (correo y contraseña) queda pendiente', async () => {
+    const db = as('j1');
+    await assertSucceeds(getDoc(doc(db, 'inviteCodes/AAAAAA')));
+    await assertSucceeds(setDoc(doc(db, 'users/j1'), profile({ isApproved: false, isActive: false })));
+  });
+
+  test('pendiente lee su perfil y el nombre de su empresa', async () => {
+    const db = as('pendingA');
+    await assertSucceeds(getDoc(doc(db, 'users/pendingA')));
+    await assertSucceeds(getDoc(doc(db, 'organizations/orgA')));
+  });
+
+  test('OWNER y ADMIN aprueban y asignan permisos (set del doc completo)', async () => {
+    const approved = profile({ isApproved: true, isActive: true, permissions: ['OPERATE_POS'], branchIds: ['b1'] });
+    await assertSucceeds(setDoc(doc(as('ownerA'), 'users/pendingA'), approved));
+    await assertSucceeds(setDoc(doc(as('adminA'), 'users/cajeraA'), profile({ permissions: ['OPERATE_POS', 'VOID_SALE'] })));
+  });
+
+  test('OWNER puede nombrar a otro OWNER (caso sindel)', async () => {
+    await assertSucceeds(updateDoc(doc(as('ownerA'), 'users/adminA'), { role: 'OWNER' }));
+  });
+
+  test('cada quien actualiza su foto y su nombre', async () => {
+    await assertSucceeds(updateDoc(doc(as('cajeraA'), 'users/cajeraA'), { photoUrl: 'https://x', displayName: 'Ana' }));
+  });
+
+  test('personal lista a los usuarios de su empresa', async () => {
+    const db = as('cajeraA');
+    await assertSucceeds(getDocs(query(collection(db, 'users'), where('orgId', '==', 'orgA'))));
+  });
+
+  test('personal aprobado lee y escribe datos de su empresa', async () => {
+    const db = as('cajeraA');
+    await assertSucceeds(getDoc(doc(db, 'companies/orgA/sales/s1')));
+    await assertSucceeds(setDoc(doc(db, 'companies/orgA/sales/s2'), { total: 5 }));
+  });
+
+  test('revendedor: registro, escoger sucursal y completar ficha', async () => {
+    const db = as('r1');
+    await assertSucceeds(setDoc(doc(db, 'users/r1'), profile({ role: 'RESELLER', isApproved: false })));
+    await assertSucceeds(getDoc(doc(db, 'organizations/orgA')));
+    await assertSucceeds(getDocs(collection(db, 'companies/orgA/branches')));
+    await assertSucceeds(setDoc(doc(db, 'companies/orgA/externalCustomers/c1'), { linkedUserId: 'r1', active: false, registrationStatus: 'PENDING_APPROVAL' }));
+  });
+
+  test('encargada con MANAGE_EXTERNAL_CUSTOMERS aprueba al revendedor', async () => {
+    await assertSucceeds(updateDoc(doc(as('encargadaA'), 'users/resellerPendingA'), { isApproved: true }));
+  });
+
+  test('regenerar código de invitación', async () => {
+    const db = as('ownerA', 'owner@a.com');
+    await assertSucceeds(updateDoc(doc(db, 'organizations/orgA'), { inviteCode: 'CCCCCC' }));
+    await assertSucceeds(setDoc(doc(db, 'inviteCodes/CCCCCC'), { orgId: 'orgA', orgName: 'Sabropan' }));
+    await assertSucceeds(deleteDoc(doc(db, 'inviteCodes/AAAAAA')));
+  });
+
+  test('OWNER cambia ajustes de la empresa', async () => {
+    await assertSucceeds(updateDoc(doc(as('ownerA'), 'organizations/orgA'), { usesResalePurchases: true }));
+  });
+});
+
+// ── Huecos que existían y tienen que quedar cerrados ───────────────────────
+
+describe('ataques', () => {
+  test('empleado no se puede subir a OWNER ni darse permisos', async () => {
+    const db = as('cajeraA');
+    await assertFails(updateDoc(doc(db, 'users/cajeraA'), { role: 'OWNER' }));
+    await assertFails(updateDoc(doc(db, 'users/cajeraA'), { permissions: ['MANAGE_USERS'] }));
+    await assertFails(updateDoc(doc(db, 'users/cajeraA'), { branchIds: [] }));
+  });
+
+  test('nadie se cambia de empresa', async () => {
+    await assertFails(updateDoc(doc(as('cajeraA'), 'users/cajeraA'), { orgId: 'orgB' }));
+  });
+
+  test('pendiente no se aprueba solo', async () => {
+    await assertFails(updateDoc(doc(as('pendingA'), 'users/pendingA'), { isApproved: true, isActive: true }));
+  });
+
+  test('extraño no puede crearse un perfil dentro de una empresa existente', async () => {
+    const db = stranger();
+    await assertFails(setDoc(doc(db, 'users/stranger'), profile({ role: 'OWNER' })));
+    await assertFails(setDoc(doc(db, 'users/stranger'), profile({ isApproved: true })));
+    await assertFails(setDoc(doc(db, 'users/stranger'), profile({ isApproved: false, permissions: ['OPERATE_POS'] })));
+    await assertFails(setDoc(doc(db, 'users/stranger'), profile({ role: 'ADMIN', isApproved: false })));
+  });
+
+  test('Google sin empresa no se mete como OWNER a una existente', async () => {
+    await assertFails(setDoc(doc(as('googleNoOrg'), 'users/googleNoOrg'), profile({ role: 'OWNER', email: 'g@x.com' })));
+  });
+
+  test('no se puede listar empresas ni códigos', async () => {
+    const db = stranger();
+    await assertFails(getDocs(collection(db, 'organizations')));
+    await assertFails(getDocs(collection(db, 'inviteCodes')));
+    await assertFails(getDoc(doc(db, 'organizations/orgA')));
+  });
+
+  test('extraño no lee ni escribe datos de una empresa', async () => {
+    const db = stranger();
+    await assertFails(getDoc(doc(db, 'companies/orgA/sales/s1')));
+    await assertFails(setDoc(doc(db, 'companies/orgA/sales/x'), { total: 1 }));
+  });
+
+  test('pendiente e inactivo no ven datos de la empresa ni la lista de personal', async () => {
+    await assertFails(getDoc(doc(as('pendingA'), 'companies/orgA/sales/s1')));
+    await assertFails(getDoc(doc(as('inactiveA'), 'companies/orgA/sales/s1')));
+    await assertFails(getDocs(query(collection(as('pendingA'), 'users'), where('orgId', '==', 'orgA'))));
+  });
+
+  test('una empresa no ve a la otra', async () => {
+    await assertFails(getDoc(doc(as('cajeraA'), 'companies/orgB/sales/s1')));
+    await assertFails(setDoc(doc(as('ownerB'), 'users/cajeraA'), profile({ role: 'OWNER' })));
+  });
+
+  test('empleado no edita a otros usuarios (ni con MANAGE_USERS: solo OWNER/ADMIN)', async () => {
+    await assertFails(updateDoc(doc(as('cajeraA'), 'users/pendingA'), { isApproved: true }));
+    await assertFails(updateDoc(doc(as('managerUsersA'), 'users/pendingA'), { isApproved: true }));
+  });
+
+  test('ADMIN no crea OWNERs ni toca al OWNER', async () => {
+    await assertFails(updateDoc(doc(as('adminA'), 'users/cajeraA'), { role: 'OWNER' }));
+    await assertFails(updateDoc(doc(as('adminA'), 'users/adminA'), { role: 'OWNER' }));
+    await assertFails(updateDoc(doc(as('adminA'), 'users/ownerA'), { permissions: [] }));
+  });
+
+  test('encargada solo aprueba revendedores, no empleados, y solo isApproved', async () => {
+    await assertFails(updateDoc(doc(as('encargadaA'), 'users/pendingA'), { isApproved: true }));
+    await assertFails(updateDoc(doc(as('encargadaA'), 'users/resellerPendingA'), { isApproved: true, role: 'OWNER' }));
+  });
+
+  test('revendedor pendiente no ve ventas ni crea fichas ajenas', async () => {
+    const db = as('resellerPendingA');
+    await assertFails(getDoc(doc(db, 'companies/orgA/sales/s1')));
+    await assertFails(setDoc(doc(db, 'companies/orgA/externalCustomers/c9'), { linkedUserId: 'otro', active: false }));
+    await assertFails(setDoc(doc(db, 'companies/orgA/externalCustomers/c9'), { linkedUserId: 'resellerPendingA', active: true }));
+  });
+
+  test('no se borran perfiles ni se crea un código para otra empresa', async () => {
+    await assertFails(deleteDoc(doc(as('ownerA'), 'users/cajeraA')));
+    await assertFails(setDoc(doc(as('ownerA'), 'inviteCodes/ZZZZZZ'), { orgId: 'orgB' }));
+    await assertFails(setDoc(doc(as('cajeraA'), 'inviteCodes/ZZZZZZ'), { orgId: 'orgA' }));
+  });
+
+  test('ADMIN no cambia el correo dueño de la empresa', async () => {
+    await assertFails(updateDoc(doc(as('adminA'), 'organizations/orgA'), { ownerEmail: 'admin@a.com' }));
+  });
+
+  test('empleado no cambia ajustes de la empresa', async () => {
+    await assertFails(updateDoc(doc(as('cajeraA'), 'organizations/orgA'), { usesResalePurchases: true }));
+  });
+});
+
+// ── Storage ────────────────────────────────────────────────────────────────
+
+describe('storage', () => {
+  const put = (uid, p) => env.authenticatedContext(uid).storage().ref(p).putString('hola');
+  const read = (uid, p) => env.authenticatedContext(uid).storage().ref(p).getMetadata();
+
+  test('personal sube y lee documentos de su empresa', async () => {
+    await assertSucceeds(put('cajeraA', 'companies/orgA/employees/e1/dpi.pdf'));
+    await assertSucceeds(read('cajeraA', 'companies/orgA/employees/e1/dpi.pdf'));
+    await assertSucceeds(put('cajeraA', 'purchaseInvoices/orgA/p1.jpg'));
+    await assertSucceeds(put('cajeraA', 'products/p1.jpg'));
+    await assertSucceeds(put('cajeraA', 'recipes/r1/steps/s1.jpg'));
+  });
+
+  test('extraño, pendiente y otra empresa no tocan archivos', async () => {
+    await assertSucceeds(put('cajeraA', 'companies/orgA/employees/e1/dpi.pdf'));
+    await assertFails(read('stranger', 'companies/orgA/employees/e1/dpi.pdf'));
+    await assertFails(read('ownerB', 'companies/orgA/employees/e1/dpi.pdf'));
+    await assertFails(read('pendingA', 'companies/orgA/employees/e1/dpi.pdf'));
+    await assertFails(put('stranger', 'products/p1.jpg'));
+    await assertFails(put('stranger', 'otra/ruta.jpg'));
+  });
+});

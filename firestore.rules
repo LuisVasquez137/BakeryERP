@@ -1,45 +1,204 @@
 rules_version = '2';
+
+// Reglas de Firestore de BakeOS. Se publican desde aquí con
+//   firebase deploy --only firestore:rules
+// (antes vivían solo en la consola y este archivo estaba desactualizado).
+// Pruebas: rules-tests/ (npm test, levanta el emulador).
+//
+// Idea general:
+//   - El perfil users/{uid} es la llave de todo: orgId, role, isApproved, isActive.
+//     Por eso NADIE puede tocar esos campos de su propio perfil después de crearlo
+//     (antes cualquiera podía ponerse OWNER o cambiarse de empresa).
+//   - Los datos de la empresa (companies/{id}/**) solo los ve quien pertenece a esa
+//     empresa Y está aprobado y activo. Los permisos finos (cobrar, editar recetas...)
+//     siguen viviendo en la app; aquí se cierra la puerta a extraños y a pendientes.
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function callerOrgId() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.orgId;
+    // ── Helpers ─────────────────────────────────────────────────────────────
+
+    function isAuth() {
+      return request.auth != null;
     }
+
+    function uid() {
+      return request.auth.uid;
+    }
+
+    function userPath(id) {
+      return /databases/$(database)/documents/users/$(id);
+    }
+
+    function orgPath(id) {
+      return /databases/$(database)/documents/organizations/$(id);
+    }
+
+    function hasProfile() {
+      return isAuth() && exists(userPath(uid()));
+    }
+
+    // Perfil de quien hace la petición. Solo llamar después de hasProfile().
+    function me() {
+      return get(userPath(uid())).data;
+    }
+
+    // Documentos viejos no traen isApproved (el OWNER original): ausente = aprobado.
+    function isEnabled(u) {
+      return u.get('isApproved', true) == true && u.get('isActive', true) == true;
+    }
+
+    // Personal de la empresa aprobado y activo.
+    function isStaffOf(orgId) {
+      return hasProfile()
+        && me().orgId == orgId
+        && me().role in ['OWNER', 'ADMIN', 'MANAGER', 'EMPLOYEE']
+        && isEnabled(me());
+    }
+
+    // Personal o revendedor aprobado. El revendedor conserva por ahora el mismo
+    // acceso que tenía (pendiente: limitarlo a sus pedidos y precios).
+    function isApprovedMemberOf(orgId) {
+      return hasProfile()
+        && me().orgId == orgId
+        && me().role in ['OWNER', 'ADMIN', 'MANAGER', 'EMPLOYEE', 'RESELLER']
+        && isEnabled(me());
+    }
+
+    function isAdminOf(orgId) {
+      return isStaffOf(orgId) && me().role in ['OWNER', 'ADMIN'];
+    }
+
+    function isOwnerOf(orgId) {
+      return isStaffOf(orgId) && me().role == 'OWNER';
+    }
+
+    function hasPermission(p) {
+      return me().role == 'OWNER' || p in me().get('permissions', []);
+    }
+
+    // Revendedor recién registrado (aún sin aprobar) de esa empresa.
+    function isResellerOf(orgId) {
+      return hasProfile() && me().orgId == orgId && me().role == 'RESELLER';
+    }
+
+    // ── Forma de un perfil nuevo ────────────────────────────────────────────
+    // Solo hay cuatro formas legítimas de nacer (ver FirebaseAuthRepository):
+    //   1. Google por primera vez: sin empresa todavía (orgId vacío).
+    //   2. Dueño de una empresa NUEVA: role OWNER con un orgId que aún no existe.
+    //   3. Empleado que se une con código: EMPLOYEE, pendiente de aprobación.
+    //   4. Revendedor que se registra con código: RESELLER, pendiente.
+    // En ninguna trae permisos ni sucursales: eso lo asigna un OWNER/ADMIN.
+
+    function profileKeysOk(d) {
+      return d.keys().hasOnly(['orgId', 'email', 'displayName', 'role', 'branchIds',
+                               'permissions', 'isActive', 'isApproved', 'photoUrl'])
+        && d.orgId is string
+        && d.get('permissions', []).size() == 0
+        && d.get('branchIds', []).size() == 0;
+    }
+
+    function isNewProfileOk(d) {
+      return profileKeysOk(d) && (
+        d.orgId == ''
+        || (d.role == 'OWNER' && !exists(orgPath(d.orgId)))
+        || (d.role in ['EMPLOYEE', 'RESELLER']
+            && d.isApproved == false
+            && exists(orgPath(d.orgId)))
+      );
+    }
+
+    // ── Usuarios ────────────────────────────────────────────────────────────
 
     match /users/{userId} {
-      allow read, write: if request.auth != null
-                         && request.auth.uid == userId;
+      // El propio perfil, aunque esté pendiente.
+      allow get: if isAuth() && uid() == userId;
+
+      // Compañeros de la misma empresa (selectores de cajero, piloto, etc.).
+      // Solo para quien ya está aprobado: un pendiente no ve la lista del personal.
+      allow get, list: if isApprovedMemberOf(resource.data.orgId);
+
+      allow create: if isAuth() && uid() == userId
+                    && isNewProfileOk(request.resource.data);
+
+      // Uno mismo: solo nombre y foto. Rol, empresa, permisos, sucursales y
+      // aprobación los cambia un OWNER/ADMIN, nunca el interesado.
+      allow update: if isAuth() && uid() == userId
+                    && request.resource.data.diff(resource.data).affectedKeys()
+                         .hasOnly(['displayName', 'photoUrl']);
+
+      // Onboarding después de Google: quien todavía no tiene empresa elige
+      // crear una (OWNER) o unirse a una (pendiente).
+      allow update: if isAuth() && uid() == userId
+                    && resource.data.orgId == ''
+                    && isNewProfileOk(request.resource.data);
+
+      // OWNER/ADMIN administran a la gente de su empresa: aprobar, permisos,
+      // sucursales, rol. Un ADMIN no puede crear OWNERs ni tocar a un OWNER.
+      allow update: if isAdminOf(resource.data.orgId)
+                    && request.resource.data.orgId == resource.data.orgId
+                    && (
+                      me().role == 'OWNER'
+                      || (resource.data.role != 'OWNER' && request.resource.data.role != 'OWNER')
+                    );
+
+      // Quien gestiona clientes externos aprueba al revendedor (solo isApproved).
+      allow update: if resource.data.role == 'RESELLER'
+                    && isStaffOf(resource.data.orgId)
+                    && hasPermission('MANAGE_EXTERNAL_CUSTOMERS')
+                    && request.resource.data.diff(resource.data).affectedKeys()
+                         .hasOnly(['isApproved']);
+
+      allow delete: if false;
     }
+
+    // ── Organizaciones ──────────────────────────────────────────────────────
 
     match /organizations/{orgId} {
-      allow create: if request.auth != null
-                    && request.resource.data.ownerEmail == request.auth.token.email;
-      allow read, update, delete: if request.auth != null
-                                  && callerOrgId() == orgId;
-    }
-
-    match /organizations/{orgId}/{document=**} {
-      allow read, write: if request.auth != null
-                         && callerOrgId() == orgId;
-    }
-
-    // Datos de la empresa (productos, inventario, ventas, etc.)
-    // Una sola regla cubre TODAS las subcolecciones actuales y futuras.
-    match /companies/{companyId}/{document=**} {
-      allow read, write: if request.auth != null
-                         && callerOrgId() == companyId;
-    }
-
-    // Códigos de invitación:
-    // get (leer uno): cualquier usuario autenticado puede verificar un código específico
-    // list: bloqueado — nadie puede enumerar todos los códigos
-    // create: solo usuarios autenticados (ocurre al crear la organización)
-    // update/delete: bloqueados
-    match /inviteCodes/{code} {
-      allow get: if request.auth != null;
+      // Su propia empresa (aunque esté pendiente: la pantalla de espera muestra
+      // el nombre). Nadie puede listar todas las empresas.
+      allow get: if hasProfile() && me().orgId == orgId;
       allow list: if false;
-      allow create: if request.auth != null;
-      allow update, delete: if false;
+
+      // Se crea justo después del perfil OWNER que la reclama.
+      allow create: if hasProfile()
+                    && me().orgId == orgId
+                    && me().role == 'OWNER'
+                    && request.resource.data.ownerEmail.lower() == request.auth.token.email.lower();
+
+      allow update: if isAdminOf(orgId)
+                    && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['ownerEmail'])
+                        || isOwnerOf(orgId));
+
+      allow delete: if false;
+    }
+
+    // ── Códigos de invitación ───────────────────────────────────────────────
+
+    match /inviteCodes/{code} {
+      // Hay que conocer el código para leerlo; no se pueden enumerar.
+      allow get: if isAuth();
+      allow list: if false;
+      allow create: if isAdminOf(request.resource.data.orgId);
+      allow delete: if isAdminOf(resource.data.orgId);
+      allow update: if false;
+    }
+
+    // ── Datos de la empresa ─────────────────────────────────────────────────
+
+    match /companies/{companyId}/{document=**} {
+      allow read, write: if isApprovedMemberOf(companyId);
+    }
+
+    // Revendedor recién registrado: completa su ficha y escoge sucursal antes
+    // de que lo aprueben (ResellerSetupScreen). Nada más.
+    match /companies/{companyId}/branches/{branchId} {
+      allow read: if isResellerOf(companyId);
+    }
+
+    match /companies/{companyId}/externalCustomers/{customerId} {
+      allow create: if isResellerOf(companyId)
+                    && request.resource.data.linkedUserId == uid()
+                    && request.resource.data.active == false;
     }
   }
 }
