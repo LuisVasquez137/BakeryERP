@@ -188,7 +188,7 @@ actual fun createAppViewModels(): AppViewModels {
         ),
         cashSession = CashSessionViewModel(
             cashSessionRepo, cashRegisterRepo, branchRepo, dailyCloseRepo, purchaseRepo,
-            cashAuditRepo, notificationRepo, employeeRepo, saleRepo
+            cashAuditRepo, notificationRepo, employeeRepo, saleRepo, employeeAccessRepo
         ),
         saleHistory = SaleHistoryViewModel(saleRepo, cashSessionRepo, branchRepo, felRepo, JsReceiptPrinter(), authRepo),
         cashRegisterAdmin = CashRegisterAdminViewModel(cashRegisterRepo, branchRepo, cashSessionRepo),

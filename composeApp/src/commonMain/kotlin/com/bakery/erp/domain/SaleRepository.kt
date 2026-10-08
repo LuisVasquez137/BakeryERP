@@ -101,7 +101,9 @@ interface SaleRepository {
          * venta queda con el método y los datos del pago de ESE cobro. Null = el mesero
          * entregó el dinero y solo se registra que entró a esta gaveta.
          */
-        checkout: CheckoutPayment? = null
+        checkout: CheckoutPayment? = null,
+        /** Ver [com.bakery.erp.model.Sale.cashierEmployeeId]. */
+        cashierEmployeeId: String = ""
     ): Sale
 
     /**

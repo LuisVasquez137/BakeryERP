@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.Branch
 import com.bakery.erp.model.CashRegister
 import com.bakery.erp.model.CashSession
+import com.bakery.erp.model.isOperatedBy
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.ui.AdaptiveContainer
 
@@ -118,7 +119,7 @@ fun POSHomeScreen(
                                 RegisterCard(
                                     register = reg,
                                     openSession = openSess,
-                                    currentUserId = user?.id.orEmpty(),
+                                    currentUser = user,
                                     onOpen = { onOpenSession(reg.id) },
                                     onContinue = { sid -> onContinueSession(sid) }
                                 )
@@ -135,11 +136,13 @@ fun POSHomeScreen(
 private fun RegisterCard(
     register: CashRegister,
     openSession: CashSession?,
-    currentUserId: String,
+    currentUser: com.bakery.erp.model.User?,
     onOpen: () -> Unit,
     onContinue: (sessionId: String) -> Unit
 ) {
-    val isMine = openSession?.cashierId == currentUserId
+    // En un equipo compartido "mía" es de la PERSONA, no de la cuenta (ver isOperatedBy).
+    val isMine = openSession != null && currentUser != null &&
+        openSession.isOperatedBy(currentUser)
     val isOpen = openSession != null
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -159,7 +162,7 @@ private fun RegisterCard(
             Column(Modifier.weight(1f)) {
                 Text(register.name, fontWeight = FontWeight.SemiBold)
                 if (openSession != null) {
-                    Text("Abierta por ${openSession.cashierName}",
+                    Text("Abierta por ${openSession.openedByEmployeeName.ifBlank { openSession.cashierName }}",
                          style = MaterialTheme.typography.bodySmall,
                          color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {

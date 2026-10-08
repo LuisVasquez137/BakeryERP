@@ -220,6 +220,7 @@ class FirebaseCreditRepository(
         "method" to method,
         "createdByUserId" to createdByUserId,
         "createdByUserName" to createdByUserName,
+        "createdByEmployeeId" to createdByEmployeeId,
         "createdAt" to createdAt
     )
 
@@ -241,6 +242,7 @@ class FirebaseCreditRepository(
         method = get<String?>("method") ?: "",
         createdByUserId = get<String?>("createdByUserId") ?: "",
         createdByUserName = get<String?>("createdByUserName") ?: "",
+        createdByEmployeeId = runCatching { get<String?>("createdByEmployeeId") }.getOrNull() ?: "",
         createdAt = readMillis("createdAt")
     )
 

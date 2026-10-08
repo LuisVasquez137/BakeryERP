@@ -57,6 +57,8 @@ data class CashSession(
     /** Usuario de la app que cerró. Puede no ser el que abrió (un supervisor, otro turno). */
     val closedByUserId: String = "",
     val closedByUserName: String = "",
+    /** Colaborador que cerró, identificado con PIN en un equipo de sucursal. */
+    val closedByEmployeeId: String = "",
 
     // ── Cadena de turnos (ver ShiftHandover) ────────────────────────────────
     /** Turno de la misma caja del que se recibió la gaveta. Vacío = el primero del día. */

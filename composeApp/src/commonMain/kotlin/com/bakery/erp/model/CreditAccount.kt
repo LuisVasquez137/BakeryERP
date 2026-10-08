@@ -107,6 +107,8 @@ data class CreditMovement(
     val method: String = "",
     val createdByUserId: String = "",
     val createdByUserName: String = "",
+    /** Colaborador que lo registró, identificado con PIN en un equipo de sucursal. */
+    val createdByEmployeeId: String = "",
     val createdAt: Long = 0L
 ) {
     val isCharge: Boolean get() = amount > 0

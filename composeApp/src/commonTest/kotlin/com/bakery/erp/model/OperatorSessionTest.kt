@@ -63,6 +63,28 @@ class OperatorSessionTest {
     }
 
     @Test
+    fun `en un equipo compartido la caja es de la persona que la abrio`() {
+        val session = CashSession(id = "s1", cashierId = "dev1", openedByEmployeeId = "e1")
+        val gladys = effectiveUser(device, op("OPERATE_POS"))
+        val astrid = effectiveUser(device, op("OPERATE_POS").copy(employeeId = "e2", name = "Astrid"))
+        assertTrue(session.isOperatedBy(gladys))
+        assertTrue(!session.isOperatedBy(astrid))
+        // Con cuenta propia manda la cuenta, como siempre.
+        val person = device.copy(id = "u9", isDeviceAccount = false)
+        assertTrue(CashSession(cashierId = "u9").isOperatedBy(person))
+        assertTrue(!CashSession(cashierId = "otra").isOperatedBy(person))
+    }
+
+    @Test
+    fun `quien recibe la caja confirma con PIN solo en equipo compartido y si es otra persona`() {
+        val gladys = effectiveUser(device, op("OPERATE_POS"))
+        val astrid = Employee(id = "e2", name = "Astrid")
+        assertTrue(com.bakery.erp.presentation.pos.receiverMustConfirm(gladys, astrid))
+        assertTrue(!com.bakery.erp.presentation.pos.receiverMustConfirm(gladys, Employee(id = "e1")))
+        assertTrue(!com.bakery.erp.presentation.pos.receiverMustConfirm(device.copy(isDeviceAccount = false), astrid))
+    }
+
+    @Test
     fun `reglas del PIN iguales a las del servidor`() {
         listOf("1357", "2580", "907153", "1243").forEach { assertNull(pinProblem(it), it) }
         listOf("123", "1234567", "12a4", "1111", "000000", "1234", "4321", "345678").forEach {

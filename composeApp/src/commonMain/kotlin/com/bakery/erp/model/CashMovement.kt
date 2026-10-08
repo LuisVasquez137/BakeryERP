@@ -12,6 +12,8 @@ data class CashMovement(
     val reason: String = "",
     val createdByUserId: String = "",
     val createdByUserName: String = "",
+    /** Colaborador que lo anotó, identificado con PIN en un equipo de sucursal. */
+    val createdByEmployeeId: String = "",
     val createdAt: Long = 0L,
     /** Si forma parte de un [CashTransfer] entre cajas, el id del transfer (mismo en ambos espejos). */
     val transferId: String? = null,

@@ -162,7 +162,8 @@ class FirebaseCashSessionRepository(
         receivedByEmployeeId: String,
         receivedByEmployeeName: String,
         closedByUserId: String,
-        closedByUserName: String
+        closedByUserName: String,
+        closedByEmployeeId: String
     ): CashSession {
         val current = getSession(companyId, sessionId)
             ?: throw IllegalStateException("Sesión no encontrada: $sessionId")
@@ -180,7 +181,8 @@ class FirebaseCashSessionRepository(
             receivedByEmployeeId = receivedByEmployeeId,
             receivedByEmployeeName = receivedByEmployeeName,
             closedByUserId = closedByUserId,
-            closedByUserName = closedByUserName
+            closedByUserName = closedByUserName,
+            closedByEmployeeId = closedByEmployeeId
         )
         sessionsCol(companyId).document(sessionId).set(closed.toMap())
         return closed
@@ -425,6 +427,7 @@ class FirebaseCashSessionRepository(
         "receivedByEmployeeName" to receivedByEmployeeName,
         "closedByUserId" to closedByUserId,
         "closedByUserName" to closedByUserName,
+        "closedByEmployeeId" to closedByEmployeeId,
         "previousSessionId" to previousSessionId,
         "openingExpected" to openingExpected,
         "carriedInCard" to carriedInCard,
@@ -468,6 +471,7 @@ class FirebaseCashSessionRepository(
         receivedByEmployeeName = runCatching { get<String?>("receivedByEmployeeName") }.getOrNull() ?: "",
         closedByUserId = runCatching { get<String?>("closedByUserId") }.getOrNull() ?: "",
         closedByUserName = runCatching { get<String?>("closedByUserName") }.getOrNull() ?: "",
+        closedByEmployeeId = runCatching { get<String?>("closedByEmployeeId") }.getOrNull() ?: "",
         previousSessionId = runCatching { get<String?>("previousSessionId") }.getOrNull() ?: "",
         openingExpected = readMoney("openingExpected"),
         carriedInCard = readMoney("carriedInCard"),
@@ -487,6 +491,7 @@ class FirebaseCashSessionRepository(
         "reason" to reason,
         "createdByUserId" to createdByUserId,
         "createdByUserName" to createdByUserName,
+        "createdByEmployeeId" to createdByEmployeeId,
         "createdAt" to createdAt,
         "transferId" to transferId,
         "linkedSessionId" to linkedSessionId,
@@ -505,6 +510,7 @@ class FirebaseCashSessionRepository(
         reason = get<String?>("reason") ?: "",
         createdByUserId = get<String?>("createdByUserId") ?: "",
         createdByUserName = get<String?>("createdByUserName") ?: "",
+        createdByEmployeeId = runCatching { get<String?>("createdByEmployeeId") }.getOrNull() ?: "",
         createdAt = readMillis("createdAt"),
         transferId = get<String?>("transferId"),
         linkedSessionId = get<String?>("linkedSessionId"),

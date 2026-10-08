@@ -150,7 +150,8 @@ class CreditViewModel(
         method = method,
         description = note.ifBlank { "Pago registrado por administración" },
         createdByUserId = user.id,
-        createdByUserName = user.displayName
+        createdByUserName = user.displayName,
+        createdByEmployeeId = user.operatorEmployeeId
     ), "Pago registrado")
 
     /**
@@ -167,7 +168,8 @@ class CreditViewModel(
         amount = signedAmount,
         description = reason,
         createdByUserId = user.id,
-        createdByUserName = user.displayName
+        createdByUserName = user.displayName,
+        createdByEmployeeId = user.operatorEmployeeId
     ), "Ajuste registrado")
 
     /** Adelanto entregado por administración, de caja general (no de una gaveta del POS). */
@@ -181,7 +183,8 @@ class CreditViewModel(
         description = note.ifBlank { "Adelanto de caja general" },
         personName = account.name,
         createdByUserId = user.id,
-        createdByUserName = user.displayName
+        createdByUserName = user.displayName,
+        createdByEmployeeId = user.operatorEmployeeId
     ), "Adelanto registrado")
 
     private fun write(companyId: String, account: CreditAccount, movement: CreditMovement, okMessage: String) {

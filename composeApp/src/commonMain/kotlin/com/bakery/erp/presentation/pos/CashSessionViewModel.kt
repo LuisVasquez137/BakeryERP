@@ -96,6 +96,14 @@ data class CloseGate(
     val scheduleLabel: String
 )
 
+/**
+ * ¿Quien recibe la gaveta tiene que poner su PIN? Solo en un equipo compartido (hay
+ * persona identificada) y cuando recibe otra persona: si se la entrega a sí misma (doble
+ * turno), ya se identificó.
+ */
+fun receiverMustConfirm(currentUser: User, receivedBy: com.bakery.erp.model.Employee): Boolean =
+    currentUser.operatorEmployeeId.isNotEmpty() && receivedBy.id != currentUser.operatorEmployeeId
+
 class CashSessionViewModel(
     private val sessionRepository: CashSessionRepository,
     private val registerRepository: CashRegisterRepository,
@@ -108,7 +116,9 @@ class CashSessionViewModel(
     private val notificationRepository: com.bakery.erp.domain.NotificationRepository,
     private val employeeRepository: com.bakery.erp.domain.EmployeeRepository,
     /** Ventas del turno: el detalle de vouchers y transferencias. */
-    private val saleRepository: com.bakery.erp.domain.SaleRepository
+    private val saleRepository: com.bakery.erp.domain.SaleRepository,
+    /** PIN de quien recibe la gaveta en un equipo compartido. */
+    private val accessRepository: com.bakery.erp.domain.EmployeeAccessRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(CashSessionUiState())
@@ -477,7 +487,8 @@ class CashSessionViewModel(
                         amount = amount,
                         reason = reason.trim(),
                         createdByUserId = currentUser.id,
-                        createdByUserName = currentUser.displayName
+                        createdByUserName = currentUser.displayName,
+                        createdByEmployeeId = currentUser.operatorEmployeeId
                     )
                 )
                 sessionRepository.listMovements(companyId, sessionId)
@@ -533,6 +544,7 @@ class CashSessionViewModel(
                                  else "$ADJUSTMENT_PREFIX_CORRECTED ${original.reason}",
                         createdByUserId = currentUser.id,
                         createdByUserName = currentUser.displayName.ifEmpty { currentUser.email },
+                        createdByEmployeeId = currentUser.operatorEmployeeId,
                         sourceMovementId = original.id
                     )
                 )
@@ -555,9 +567,20 @@ class CashSessionViewModel(
         receivedBy: com.bakery.erp.model.Employee? = null,
         currentUser: User? = null,
         /** Efectivo que se saca de la gaveta al cerrar (permiso aparte). */
-        withdrawal: Double = 0.0
+        withdrawal: Double = 0.0,
+        /** PIN de [receivedBy]; ver [receiverMustConfirm]. */
+        receiverPin: String? = null
     ) {
         viewModelScope.launch {
+            // En un equipo compartido, quien recibe la gaveta confirma con SU PIN: así la
+            // entrega queda aceptada por esa persona y no solo escogida de una lista.
+            if (receivedBy != null && currentUser != null && receiverMustConfirm(currentUser, receivedBy)) {
+                _uiState.update { it.copy(isLoading = true, error = null) }
+                val ok = runCatching { accessRepository.verifyPin(companyId, receivedBy.id, receiverPin.orEmpty()) }
+                    .onFailure { e -> _uiState.update { it.copy(isLoading = false, error = e.message ?: "No se pudo verificar el PIN") } }
+                    .isSuccess
+                if (!ok) return@launch
+            }
             _uiState.update { it.copy(isLoading = true, error = null, isClosed = false, handedOverSessionId = null) }
             com.bakery.erp.model.closingWithdrawalProblem(countedCash, withdrawal)?.let { problem ->
                 _uiState.update { it.copy(isLoading = false, error = problem) }; return@launch
@@ -569,7 +592,8 @@ class CashSessionViewModel(
                     receivedByEmployeeId = receivedBy?.id.orEmpty(),
                     receivedByEmployeeName = receivedBy?.name.orEmpty(),
                     closedByUserId = currentUser?.id.orEmpty(),
-                    closedByUserName = currentUser?.displayName.orEmpty()
+                    closedByUserName = currentUser?.displayName.orEmpty(),
+                    closedByEmployeeId = currentUser?.operatorEmployeeId.orEmpty()
                 )
                 if (currentUser != null) {
                     val gate = _uiState.value.closeGate?.takeIf { it.sessionId == sessionId }

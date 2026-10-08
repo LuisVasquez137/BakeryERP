@@ -10,6 +10,12 @@ data class Sale(
     val sessionId: String = "",
     val cashierId: String = "",
     val cashierName: String = "",
+    /**
+     * Colaborador que cobró, identificado con PIN en un equipo de sucursal. [cashierId] es la
+     * CUENTA (la misma para todas las cajeras del equipo); esto dice quién era. Vacío en
+     * ventas de cuentas personales y en las anteriores a oct 2026.
+     */
+    val cashierEmployeeId: String = "",
     val subtotal: Double = 0.0,
     /** Descuento total aplicado a la venta. 0 en MVP — placeholder Fase 2. */
     val discount: Double = 0.0,

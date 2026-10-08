@@ -87,6 +87,20 @@ Auditoría de partida: `functions/tools/inspect-users-employees.js` (solo lectur
   (`OPERATOR_IDLE_LOCK_MS` en AppNavigation; toques detectados con pointerInput en pase
   Initial, sin consumir). La sesión de la persona vive solo en memoria.
 - Abrir caja en un equipo: abre la persona identificada, sin lista para escoger.
-- Pendiente (fase 3): guardar `employeeId` en cada registro (hoy los `xxxByUserId` son la
-  cuenta del equipo; solo el nombre ya es de la persona), `Sale.cashierId`, "mi caja" en
-  POSHome compara cuentas, quien RECIBE la caja confirma con su PIN.
+### Fase 3 (hecha, oct 2026): el dinero queda a nombre de la persona
+- `User.operatorEmployeeId`: en memoria (no se guarda en `users/`), lo pone `effectiveUser`.
+  Regla: lo que se registre a nombre de alguien guarda la cuenta (`xxxByUserId`) Y este id.
+- Ya lo guardan: `Sale.cashierEmployeeId` (venta del mostrador y cuentas del restaurante
+  cobradas), `CashSession.closedByEmployeeId` (abrir ya traía `openedByEmployeeId`),
+  `CashMovement.createdByEmployeeId` y `CreditMovement.createdByEmployeeId`.
+- Resumen diario "por cajero": la llave es `cashierEmployeeId` si existe, si no la cuenta.
+  Las ventas viejas siguen sumando a la cuenta (no se reescribe historia).
+- "Mi caja" = `CashSession.isOperatedBy(user)`: misma cuenta Y, en equipo compartido, misma
+  persona que abrió. Lo usan POSHome (Continuar / En uso) y la revalidación del cobro.
+  Consecuencia buscada: la cajera del turno siguiente no vende en la gaveta de la anterior;
+  la anterior cierra y se la entrega.
+- Entrega de gaveta en equipo compartido: quien RECIBE escribe su PIN en el diálogo de
+  cierre (`receiverMustConfirm`; no se pide si se la entrega a sí misma).
+- Sin cambiar todavía (solo el nombre es de la persona): producción, despacho, compras,
+  conteos de pan, cuadres sorpresa, activos, pagos y anticipos de pedidos. Si una cajera se
+  va sin cerrar, solo ella puede cerrar su caja (falta un "cerrar caja ajena" para encargadas).

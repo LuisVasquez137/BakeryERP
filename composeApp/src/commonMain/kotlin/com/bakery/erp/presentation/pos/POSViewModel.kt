@@ -14,6 +14,7 @@ import com.bakery.erp.domain.ReceiptPrinter
 import com.bakery.erp.domain.SaleRepository
 import com.bakery.erp.model.Branch
 import com.bakery.erp.model.CashSession
+import com.bakery.erp.model.isOperatedBy
 import com.bakery.erp.model.expectedCashNow
 import com.bakery.erp.model.CheckoutPayment
 import com.bakery.erp.model.CheckoutRecord
@@ -400,7 +401,8 @@ class POSViewModel(
                     registerId = session.registerId,
                     registerName = session.registerName,
                     cashierId = currentUser.id,
-                    cashierName = currentUser.displayName
+                    cashierName = currentUser.displayName,
+                    cashierEmployeeId = currentUser.operatorEmployeeId
                 )
             }.onSuccess { collected ->
                 // La fila desaparece sola: el listener ya no la trae porque dejó de estar
@@ -621,7 +623,7 @@ class POSViewModel(
                 if (freshSession.status != com.bakery.erp.model.CashSessionStatus.OPEN) {
                     throw IllegalStateException("La caja fue cerrada. No se puede registrar la venta.")
                 }
-                if (freshSession.cashierId != currentUser.id) {
+                if (!freshSession.isOperatedBy(currentUser)) {
                     throw IllegalStateException("Esta sesión de caja pertenece a ${freshSession.cashierName}.")
                 }
 
@@ -645,6 +647,7 @@ class POSViewModel(
                         registerName = session.registerName,
                         cashierId = currentUser.id,
                         cashierName = currentUser.displayName,
+                        cashierEmployeeId = currentUser.operatorEmployeeId,
                         checkout = (if (!invoiceThis) payment else payment.copy(
                             invoiceReceptorId = invoiceRequest!!.receptorId,
                             invoiceReceptorName = invoiceRequest.receptorName,
@@ -671,6 +674,7 @@ class POSViewModel(
                     sessionId = session.id,
                     cashierId = currentUser.id,
                     cashierName = currentUser.displayName,
+                    cashierEmployeeId = currentUser.operatorEmployeeId,
                     subtotal = bakeryTotal,
                     discount = discountAmount,
                     total = bakeryTotal - discountAmount,
@@ -766,7 +770,8 @@ class POSViewModel(
                             branchId = branch.id,
                             branchName = branch.name,
                             createdByUserId = currentUser.id,
-                            createdByUserName = currentUser.displayName
+                            createdByUserName = currentUser.displayName,
+                            createdByEmployeeId = currentUser.operatorEmployeeId
                         ))
                     }.onFailure { e ->
                         throw IllegalStateException(
@@ -966,6 +971,7 @@ class POSViewModel(
                         reason = "Anticipo ${saved.folio} · ${saved.customerName}",
                         createdByUserId = currentUser.id,
                         createdByUserName = currentUser.displayName,
+                        createdByEmployeeId = currentUser.operatorEmployeeId,
                         sourceDepositId = saved.id
                     ))
                 }
@@ -1031,6 +1037,7 @@ class POSViewModel(
                     reason = "Devolución anticipo ${deposit.folio} · ${deposit.customerName}",
                     createdByUserId = currentUser.id,
                     createdByUserName = currentUser.displayName,
+                    createdByEmployeeId = currentUser.operatorEmployeeId,
                     sourceDepositId = deposit.id
                 ))
                 if (deposit.customerOrderId.isNotBlank()) {
@@ -1128,7 +1135,8 @@ class POSViewModel(
                     branchId = branch.id,
                     branchName = branch.name,
                     createdByUserId = currentUser.id,
-                    createdByUserName = currentUser.displayName
+                    createdByUserName = currentUser.displayName,
+                    createdByEmployeeId = currentUser.operatorEmployeeId
                 ))
                 if (isCash) {
                     cashSessionRepository.addMovement(companyId, com.bakery.erp.model.CashMovement(
@@ -1138,6 +1146,7 @@ class POSViewModel(
                         reason = "Abono a crédito: ${account.name}",
                         createdByUserId = currentUser.id,
                         createdByUserName = currentUser.displayName,
+                        createdByEmployeeId = currentUser.operatorEmployeeId,
                         sourceCreditMovementId = movement.id
                     ))
                 }
@@ -1206,7 +1215,8 @@ class POSViewModel(
                     branchName = branch.name,
                     method = SalePaymentMethod.CASH,
                     createdByUserId = currentUser.id,
-                    createdByUserName = currentUser.displayName
+                    createdByUserName = currentUser.displayName,
+                    createdByEmployeeId = currentUser.operatorEmployeeId
                 ))
                 cashSessionRepository.addMovement(companyId, com.bakery.erp.model.CashMovement(
                     sessionId = session.id,
@@ -1215,6 +1225,7 @@ class POSViewModel(
                     reason = "Adelanto: ${account.name}" + if (note.isNotBlank()) " · $note" else "",
                     createdByUserId = currentUser.id,
                     createdByUserName = currentUser.displayName,
+                    createdByEmployeeId = currentUser.operatorEmployeeId,
                     sourceCreditMovementId = movement.id
                 ))
             }.onSuccess {

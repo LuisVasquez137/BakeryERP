@@ -17,7 +17,13 @@ data class User(
      * los permisos de esta cuenta son el techo de lo que se puede hacer en ese equipo.
      * Solo la marca un OWNER/ADMIN (firestore.rules).
      */
-    val isDeviceAccount: Boolean = false
+    val isDeviceAccount: Boolean = false,
+    /**
+     * Colaborador que está usando el equipo (identificado con PIN). NO se guarda en el doc
+     * del usuario: lo pone `effectiveUser` en memoria. Vacío = la cuenta es de una persona.
+     * Lo que se registre a nombre de alguien debe guardar este id además del de la cuenta.
+     */
+    val operatorEmployeeId: String = ""
 )
 
 fun User.hasPermission(permission: Permission): Boolean =

@@ -260,21 +260,48 @@ fun CashSessionCloseScreen(
     }
 
     if (showConfirm) {
+        val receiver = receivedBy
+        val needsReceiverPin = receiver != null && user != null && receiverMustConfirm(user, receiver)
+        // remember, no rememberSaveable: un PIN no se guarda en el estado de la actividad.
+        var receiverPin by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { showConfirm = false },
             title = { Text("¿Cerrar la caja?") },
             text = {
-                Text("Una vez cerrada no se podrán registrar más ventas en esta sesión. " +
-                     "La diferencia (Q ${diff.fmtMoney(2)}) quedará registrada.")
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Una vez cerrada no se podrán registrar más ventas en esta sesión. " +
+                         "La diferencia (Q ${diff.fmtMoney(2)}) quedará registrada.")
+                    if (needsReceiverPin && receiver != null) {
+                        Text(
+                            "${receiver.name} recibe la caja: que escriba su PIN para confirmar que la acepta.",
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        OutlinedTextField(
+                            value = receiverPin,
+                            onValueChange = { v -> receiverPin = v.filter { it.isDigit() }.take(6) },
+                            label = { Text("PIN de ${receiver.name}") },
+                            singleLine = true,
+                            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
             },
             confirmButton = {
-                TextButton(onClick = {
-                    showConfirm = false
-                    viewModel.closeSession(
-                        companyId, sessionId, counted, notes.trim().ifEmpty { null }, closingCounts,
-                        receivedBy = receivedBy, currentUser = user, withdrawal = withdrawal
-                    )
-                }) { Text("Sí, cerrar") }
+                TextButton(
+                    enabled = !needsReceiverPin || receiverPin.length >= 4,
+                    onClick = {
+                        showConfirm = false
+                        viewModel.closeSession(
+                            companyId, sessionId, counted, notes.trim().ifEmpty { null }, closingCounts,
+                            receivedBy = receivedBy, currentUser = user, withdrawal = withdrawal,
+                            receiverPin = receiverPin.takeIf { needsReceiverPin }
+                        )
+                    }
+                ) { Text("Sí, cerrar") }
             },
             dismissButton = {
                 TextButton(onClick = { showConfirm = false }) { Text("Cancelar") }

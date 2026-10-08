@@ -61,7 +61,9 @@ interface CashSessionRepository {
         receivedByEmployeeId: String = "",
         receivedByEmployeeName: String = "",
         closedByUserId: String = "",
-        closedByUserName: String = ""
+        closedByUserName: String = "",
+        /** Ver [CashSession.closedByEmployeeId]. */
+        closedByEmployeeId: String = ""
     ): CashSession
 
     /**

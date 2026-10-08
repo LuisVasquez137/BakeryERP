@@ -34,6 +34,17 @@ fun effectiveUser(account: User, operator: OperatorSession?): User {
     val allowed = operator.permissions.toSet()
     return account.copy(
         displayName = operator.name,
-        permissions = account.permissions.filter { it in allowed }
+        permissions = account.permissions.filter { it in allowed },
+        operatorEmployeeId = operator.employeeId
     )
 }
+
+/**
+ * ¿Esta caja abierta la puede seguir operando [user]? Con cuenta propia, si la abrió esa
+ * cuenta. En un equipo compartido la cuenta es la misma para todas, así que además tiene
+ * que ser la misma PERSONA: si no, la cajera del turno siguiente vendería en la gaveta de
+ * la anterior sin que nadie la entregara.
+ */
+fun CashSession.isOperatedBy(user: User): Boolean =
+    cashierId == user.id &&
+        (user.operatorEmployeeId.isEmpty() || openedByEmployeeId == user.operatorEmployeeId)

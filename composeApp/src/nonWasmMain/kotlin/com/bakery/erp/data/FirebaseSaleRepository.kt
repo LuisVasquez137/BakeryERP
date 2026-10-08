@@ -289,7 +289,8 @@ class FirebaseSaleRepository(
         registerName: String,
         cashierId: String,
         cashierName: String,
-        checkout: CheckoutPayment?
+        checkout: CheckoutPayment?,
+        cashierEmployeeId: String
     ): Sale {
         val ref = salesCol(companyId).document(saleId)
         val collected = firestore.runTransaction {
@@ -311,6 +312,7 @@ class FirebaseSaleRepository(
                 registerName = registerName,
                 cashierId = cashierId,
                 cashierName = cashierName,
+                cashierEmployeeId = cashierEmployeeId,
                 collectedAt = Clock.System.now().toEpochMilliseconds()
             )
             // Cobrada desde el carrito: el cliente pagó en ESTA caja, así que el método real
@@ -440,7 +442,9 @@ class FirebaseSaleRepository(
             // Una venta del restaurante todavía sin recibir en caja no tiene cajero: quien
             // la atendió es el mesero. Sin este respaldo, reconstruir los resúmenes le
             // borraría la atribución que sí escribe el camino incremental.
-            cashierId = sale.cashierId.ifEmpty { sale.externalUserId },
+            // En un equipo compartido la cuenta es de todas las cajeras: el resumen "por
+            // cajero" se agrupa por la persona (colaborador) cuando la venta la trae.
+            cashierId = sale.cashierEmployeeId.ifEmpty { sale.cashierId.ifEmpty { sale.externalUserId } },
             cashierName = sale.cashierName.ifEmpty { sale.externalUserName },
             channel = sale.salesChannel,
             units = lines.sumOf { it.quantity },
@@ -483,6 +487,7 @@ class FirebaseSaleRepository(
         "sessionId" to sessionId,
         "cashierId" to cashierId,
         "cashierName" to cashierName,
+        "cashierEmployeeId" to cashierEmployeeId,
         "subtotal" to subtotal,
         "discount" to discount,
         "total" to total,
@@ -541,6 +546,7 @@ class FirebaseSaleRepository(
         sessionId = get<String?>("sessionId") ?: "",
         cashierId = get<String?>("cashierId") ?: "",
         cashierName = get<String?>("cashierName") ?: "",
+        cashierEmployeeId = runCatching { get<String?>("cashierEmployeeId") }.getOrNull() ?: "",
         subtotal = get<Double?>("subtotal") ?: 0.0,
         discount = get<Double?>("discount") ?: 0.0,
         total = get<Double?>("total") ?: 0.0,
