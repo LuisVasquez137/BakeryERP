@@ -102,5 +102,8 @@ Auditoría de partida: `functions/tools/inspect-users-employees.js` (solo lectur
 - Entrega de gaveta en equipo compartido: quien RECIBE escribe su PIN en el diálogo de
   cierre (`receiverMustConfirm`; no se pide si se la entrega a sí misma).
 - Sin cambiar todavía (solo el nombre es de la persona): producción, despacho, compras,
-  conteos de pan, cuadres sorpresa, activos, pagos y anticipos de pedidos. Si una cajera se
-  va sin cerrar, solo ella puede cerrar su caja (falta un "cerrar caja ajena" para encargadas).
+  conteos de pan, cuadres sorpresa, activos, pagos y anticipos de pedidos. 
+- Caja ajena: quien tiene `MANAGE_DAILY_CASH_CLOSE` ve "Cerrar caja" (en vez de "En uso") en
+  la caja que otra persona dejó abierta, y la cierra o la entrega.
+- Tras entregar la gaveta en un equipo, el equipo pasa directo a quien la recibió (ya puso
+  su PIN en el cierre); si su PIN era temporal, se bloquea para que escoja el suyo.

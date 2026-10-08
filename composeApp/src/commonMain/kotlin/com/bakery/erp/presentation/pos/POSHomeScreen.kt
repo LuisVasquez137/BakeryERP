@@ -20,6 +20,7 @@ import com.bakery.erp.model.Branch
 import com.bakery.erp.model.CashRegister
 import com.bakery.erp.model.CashSession
 import com.bakery.erp.model.isOperatedBy
+import com.bakery.erp.model.hasPermission
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.ui.AdaptiveContainer
 
@@ -29,6 +30,8 @@ fun POSHomeScreen(
     onNavigateBack: () -> Unit,
     onOpenSession: (registerId: String) -> Unit,
     onContinueSession: (sessionId: String) -> Unit,
+    /** Encargada cerrando la caja que otra persona dejó abierta. */
+    onCloseSession: (sessionId: String) -> Unit = {},
     authViewModel: AuthViewModel,
     viewModel: CashSessionViewModel
 ) {
@@ -121,7 +124,8 @@ fun POSHomeScreen(
                                     openSession = openSess,
                                     currentUser = user,
                                     onOpen = { onOpenSession(reg.id) },
-                                    onContinue = { sid -> onContinueSession(sid) }
+                                    onContinue = { sid -> onContinueSession(sid) },
+                                    onCloseOther = { sid -> onCloseSession(sid) }
                                 )
                             }
                         }
@@ -138,7 +142,8 @@ private fun RegisterCard(
     openSession: CashSession?,
     currentUser: com.bakery.erp.model.User?,
     onOpen: () -> Unit,
-    onContinue: (sessionId: String) -> Unit
+    onContinue: (sessionId: String) -> Unit,
+    onCloseOther: (sessionId: String) -> Unit
 ) {
     // En un equipo compartido "mía" es de la PERSONA, no de la cuenta (ver isOperatedBy).
     val isMine = openSession != null && currentUser != null &&
@@ -173,6 +178,11 @@ private fun RegisterCard(
             when {
                 openSession != null && isMine ->
                     Button(onClick = { onContinue(openSession.id) }) { Text("Continuar") }
+                // Quien se fue sin cerrar no deja la caja trabada: la encargada (permiso de
+                // cerrar el día) la cuenta y la cierra, o se la entrega a la que sigue.
+                openSession != null && !isMine &&
+                    currentUser?.hasPermission(com.bakery.erp.model.Permission.MANAGE_DAILY_CASH_CLOSE) == true ->
+                    OutlinedButton(onClick = { onCloseOther(openSession.id) }) { Text("Cerrar caja") }
                 openSession != null && !isMine ->
                     AssistChip(
                         onClick = {},

@@ -78,6 +78,12 @@ data class CashSessionUiState(
     /** Turno que se abrió solo al entregar la caja: la pantalla lleva al POS de ése. */
     val handedOverSessionId: String? = null,
     /**
+     * Quien recibió la gaveta en un equipo compartido, ya verificado con su PIN. La pantalla
+     * le pasa el equipo (AuthViewModel.startOperatorSession): ya se identificó, no hace falta
+     * pedirle el PIN otra vez.
+     */
+    val handedOverTo: com.bakery.erp.domain.VerifiedEmployee? = null,
+    /**
      * Efectivo que la caja debería tener al abrir (lo que dejó el último cierre). Null = no hay
      * de dónde saberlo.
      */
@@ -303,7 +309,7 @@ class CashSessionViewModel(
         }
     }
 
-    fun clearHandedOver() = _uiState.update { it.copy(handedOverSessionId = null) }
+    fun clearHandedOver() = _uiState.update { it.copy(handedOverSessionId = null, handedOverTo = null) }
 
     /** Cobros con tarjeta o transferencia del turno: de cuál turno es cada voucher. */
     fun loadSessionNonCashSales(companyId: String, sessionId: String) {
@@ -571,15 +577,16 @@ class CashSessionViewModel(
         /** PIN de [receivedBy]; ver [receiverMustConfirm]. */
         receiverPin: String? = null
     ) {
+        var verifiedReceiver: com.bakery.erp.domain.VerifiedEmployee? = null
         viewModelScope.launch {
             // En un equipo compartido, quien recibe la gaveta confirma con SU PIN: así la
             // entrega queda aceptada por esa persona y no solo escogida de una lista.
             if (receivedBy != null && currentUser != null && receiverMustConfirm(currentUser, receivedBy)) {
                 _uiState.update { it.copy(isLoading = true, error = null) }
-                val ok = runCatching { accessRepository.verifyPin(companyId, receivedBy.id, receiverPin.orEmpty()) }
+                val verified = runCatching { accessRepository.verifyPin(companyId, receivedBy.id, receiverPin.orEmpty()) }
                     .onFailure { e -> _uiState.update { it.copy(isLoading = false, error = e.message ?: "No se pudo verificar el PIN") } }
-                    .isSuccess
-                if (!ok) return@launch
+                    .getOrNull() ?: return@launch
+                verifiedReceiver = verified
             }
             _uiState.update { it.copy(isLoading = true, error = null, isClosed = false, handedOverSessionId = null) }
             com.bakery.erp.model.closingWithdrawalProblem(countedCash, withdrawal)?.let { problem ->
@@ -622,7 +629,10 @@ class CashSessionViewModel(
                         registerId = closed.registerId,
                         registerName = closed.registerName,
                         cashierId = currentUser.id,
-                        cashierName = currentUser.displayName,
+                        // En un equipo compartido el turno nuevo es de quien recibe, no de
+                        // quien entrega (la cuenta es la misma para las dos).
+                        cashierName = if (currentUser.operatorEmployeeId.isNotEmpty()) receivedBy.name
+                                      else currentUser.displayName,
                         openedAt = Clock.System.now().toEpochMilliseconds(),
                         openingBalance = handover.cash,
                         openingExpected = handover.cash,
@@ -649,7 +659,13 @@ class CashSessionViewModel(
                 }
                 closed
             }.onSuccess { closed ->
-                _uiState.update { it.copy(isLoading = false, currentSession = closed, isClosed = true, handedOverSessionId = nextSessionId) }
+                _uiState.update {
+                    it.copy(
+                        isLoading = false, currentSession = closed, isClosed = true,
+                        handedOverSessionId = nextSessionId,
+                        handedOverTo = verifiedReceiver?.takeIf { nextSessionId != null }
+                    )
+                }
             }.onFailure { err ->
                 _uiState.update { it.copy(isLoading = false, error = err.message) }
             }

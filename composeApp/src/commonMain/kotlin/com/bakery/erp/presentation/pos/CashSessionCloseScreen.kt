@@ -66,6 +66,25 @@ fun CashSessionCloseScreen(
     LaunchedEffect(state.isClosed) {
         if (state.isClosed) {
             val next = state.handedOverSessionId
+            // Equipo compartido: quien recibió ya puso su PIN, así que el equipo pasa a ella
+            // y entra directo a vender en su turno.
+            val receiver = state.handedOverTo
+            val account = authState.accountUser
+            if (receiver != null && authState.operator != null && account != null && receiver.mustChangePin) {
+                // PIN temporal: que pase por la pantalla de PIN y escoja el suyo.
+                authViewModel.lockOperator()
+            } else if (receiver != null && authState.operator != null && account != null) {
+                authViewModel.startOperatorSession(
+                    com.bakery.erp.model.OperatorSession(
+                        employeeId = receiver.employeeId,
+                        name = receiver.name,
+                        photoUrl = receiver.photoUrl,
+                        branchId = receiver.branchId,
+                        permissions = receiver.permissions,
+                        accountId = account.id
+                    )
+                )
+            }
             viewModel.clearClosed()
             viewModel.clearHandedOver()
             if (next != null) onHandedOver(next) else onClosed(sessionId)

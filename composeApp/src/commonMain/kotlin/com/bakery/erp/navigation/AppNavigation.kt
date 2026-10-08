@@ -1254,6 +1254,7 @@ fun AppNavigation(
                             popUpTo(Screen.POSHome.route) { inclusive = false }
                         }
                     },
+                    onCloseSession = { sid -> navController.navigate(Screen.CashSessionClose.route(sid)) },
                     authViewModel = viewModel,
                     viewModel = cashSessionViewModel
                 )
