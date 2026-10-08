@@ -44,7 +44,12 @@ interface AuthRepository {
     /** Devuelve el documento Organization (nombre comercial, plan, etc.) por id. */
     suspend fun getOrganization(orgId: String): Result<Organization>
     suspend fun getUsersForOrg(orgId: String): List<User>
-    suspend fun updateUserAccess(userId: String, branchIds: List<String>, permissions: List<String>): Result<Unit>
+    suspend fun updateUserAccess(
+        userId: String,
+        branchIds: List<String>,
+        permissions: List<String>,
+        isDeviceAccount: Boolean
+    ): Result<Unit>
 
     /**
      * Paso 1 de alta de revendedor: crea la cuenta Firebase y el User con rol

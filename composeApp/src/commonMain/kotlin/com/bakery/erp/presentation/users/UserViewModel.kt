@@ -33,10 +33,16 @@ class UserViewModel(
         }
     }
 
-    fun updateUserAccess(orgId: String, userId: String, branchIds: List<String>, permissions: List<String>) {
+    fun updateUserAccess(
+        orgId: String,
+        userId: String,
+        branchIds: List<String>,
+        permissions: List<String>,
+        isDeviceAccount: Boolean
+    ) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
-            repository.updateUserAccess(userId, branchIds, permissions)
+            repository.updateUserAccess(userId, branchIds, permissions, isDeviceAccount)
                 .onSuccess {
                     _uiState.update { s -> s.copy(isLoading = false, isSaved = true) }
                     loadUsers(orgId)

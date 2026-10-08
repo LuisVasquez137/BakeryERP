@@ -2,6 +2,7 @@
 
 import com.bakery.erp.domain.EmployeeRepository
 import com.bakery.erp.model.Employee
+import com.bakery.erp.model.EmployeePinStatus
 import com.bakery.erp.model.EmployeeStatus
 import dev.gitlive.firebase.firestore.DocumentSnapshot
 import dev.gitlive.firebase.firestore.FirebaseFirestore
@@ -35,7 +36,19 @@ class FirebaseEmployeeRepository(
             updatedAt = now,
             createdAt = if (employee.createdAt == 0L) now else employee.createdAt
         )
-        docRef.set(final.toMap())
+        // Ficha existente: update, no set. El mapa no lleva los campos de acceso
+        // (permisos, estado del PIN) y un set() los borraría; además las reglas
+        // rechazan que el formulario los toque.
+        if (employee.id.isEmpty()) docRef.set(final.toMap()) else docRef.update(final.toMap())
+    }
+
+    override suspend fun updateEmployeePermissions(companyId: String, employeeId: String, permissions: List<String>) {
+        col(companyId).document(employeeId).update(
+            firestoreSafeOf(
+                "permissions" to ArrayList(permissions.distinct()),
+                "updatedAt" to Clock.System.now().toEpochMilliseconds()
+            )
+        )
     }
 
     override suspend fun deleteEmployee(companyId: String, employeeId: String) {
@@ -136,7 +149,10 @@ class FirebaseEmployeeRepository(
             active = status == EmployeeStatus.ACTIVE,
             createdAt = readMillis("createdAt"),
             updatedAt = readMillis("updatedAt"),
-            userId = get<String?>("userId") ?: ""
+            userId = get<String?>("userId") ?: "",
+            permissions = runCatching { get<List<String>?>("permissions") }.getOrNull() ?: emptyList(),
+            pinStatus = EmployeePinStatus.fromStored(runCatching { get<String?>("pinStatus") }.getOrNull()),
+            pinUpdatedAt = readMillis("pinUpdatedAt")
         )
     }
 

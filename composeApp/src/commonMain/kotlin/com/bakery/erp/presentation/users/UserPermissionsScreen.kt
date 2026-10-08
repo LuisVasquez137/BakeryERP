@@ -21,7 +21,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.Button
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -35,7 +34,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.TriStateCheckbox
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -45,13 +44,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.bakery.erp.model.Permission
+import com.bakery.erp.model.UserRole
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.presentation.branches.BranchViewModel
+import com.bakery.erp.ui.AdaptiveContainer
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -77,6 +75,7 @@ fun UserPermissionsScreen(
     var selectedPermissions by remember(user) {
         mutableStateOf(user?.permissions?.toSet() ?: emptySet())
     }
+    var isDeviceAccount by remember(user) { mutableStateOf(user?.isDeviceAccount ?: false) }
 
     LaunchedEffect(companyId) {
         if (companyId.isNotEmpty() && branchState.branchList.isEmpty()) {
@@ -114,7 +113,7 @@ fun UserPermissionsScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+        AdaptiveContainer(modifier = Modifier.padding(padding)) {
             when {
                 user == null -> {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -135,6 +134,35 @@ fun UserPermissionsScreen(
                         Text(user.email, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             RoleBadge(user.role)
+                        }
+
+                        // ── Cuenta de equipo ──────────────────────────────────
+                        // Un OWNER/ADMIN es una persona, nunca el equipo de una sucursal.
+                        if (user.role != UserRole.OWNER && user.role != UserRole.ADMIN) {
+                            PermDivider()
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { isDeviceAccount = !isDeviceAccount },
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        "Cuenta de equipo (sucursal)",
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Text(
+                                        "Es la cuenta de la tablet o teléfono de una sucursal, no de una persona. " +
+                                            "Quien use el equipo se identifica con su PIN de colaborador, y los " +
+                                            "permisos de aquí abajo son lo MÁXIMO que se puede hacer en ese equipo.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Spacer(Modifier.width(8.dp))
+                                Switch(checked = isDeviceAccount, onCheckedChange = { isDeviceAccount = it })
+                            }
                         }
 
                         // ── Sucursales ────────────────────────────────────────
@@ -169,98 +197,12 @@ fun UserPermissionsScreen(
 
                         // ── Permisos por grupo ────────────────────────────────
                         PermDivider()
-                        PermSection("Permisos")
+                        PermSection(if (isDeviceAccount) "Lo máximo que se puede hacer en este equipo" else "Permisos")
 
-                        val groups = Permission.entries.groupBy { it.group }
-                        groups.forEach { (groupName, perms) ->
-                            // Estado del "maestro" del módulo: On (todos), Off (ninguno) o
-                            // Indeterminate (algunos). Un tap habilita/deshabilita el grupo completo.
-                            // El maestro del grupo NO toca los permisos sensibles (ver
-                            // dinero): se marcan uno por uno, con intención. Antes
-                            // "Habilitar todos" en Distribución le daba a cualquiera que
-                            // empaca el valor de cada nota de despacho, de regalo.
-                            val groupPermNames = perms.filterNot { it.isSensitive }.map { it.name }
-                            val selectedInGroup = groupPermNames.count { it in selectedPermissions }
-                            val groupTriState = when (selectedInGroup) {
-                                0 -> ToggleableState.Off
-                                groupPermNames.size -> ToggleableState.On
-                                else -> ToggleableState.Indeterminate
-                            }
-                            val toggleGroup = {
-                                selectedPermissions = if (selectedInGroup == groupPermNames.size)
-                                    selectedPermissions - groupPermNames.toSet()
-                                else
-                                    selectedPermissions + groupPermNames.toSet()
-                            }
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { toggleGroup() }
-                                    .padding(top = 8.dp, bottom = 2.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = groupName,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Text(
-                                    text = "Habilitar todos",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                TriStateCheckbox(
-                                    state = groupTriState,
-                                    onClick = { toggleGroup() }
-                                )
-                            }
-                            perms.forEach { perm ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            selectedPermissions = if (perm.name in selectedPermissions)
-                                                selectedPermissions - perm.name
-                                            else
-                                                selectedPermissions + perm.name
-                                        }
-                                        .padding(vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Checkbox(
-                                        checked = perm.name in selectedPermissions,
-                                        onCheckedChange = { checked ->
-                                            selectedPermissions = if (checked)
-                                                selectedPermissions + perm.name
-                                            else
-                                                selectedPermissions - perm.name
-                                        }
-                                    )
-                                    Spacer(Modifier.width(4.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(perm.label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                                        Text(
-                                            perm.description,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                        // Se avisa en la fila, no solo en la lógica: quien
-                                        // reparte permisos tiene que ver que éste muestra
-                                        // dinero antes de marcarlo.
-                                        if (perm.isSensitive) {
-                                            Text(
-                                                "Muestra dinero · queda fuera de \"Habilitar todos\"",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = Color(0xFFB26A00)
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        PermissionChecklist(
+                            selected = selectedPermissions,
+                            onChange = { selectedPermissions = it }
+                        )
 
                         PermDivider()
                         Spacer(Modifier.padding(4.dp))
@@ -271,7 +213,8 @@ fun UserPermissionsScreen(
                                     orgId = companyId,
                                     userId = userId,
                                     branchIds = selectedBranchIds.toList(),
-                                    permissions = selectedPermissions.toList()
+                                    permissions = selectedPermissions.toList(),
+                                    isDeviceAccount = isDeviceAccount
                                 )
                             },
                             modifier = Modifier.fillMaxWidth(),

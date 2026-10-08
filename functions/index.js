@@ -141,3 +141,10 @@ exports.felAnularDte = fel.felAnularDte;
 exports.felObtenerPdf = fel.felObtenerPdf;
 exports.felGuardarPerfil = fel.felGuardarPerfil;
 exports.felReintentarPendientes = fel.felReintentarPendientes;
+
+// ── PIN personal de colaboradores (cuenta de sucursal + PIN) ──────────────
+// Ver access/employeeAccess.js.
+const access = require("./access/employeeAccess");
+exports.empleadoFijarPin = access.empleadoFijarPin;
+exports.empleadoCambiarPin = access.empleadoCambiarPin;
+exports.empleadoVerificarPin = access.empleadoVerificarPin;

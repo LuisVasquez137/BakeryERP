@@ -91,10 +91,12 @@ service cloud.firestore {
 
     function profileKeysOk(d) {
       return d.keys().hasOnly(['orgId', 'email', 'displayName', 'role', 'branchIds',
-                               'permissions', 'isActive', 'isApproved', 'photoUrl'])
+                               'permissions', 'isActive', 'isApproved', 'photoUrl',
+                               'isDeviceAccount'])
         && d.orgId is string
         && d.get('permissions', []).size() == 0
-        && d.get('branchIds', []).size() == 0;
+        && d.get('branchIds', []).size() == 0
+        && d.get('isDeviceAccount', false) == false;
     }
 
     function isNewProfileOk(d) {
@@ -185,8 +187,39 @@ service cloud.firestore {
 
     // ── Datos de la empresa ─────────────────────────────────────────────────
 
-    match /companies/{companyId}/{document=**} {
+    match /companies/{companyId} {
       allow read, write: if isApprovedMemberOf(companyId);
+    }
+
+    // Todo menos la ficha del colaborador, que tiene campos de acceso (abajo).
+    match /companies/{companyId}/{collection}/{rest=**} {
+      allow read: if isApprovedMemberOf(companyId);
+      allow write: if isApprovedMemberOf(companyId) && collection != 'employees';
+    }
+
+    // Ficha del colaborador: el formulario la edita cualquiera del personal que la app
+    // deje entrar, pero sus permisos (lo que puede hacer con su PIN) solo OWNER/ADMIN, y
+    // el estado del PIN solo la Cloud Function (functions/access/employeeAccess.js).
+    match /companies/{companyId}/employees/{employeeId} {
+      allow create: if isApprovedMemberOf(companyId)
+                    && !request.resource.data.keys().hasAny(['pinStatus', 'pinUpdatedAt'])
+                    && (request.resource.data.get('permissions', []).size() == 0 || isAdminOf(companyId));
+      allow update: if isApprovedMemberOf(companyId)
+                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['pinStatus', 'pinUpdatedAt'])
+                    && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['permissions'])
+                        || isAdminOf(companyId));
+      allow delete: if isApprovedMemberOf(companyId);
+    }
+
+    // Subcolecciones (documentos, historial...). `{sub}/{rest=**}` y no `{sub=**}`: este
+    // último también calza con CERO segmentos, o sea con la ficha misma, y la dejaba abierta.
+    match /companies/{companyId}/employees/{employeeId}/{sub}/{rest=**} {
+      allow write: if isApprovedMemberOf(companyId);
+    }
+
+    // Hash del PIN: solo el Admin SDK. Ni el dueño lo lee desde la app.
+    match /employeePins/{id} {
+      allow read, write: if false;
     }
 
     // Revendedor recién registrado: completa su ficha y escoge sucursal antes

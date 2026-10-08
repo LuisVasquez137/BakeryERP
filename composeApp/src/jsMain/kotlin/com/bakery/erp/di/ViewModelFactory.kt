@@ -165,6 +165,9 @@ actual fun createAppViewModels(): AppViewModels {
             jobPositionRepo, FirebaseEmployeeDocumentRepositoryJs(firestore, storage), authRepo, historyRepo,
             creditRepo
         ),
+        employeeAccess = com.bakery.erp.presentation.employees.EmployeeAccessViewModel(
+            employeeRepo, com.bakery.erp.data.FirebaseEmployeeAccessRepository()
+        ),
         jobPosition = JobPositionViewModel(jobPositionRepo),
         preparation = PreparationViewModel(preparationRepo),
         preparationBatch = PreparationBatchViewModel(

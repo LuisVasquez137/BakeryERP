@@ -243,6 +243,54 @@ describe('ataques', () => {
   });
 });
 
+// ── Colaboradores: permisos y PIN ──────────────────────────────────────────
+
+describe('colaboradores', () => {
+  const ficha = { name: 'Ana', status: 'ACTIVE', branchId: 'b1' };
+  const seed = (data) => env.withSecurityRulesDisabled((ctx) =>
+    setDoc(doc(ctx.firestore(), 'companies/orgA/employees/e1'), data));
+
+  test('el formulario crea y edita la ficha sin tocar acceso', async () => {
+    const db = as('encargadaA');
+    await assertSucceeds(setDoc(doc(db, 'companies/orgA/employees/e2'), ficha));
+    await seed({ ...ficha, permissions: ['OPERATE_POS'], pinStatus: 'SET', pinUpdatedAt: 1 });
+    await assertSucceeds(updateDoc(doc(db, 'companies/orgA/employees/e1'), { name: 'Ana María', phone: '5555' }));
+    await assertSucceeds(setDoc(doc(db, 'companies/orgA/employees/e1/documents/d1'), { url: 'x' }));
+    await assertSucceeds(getDoc(doc(as('cajeraA'), 'companies/orgA/employees/e1')));
+  });
+
+  test('OWNER y ADMIN asignan permisos al colaborador', async () => {
+    await seed(ficha);
+    await assertSucceeds(updateDoc(doc(as('ownerA'), 'companies/orgA/employees/e1'), { permissions: ['OPERATE_POS'] }));
+    await assertSucceeds(updateDoc(doc(as('adminA'), 'companies/orgA/employees/e1'), { permissions: ['OPERATE_POS', 'VOID_SALE'] }));
+    await assertSucceeds(setDoc(doc(as('ownerA'), 'companies/orgA/employees/e3'), { ...ficha, permissions: ['OPERATE_POS'] }));
+  });
+
+  test('nadie más se da permisos ni toca el estado del PIN', async () => {
+    await seed({ ...ficha, pinStatus: 'TEMPORARY', pinUpdatedAt: 1 });
+    const enc = as('encargadaA');
+    await assertFails(updateDoc(doc(enc, 'companies/orgA/employees/e1'), { permissions: ['VIEW_FINANCIAL_REPORT'] }));
+    await assertFails(setDoc(doc(enc, 'companies/orgA/employees/e9'), { ...ficha, permissions: ['VOID_SALE'] }));
+    await assertFails(updateDoc(doc(enc, 'companies/orgA/employees/e1'), { pinStatus: 'SET' }));
+    await assertFails(updateDoc(doc(as('ownerA'), 'companies/orgA/employees/e1'), { pinStatus: 'SET' }));
+    await assertFails(setDoc(doc(enc, 'companies/orgA/employees/e9'), { ...ficha, pinStatus: 'SET' }));
+  });
+
+  test('el hash del PIN no lo lee nadie, ni el dueño', async () => {
+    await env.withSecurityRulesDisabled((ctx) =>
+      setDoc(doc(ctx.firestore(), 'employeePins/orgA__e1'), { hash: 'x', sal: 'y' }));
+    await assertFails(getDoc(doc(as('ownerA'), 'employeePins/orgA__e1')));
+    await assertFails(setDoc(doc(as('ownerA'), 'employeePins/orgA__e1'), { hash: 'z' }));
+  });
+
+  test('cuenta de equipo: la marca el OWNER, nadie se la pone o quita solo ni nace con ella', async () => {
+    await assertSucceeds(updateDoc(doc(as('ownerA'), 'users/cajeraA'), { isDeviceAccount: true }));
+    await assertFails(updateDoc(doc(as('encargadaA'), 'users/encargadaA'), { isDeviceAccount: true }));
+    await assertFails(setDoc(doc(as('j2'), 'users/j2'), profile({ isApproved: false, isActive: false, isDeviceAccount: true })));
+    await assertSucceeds(setDoc(doc(as('j3'), 'users/j3'), profile({ isApproved: false, isActive: false, isDeviceAccount: false })));
+  });
+});
+
 // ── Storage ────────────────────────────────────────────────────────────────
 
 describe('storage', () => {

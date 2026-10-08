@@ -58,6 +58,8 @@ data class AppViewModels(
     /** Vales de salida de material de planta (ver PlantIssue). */
     val plantIssue: PlantIssueViewModel,
     val employee: EmployeeViewModel,
+    /** Pestaña "Acceso" del colaborador: PIN y permisos. */
+    val employeeAccess: com.bakery.erp.presentation.employees.EmployeeAccessViewModel,
     val jobPosition: JobPositionViewModel,
     val preparation: PreparationViewModel,
     val preparationBatch: PreparationBatchViewModel,

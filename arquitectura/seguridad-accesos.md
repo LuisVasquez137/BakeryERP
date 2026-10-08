@@ -58,3 +58,21 @@ siguen con cuenta propia. Detalle del diseño y fases en la memoria del proyecto
 - Cada acción guarda cuenta del equipo + colaborador.
 
 Auditoría de partida: `functions/tools/inspect-users-employees.js` (solo lectura).
+
+### Fase 1 (hecha, oct 2026): datos, PIN en servidor y pantallas de administración
+- `Employee.permissions` (lo que hace con su PIN), `pinStatus` (NONE/TEMPORARY/SET) y
+  `pinUpdatedAt`. El formulario NO los escribe: ficha existente se guarda con `update()`,
+  no `set()`, para no borrarlos. Permisos: `updateEmployeePermissions` (escritura parcial).
+- Reglas: permisos del colaborador solo OWNER/ADMIN; `pinStatus`/`pinUpdatedAt` solo la
+  función; `employeePins/` cerrada. Ojo: `{sub=**}` calza con cero segmentos, por eso las
+  subcolecciones del colaborador van con `{sub}/{rest=**}` (con `**` la ficha quedaba abierta).
+- `User.isDeviceAccount`: lo marca OWNER/ADMIN en la pantalla de permisos del usuario; nadie
+  nace con él. Chip "Equipo" en la lista de usuarios.
+- Callables (`functions/access/employeeAccess.js`): `empleadoFijarPin` (solo OWNER/ADMIN; el
+  PIN nace TEMPORAL salvo que lo haya escrito el colaborador), `empleadoCambiarPin`,
+  `empleadoVerificarPin` (5 fallos → 10 min de bloqueo). scrypt con sal.
+  ¿Por qué solo OWNER/ADMIN asignan PIN? Quien pone el PIN de otro puede hacerse pasar por él.
+- UI: pestaña "Acceso" en la ficha (`EmployeeAccessTab`), lista de permisos compartida
+  (`PermissionChecklist`) entre usuarios y colaboradores.
+- Siguiente (fase 2): pantalla de PIN en el equipo, permisos efectivos = colaborador ∩ equipo
+  inyectados en el `User` de sesión, cambio de PIN temporal, bloqueo por inactividad.

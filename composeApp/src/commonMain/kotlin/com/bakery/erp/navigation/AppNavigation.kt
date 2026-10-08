@@ -2025,7 +2025,8 @@ fun AppNavigation(
                     },
                     authViewModel = viewModel,
                     viewModel = employeeViewModel,
-                    creditViewModel = creditViewModel
+                    creditViewModel = creditViewModel,
+                    accessViewModel = vms.employeeAccess
                 )
             }
         }

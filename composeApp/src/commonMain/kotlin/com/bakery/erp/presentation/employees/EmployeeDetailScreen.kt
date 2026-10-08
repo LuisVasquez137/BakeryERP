@@ -81,6 +81,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -128,12 +130,15 @@ fun EmployeeDetailScreen(
     authViewModel: AuthViewModel,
     viewModel: EmployeeViewModel,
     /** Pestaña "Créditos": lo que debe (compras fiadas + adelantos) y su estado de cuenta. */
-    creditViewModel: com.bakery.erp.presentation.credit.CreditViewModel? = null
+    creditViewModel: com.bakery.erp.presentation.credit.CreditViewModel? = null,
+    /** Pestaña "Acceso": PIN y permisos con los que se identifica en los equipos. */
+    accessViewModel: EmployeeAccessViewModel? = null
 ) {
     val state by viewModel.uiState.collectAsState()
     val authState by authViewModel.uiState.collectAsState()
     val companyId = authState.user?.orgId ?: ""
     val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     val creditState = creditViewModel?.uiState?.collectAsState()?.value
     LaunchedEffect(creditState?.message) {
@@ -150,20 +155,24 @@ fun EmployeeDetailScreen(
         state.error?.let { snackbarHostState.showSnackbar(it); viewModel.clearError() }
     }
 
-    LaunchedEffect(selectedTab, companyId) {
+    // Por nombre y no por posición: "Créditos" y "Acceso" aparecen según lo que llegue.
+    val tabs = listOfNotNull("Perfil", "Asistencia", "Nómina", "Documentos", "Historial",
+        "Créditos".takeIf { creditViewModel != null },
+        "Acceso".takeIf { accessViewModel != null })
+    val currentTab = tabs.getOrElse(selectedTab) { tabs.first() }
+
+    LaunchedEffect(currentTab, companyId) {
         if (companyId.isEmpty()) return@LaunchedEffect
-        when (selectedTab) {
-            // Asistencia (tab 1) carga su propio mes desde AttendanceTab
-            2 -> viewModel.loadPayrollHistory(companyId, employeeId)
-            3 -> viewModel.loadDocuments(companyId, employeeId)
-            4 -> viewModel.loadHistory(companyId, employeeId)
-            5 -> creditViewModel?.loadEmployeeAccount(companyId, employeeId)
+        when (currentTab) {
+            // Asistencia carga su propio mes desde AttendanceTab; Acceso, desde EmployeeAccessTab.
+            "Nómina" -> viewModel.loadPayrollHistory(companyId, employeeId)
+            "Documentos" -> viewModel.loadDocuments(companyId, employeeId)
+            "Historial" -> viewModel.loadHistory(companyId, employeeId)
+            "Créditos" -> creditViewModel?.loadEmployeeAccount(companyId, employeeId)
         }
     }
 
     val employee = state.selectedEmployee
-    val tabs = listOfNotNull("Perfil", "Asistencia", "Nómina", "Documentos", "Historial",
-        "Créditos".takeIf { creditViewModel != null })
 
     Scaffold(
         topBar = {
@@ -222,34 +231,43 @@ fun EmployeeDetailScreen(
                     }
                 }
 
-                when (selectedTab) {
-                    0 -> ProfileTab(employee = employee)
-                    1 -> AttendanceTab(
+                when (currentTab) {
+                    "Perfil" -> ProfileTab(employee = employee)
+                    "Asistencia" -> AttendanceTab(
                         employee = employee,
                         companyId = companyId,
                         state = state,
                         viewModel = viewModel
                     )
-                    2 -> PayrollTab(
+                    "Nómina" -> PayrollTab(
                         employee = employee,
                         companyId = companyId,
                         state = state,
                         viewModel = viewModel,
                         onNavigateToPayrollForm = { onNavigateToPayrollForm(employeeId, it) }
                     )
-                    3 -> DocumentsTab(
+                    "Documentos" -> DocumentsTab(
                         employee = employee,
                         companyId = companyId,
                         state = state,
                         viewModel = viewModel
                     )
-                    4 -> HistoryTab(
+                    "Historial" -> HistoryTab(
                         employee = employee,
                         companyId = companyId,
                         state = state,
                         viewModel = viewModel
                     )
-                    5 -> if (creditViewModel != null && creditState != null) {
+                    "Acceso" -> if (accessViewModel != null) {
+                        EmployeeAccessTab(
+                            employeeId = employeeId,
+                            companyId = companyId,
+                            currentUser = authState.user,
+                            viewModel = accessViewModel,
+                            onMessage = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
+                        )
+                    }
+                    "Créditos" -> if (creditViewModel != null && creditState != null) {
                         val account = creditState.selected?.takeIf { it.employeeId == employee.id }
                         if (account == null) {
                             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }

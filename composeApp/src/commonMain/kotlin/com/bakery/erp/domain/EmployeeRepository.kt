@@ -7,4 +7,6 @@ interface EmployeeRepository {
     suspend fun getEmployee(companyId: String, employeeId: String): Employee?
     suspend fun saveEmployee(companyId: String, employee: Employee)
     suspend fun deleteEmployee(companyId: String, employeeId: String)
+    /** Escritura parcial: solo `permissions`. Las reglas exigen OWNER/ADMIN. */
+    suspend fun updateEmployeePermissions(companyId: String, employeeId: String, permissions: List<String>)
 }

@@ -50,5 +50,29 @@ data class Employee(
     val active: Boolean = true,
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L,
-    val userId: String = ""
+    val userId: String = "",
+    // Acceso con PIN (ver arquitectura/seguridad-accesos.md). Ninguno de los tres lo
+    // escribe el formulario: los permisos los pone un OWNER/ADMIN desde la pestaña
+    // "Acceso" y el estado del PIN solo la Cloud Function.
+    /** Lo que esta persona puede hacer al identificarse con su PIN (nombres de [Permission]). */
+    val permissions: List<String> = emptyList(),
+    val pinStatus: EmployeePinStatus = EmployeePinStatus.NONE,
+    val pinUpdatedAt: Long = 0L
 )
+
+enum class EmployeePinStatus {
+    /** Todavía no tiene PIN: no puede identificarse en los equipos. */
+    NONE,
+    /** Se lo puso el dueño: la primera vez que lo use, la app le pide cambiarlo. */
+    TEMPORARY,
+    /** Lo escogió la persona: solo ella lo conoce. */
+    SET;
+
+    companion object {
+        fun fromStored(value: String?): EmployeePinStatus = when (value) {
+            "TEMPORARY" -> TEMPORARY
+            "SET" -> SET
+            else -> NONE
+        }
+    }
+}

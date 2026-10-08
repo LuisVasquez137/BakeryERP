@@ -272,7 +272,12 @@ class FirebaseAuthRepository(
     override suspend fun getUsersForOrg(orgId: String): List<User> =
         usersCol().where { "orgId" equalTo orgId }.get().documents.map { it.toDomain() }
 
-    override suspend fun updateUserAccess(userId: String, branchIds: List<String>, permissions: List<String>): Result<Unit> =
+    override suspend fun updateUserAccess(
+        userId: String,
+        branchIds: List<String>,
+        permissions: List<String>,
+        isDeviceAccount: Boolean
+    ): Result<Unit> =
         runCatching {
             val doc = usersCol().document(userId).get()
             val current = doc.toDomain()
@@ -280,7 +285,8 @@ class FirebaseAuthRepository(
                 branchIds = branchIds,
                 permissions = permissions,
                 isActive = true,
-                isApproved = true
+                isApproved = true,
+                isDeviceAccount = isDeviceAccount
             )
             usersCol().document(userId).set(updated.toMap())
         }
@@ -441,7 +447,8 @@ class FirebaseAuthRepository(
         permissions = get<List<String>?>("permissions") ?: emptyList(),
         isActive = get<Boolean?>("isActive") ?: true,
         isApproved = get<Boolean?>("isApproved") ?: true,  // default true → usuarios existentes no se bloquean
-        photoUrl = get<String?>("photoUrl")
+        photoUrl = get<String?>("photoUrl"),
+        isDeviceAccount = runCatching { get<Boolean?>("isDeviceAccount") }.getOrNull() ?: false
     )
 
     private fun User.toMap(): Map<String, Any?> = firestoreSafeOf(
@@ -449,6 +456,6 @@ class FirebaseAuthRepository(
         "role" to role.name, "branchIds" to ArrayList(branchIds),
         "permissions" to ArrayList(permissions),
         "isActive" to isActive, "isApproved" to isApproved,
-        "photoUrl" to photoUrl
+        "photoUrl" to photoUrl, "isDeviceAccount" to isDeviceAccount
     )
 }
