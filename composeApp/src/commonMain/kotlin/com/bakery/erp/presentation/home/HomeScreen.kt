@@ -402,6 +402,14 @@ fun HomeScreen(
             item {
                 GreetingHeader(user, state.orgName)
                 Spacer(Modifier.height(16.dp))
+                state.operator?.let { op ->
+                    OperatorBar(
+                        name = op.name,
+                        device = state.accountUser?.displayName.orEmpty(),
+                        onSwitch = viewModel::lockOperator
+                    )
+                    Spacer(Modifier.height(16.dp))
+                }
             }
             if (homeState.alerts.isNotEmpty()) {
                 item {
@@ -526,6 +534,39 @@ private fun GreetingHeader(user: User?, orgName: String?) {
                     modifier = Modifier.wrapContentSize(Alignment.Center)
                 )
             }
+        }
+    }
+}
+
+/**
+ * Equipo de sucursal: quién lo está usando y el botón para dejarlo a otra persona. Va
+ * en el Home porque es adonde se vuelve al terminar algo; el bloqueo por inactividad
+ * cubre a quien se va sin tocarlo.
+ */
+@Composable
+private fun OperatorBar(name: String, device: String, onSwitch: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = com.bakery.erp.ui.theme.BrandColors.PrimaryContainer,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Usando el equipo: $name",
+                    fontWeight = FontWeight.SemiBold,
+                    color = PrimaryBlue,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (device.isNotBlank()) {
+                    Text(device, style = MaterialTheme.typography.bodySmall, color = MutedText, maxLines = 1)
+                }
+            }
+            TextButton(onClick = onSwitch) { Text("Cambiar de persona", fontWeight = FontWeight.SemiBold) }
         }
     }
 }

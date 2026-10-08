@@ -74,5 +74,19 @@ Auditoría de partida: `functions/tools/inspect-users-employees.js` (solo lectur
   ¿Por qué solo OWNER/ADMIN asignan PIN? Quien pone el PIN de otro puede hacerse pasar por él.
 - UI: pestaña "Acceso" en la ficha (`EmployeeAccessTab`), lista de permisos compartida
   (`PermissionChecklist`) entre usuarios y colaboradores.
-- Siguiente (fase 2): pantalla de PIN en el equipo, permisos efectivos = colaborador ∩ equipo
-  inyectados en el `User` de sesión, cambio de PIN temporal, bloqueo por inactividad.
+### Fase 2 (hecha, oct 2026): la persona se identifica en el equipo
+- `AuthViewModel` guarda la CUENTA en su estado interno y publica en `uiState.user` el
+  usuario efectivo (`effectiveUser`, model/OperatorSession.kt): permisos = cuenta ∩
+  colaborador, `displayName` = nombre de la persona, `id` = el de la cuenta. Por eso los
+  ~230 chequeos de permisos no se tocaron. `uiState.accountUser` es la cuenta sin mezclar;
+  `uiState.operator`, la persona. Sin persona, permisos vacíos.
+- `OperatorLockScreen` se pinta encima del NavHost cuando `needsOperator` (cuenta de equipo
+  sin persona): escoger nombre (primero los de las sucursales del equipo) → teclado de PIN →
+  si el PIN era temporal, escoger uno propio dos veces (`empleadoCambiarPin`).
+- Bloqueo: "Cambiar de persona" en el Home y 10 min sin tocar la pantalla
+  (`OPERATOR_IDLE_LOCK_MS` en AppNavigation; toques detectados con pointerInput en pase
+  Initial, sin consumir). La sesión de la persona vive solo en memoria.
+- Abrir caja en un equipo: abre la persona identificada, sin lista para escoger.
+- Pendiente (fase 3): guardar `employeeId` en cada registro (hoy los `xxxByUserId` son la
+  cuenta del equipo; solo el nombre ya es de la persona), `Sale.cashierId`, "mi caja" en
+  POSHome compara cuentas, quien RECIBE la caja confirma con su PIN.

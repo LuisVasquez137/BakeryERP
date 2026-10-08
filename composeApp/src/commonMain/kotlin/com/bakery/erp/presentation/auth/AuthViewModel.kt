@@ -8,11 +8,17 @@ import com.bakery.erp.domain.GoogleAuthHandler
 import com.bakery.erp.domain.GoogleSignInCancelledException
 import com.bakery.erp.domain.GoogleSignInException
 import com.bakery.erp.model.ExternalCustomer
+import com.bakery.erp.model.OperatorSession
+import com.bakery.erp.model.effectiveUser
+import com.bakery.erp.model.requiresOperator
 import com.bakery.erp.model.User
 import com.bakery.erp.model.UserRole
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
+import kotlin.time.Clock
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
@@ -29,7 +35,17 @@ data class AuthUiState(
      *  (sucursal de retiro, modalidad, hora habitual). Forza nav a ResellerSetupScreen. */
     val needsResellerSetup: Boolean = false,
     val inviteCode: String? = null,
-    val orgName: String? = null
+    val orgName: String? = null,
+    /**
+     * La cuenta tal como está en Firestore. En un equipo de sucursal, [user] es la mezcla
+     * de esta cuenta con la persona identificada ([operator]); la pantalla de PIN y la
+     * administración de usuarios necesitan la cuenta sin mezclar.
+     */
+    val accountUser: User? = null,
+    /** Quién está usando el equipo (solo cuentas de equipo). */
+    val operator: OperatorSession? = null,
+    /** Cuenta de equipo sin persona identificada: hay que mostrar la pantalla de PIN. */
+    val needsOperator: Boolean = false
 )
 
 class AuthViewModel(
@@ -37,8 +53,16 @@ class AuthViewModel(
     private val googleAuthHandler: GoogleAuthHandler
 ) : ViewModel() {
 
+    // _uiState guarda la CUENTA en `user`; lo que se publica lleva el usuario efectivo
+    // (cuenta × persona). Así los ~230 chequeos de permisos de la app no cambian.
     private val _uiState = MutableStateFlow(AuthUiState())
-    val uiState: StateFlow<AuthUiState> = _uiState.asStateFlow()
+    private val _operator = MutableStateFlow<OperatorSession?>(null)
+    val uiState: StateFlow<AuthUiState> = combine(_uiState, _operator, ::withOperator)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, withOperator(_uiState.value, _operator.value))
+
+    /** Último toque en pantalla, para bloquear el equipo cuando queda sin uso. No es estado
+     *  observable a propósito: cambia en cada toque y no debe recomponer nada. */
+    private var lastActivityAt: Long = Clock.System.now().toEpochMilliseconds()
     val isGoogleAvailable: Boolean = googleAuthHandler.isAvailable
 
     init {
@@ -283,7 +307,48 @@ class AuthViewModel(
     }
 
     fun signOut() {
+        _operator.value = null
         viewModelScope.launch { repository.signOut() }
+    }
+
+    // ── Persona que usa el equipo (cuenta de sucursal + PIN) ──────────────────
+
+    /** La persona ya pasó su PIN (OperatorLockViewModel lo verificó en el servidor). */
+    fun startOperatorSession(session: OperatorSession) {
+        lastActivityAt = Clock.System.now().toEpochMilliseconds()
+        _operator.value = session
+    }
+
+    /** "Cambiar de persona", o el bloqueo por inactividad. */
+    fun lockOperator() {
+        _operator.value = null
+    }
+
+    fun registerActivity() {
+        lastActivityAt = Clock.System.now().toEpochMilliseconds()
+    }
+
+    /** Bloquea si pasó [idleMillis] sin tocar la pantalla. Devuelve si bloqueó. */
+    fun lockIfIdle(idleMillis: Long): Boolean {
+        if (_operator.value == null) return false
+        val idle = Clock.System.now().toEpochMilliseconds() - lastActivityAt
+        if (idle < idleMillis) return false
+        lockOperator()
+        return true
+    }
+
+    private fun withOperator(s: AuthUiState, operator: OperatorSession?): AuthUiState {
+        val account = s.user ?: return s.copy(accountUser = null, operator = null, needsOperator = false)
+        if (!account.requiresOperator) {
+            return s.copy(accountUser = account, operator = null, needsOperator = false)
+        }
+        val valid = operator?.takeIf { it.accountId == account.id }
+        return s.copy(
+            user = effectiveUser(account, valid),
+            accountUser = account,
+            operator = valid,
+            needsOperator = s.isAuthenticated && valid == null
+        )
     }
 
     fun refreshUser() {

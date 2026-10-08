@@ -66,6 +66,12 @@ fun CashSessionOpenScreen(
     LaunchedEffect(companyId, branch?.id) {
         if (companyId.isNotEmpty() && branch != null) viewModel.loadEmployees(companyId, branch.id)
     }
+    // En un equipo de sucursal la persona ya dijo quién es con su PIN: abre ella, sin
+    // escoger de una lista (donde antes cualquiera podía tocar el nombre de otra).
+    val operator = authState.operator
+    LaunchedEffect(operator?.employeeId, state.employees) {
+        if (operator != null) openedBy = state.employees.firstOrNull { it.id == operator.employeeId }
+    }
     // Lo que dejó el último cierre de esta caja: se comprueba que esté cabal.
     LaunchedEffect(companyId, registerId) {
         if (companyId.isNotEmpty()) viewModel.loadOpeningExpected(companyId, registerId)
@@ -108,13 +114,26 @@ fun CashSessionOpenScreen(
                     }
                 }
 
-                EmployeePickerField(
-                    label = "¿Quién abre la caja?",
-                    employees = state.employees,
-                    selected = openedBy,
-                    chosen = openedBy != null,
-                    onSelect = { openedBy = it }
-                )
+                if (operator != null) {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("Abre la caja", fontWeight = FontWeight.SemiBold)
+                        Text(operator.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text(
+                            if (openedBy == null) "No aparece entre los colaboradores activos de la empresa."
+                            else "Identificada con su PIN. Si no eres tú, vuelve al inicio y toca \"Cambiar de persona\".",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    EmployeePickerField(
+                        label = "¿Quién abre la caja?",
+                        employees = state.employees,
+                        selected = openedBy,
+                        chosen = openedBy != null,
+                        onSelect = { openedBy = it }
+                    )
+                }
 
                 if (state.expectedOpeningDenoms.isNotEmpty()) {
                     Card(

@@ -212,6 +212,7 @@ val appModule = module {
     single { FixedBudgetViewModel(get()) }
     single { EmployeeViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { com.bakery.erp.presentation.employees.EmployeeAccessViewModel(get(), get()) }
+    single { com.bakery.erp.presentation.operator.OperatorLockViewModel(get(), get()) }
     single { JobPositionViewModel(get()) }
     single { UserViewModel(get()) }
     single { PreparationViewModel(get()) }

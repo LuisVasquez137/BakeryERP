@@ -107,6 +107,7 @@ actual fun createAppViewModels(): AppViewModels {
     val purchaseConceptRepo = FirebasePurchaseConceptRepository(firestore)
     val productionRepo = FirebaseProductionRepository(firestore)
     val employeeRepo = FirebaseEmployeeRepository(firestore)
+    val employeeAccessRepo = com.bakery.erp.data.FirebaseEmployeeAccessRepository()
     val creditRepo = com.bakery.erp.data.FirebaseCreditRepository(firestore)
     val attendanceRepo = FirebaseAttendanceRepository(firestore)
     val payrollRepo = FirebasePayrollRepository(firestore)
@@ -166,8 +167,9 @@ actual fun createAppViewModels(): AppViewModels {
             creditRepo
         ),
         employeeAccess = com.bakery.erp.presentation.employees.EmployeeAccessViewModel(
-            employeeRepo, com.bakery.erp.data.FirebaseEmployeeAccessRepository()
+            employeeRepo, employeeAccessRepo
         ),
+        operatorLock = com.bakery.erp.presentation.operator.OperatorLockViewModel(employeeRepo, employeeAccessRepo),
         jobPosition = JobPositionViewModel(jobPositionRepo),
         preparation = PreparationViewModel(preparationRepo),
         preparationBatch = PreparationBatchViewModel(

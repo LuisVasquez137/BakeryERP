@@ -60,6 +60,8 @@ data class AppViewModels(
     val employee: EmployeeViewModel,
     /** Pestaña "Acceso" del colaborador: PIN y permisos. */
     val employeeAccess: com.bakery.erp.presentation.employees.EmployeeAccessViewModel,
+    /** Pantalla de PIN de los equipos de sucursal. */
+    val operatorLock: com.bakery.erp.presentation.operator.OperatorLockViewModel,
     val jobPosition: JobPositionViewModel,
     val preparation: PreparationViewModel,
     val preparationBatch: PreparationBatchViewModel,

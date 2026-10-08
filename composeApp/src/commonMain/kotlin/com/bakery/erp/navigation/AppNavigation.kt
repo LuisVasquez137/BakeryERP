@@ -31,6 +31,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -676,7 +677,30 @@ fun AppNavigation(
 
     var showSplash by rememberSaveable { mutableStateOf(true) }
 
-    Box(Modifier.fillMaxSize()) {
+    // Equipo de sucursal: se bloquea solo si nadie lo toca en un rato, para que la
+    // siguiente persona no trabaje con el PIN de la anterior.
+    LaunchedEffect(state.operator) {
+        if (state.operator == null) return@LaunchedEffect
+        while (true) {
+            kotlinx.coroutines.delay(30_000)
+            if (viewModel.lockIfIdle(OPERATOR_IDLE_LOCK_MS)) break
+        }
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            // Cada toque cuenta como actividad. Pase Initial y sin consumir: lo ve antes
+            // que nadie y no le quita el toque a ningún botón.
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                        viewModel.registerActivity()
+                    }
+                }
+            }
+    ) {
     // Sin transiciones explícitas, NavHost cruza las dos pantallas con un fade de
     // 700 ms: al volver a Home se veían las dos encimadas, "neblinosas", casi un
     // segundo. Entrada corta y salida inmediata.
@@ -2495,11 +2519,25 @@ fun AppNavigation(
         }
     }
 
+        // Cuenta de equipo sin persona identificada: la pantalla de PIN tapa todo.
+        val deviceAccount = state.accountUser
+        if (state.needsOperator && deviceAccount != null) {
+            com.bakery.erp.presentation.operator.OperatorLockScreen(
+                account = deviceAccount,
+                viewModel = vms.operatorLock,
+                onSession = viewModel::startOperatorSession,
+                onSignOutDevice = viewModel::signOut
+            )
+        }
+
         if (showSplash) {
             SplashScreen(onFinished = { showSplash = false })
         }
     }
 }
+
+/** Minutos sin tocar la pantalla tras los que un equipo de sucursal vuelve a pedir PIN. */
+private const val OPERATOR_IDLE_LOCK_MS = 10 * 60 * 1000L
 
 @Composable
 private fun RequirePermission(

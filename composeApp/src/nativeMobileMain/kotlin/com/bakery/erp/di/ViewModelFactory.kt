@@ -19,6 +19,7 @@ actual fun createAppViewModels(): AppViewModels {
         plantIssue = koin.get(),
         employee = koin.get(),
         employeeAccess = koin.get(),
+        operatorLock = koin.get(),
         jobPosition = koin.get(),
         preparation = koin.get(),
         preparationBatch = koin.get(),
