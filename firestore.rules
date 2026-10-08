@@ -191,10 +191,63 @@ service cloud.firestore {
       allow read, write: if isApprovedMemberOf(companyId);
     }
 
-    // Todo menos la ficha del colaborador, que tiene campos de acceso (abajo).
-    match /companies/{companyId}/{collection}/{rest=**} {
+    // ── Fase 4: qué se puede tocar dentro de la empresa ─────────────────────
+    // Las reglas ven los permisos de la CUENTA. En un equipo de sucursal eso es el techo:
+    // la app ya recorta a lo que puede la persona (cuenta ∩ colaborador), así que estas
+    // reglas nunca son más estrictas que la app y no la pueden trabar.
+
+    // Configuración que solo se edita desde su pantalla de administración, y con permiso.
+    // `employees` tiene sus reglas propias (abajo); `felProfiles` lo escribe solo la
+    // Cloud Function de facturación.
+    function canWriteCollection(companyId, collection) {
+      return isApprovedMemberOf(companyId)
+        && !(collection in ['employees', 'felProfiles'])
+        && (!(collection in ['cashRegisters', 'saleQuickGroups']) || hasPermission('MANAGE_POS_CONFIG'))
+        && (collection != 'priceLists' || hasPermission('MANAGE_PRICE_LISTS'))
+        && (collection != 'fixedBudget' || hasPermission('MANAGE_FIXED_BUDGET'))
+        && (collection != 'jobPositions' || hasPermission('MANAGE_EMPLOYEES'));
+    }
+
+    // Historial: se corrige escribiendo la diferencia, nunca borrando (CLAUDE.md). La app
+    // no borra estos documentos en ningún lado; ahora tampoco se puede saltándose la app.
+    function isHistory(collection) {
+      return collection in ['sales', 'salesDaily', 'cashSessions', 'cashTransfers',
+                            'cashAuditEvents', 'dailyCashCloses', 'spotCashChecks',
+                            'customerDeposits', 'dtes', 'finishedMovements',
+                            'creditAccounts', 'counters'];
+    }
+
+    // Subcolecciones que también son historial (el resto, p. ej. los billetes contados de
+    // una caja, la app sí los reemplaza).
+    function isHistorySub(collection, sub) {
+      return (collection == 'sales' && sub == 'lines')
+        || (collection == 'cashSessions' && sub == 'movements')
+        || (collection == 'ingredients' && sub == 'movements');
+    }
+
+    function canAccessBranch(branchId) {
+      return me().role == 'OWNER'
+        || me().get('branchIds', []).size() == 0
+        || branchId in me().get('branchIds', []);
+    }
+
+    // Una venta o una caja nueva nace en una sucursal de la cuenta.
+    function branchOkOnCreate(collection) {
+      return !(collection in ['sales', 'cashSessions'])
+        || canAccessBranch(request.resource.data.get('branchId', ''));
+    }
+
+    match /companies/{companyId}/{collection}/{docId} {
       allow read: if isApprovedMemberOf(companyId);
-      allow write: if isApprovedMemberOf(companyId) && collection != 'employees';
+      allow create: if canWriteCollection(companyId, collection) && branchOkOnCreate(collection);
+      allow update: if canWriteCollection(companyId, collection);
+      allow delete: if canWriteCollection(companyId, collection) && !isHistory(collection);
+    }
+
+    match /companies/{companyId}/{collection}/{docId}/{sub}/{rest=**} {
+      allow read: if isApprovedMemberOf(companyId);
+      allow create, update: if canWriteCollection(companyId, collection);
+      allow delete: if canWriteCollection(companyId, collection) && !isHistorySub(collection, sub);
     }
 
     // Ficha del colaborador: el formulario la edita cualquiera del personal que la app

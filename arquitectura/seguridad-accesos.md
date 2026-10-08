@@ -38,9 +38,29 @@ Contra las reglas viejas fallaban 13 ataques y 2 flujos legítimos.
   tenga `roles/firebaserules.firestoreServiceAgent`. La CLI con `--non-interactive` NO lo pidió;
   se dio a mano el 2026-10-08. Sin ese rol, toda lectura/subida por SDK queda denegada.
 
+### Fase 4 (oct 2026): qué se puede tocar dentro de la empresa
+Las reglas ven los permisos de la CUENTA; en un equipo eso es el techo y la app recorta a la
+persona, así que las reglas nunca son más estrictas que la app.
+- **Historial que no se borra** (`isHistory`/`isHistorySub`): sales (+lines), salesDaily,
+  cashSessions (+movements), cashTransfers, cashAuditEvents, dailyCashCloses, spotCashChecks,
+  customerDeposits, dtes, finishedMovements, creditAccounts, counters, ingredients/*/movements.
+  Ni el dueño desde la app; los scripts admin y las Cloud Functions sí (Admin SDK). Si algún
+  día la app necesita borrar uno de estos, hay que sacarlo de la lista (y es mala señal).
+  Lo que la app sí borra sigue abierto: billetes contados de caja/cierre, creditMovements,
+  notificaciones, líneas de pedidos/lotes/despacho, compras (DELETE_PURCHASES), etc.
+- **Configuración con permiso**: cashRegisters y saleQuickGroups (MANAGE_POS_CONFIG),
+  priceLists (MANAGE_PRICE_LISTS), fixedBudget (MANAGE_FIXED_BUDGET), jobPositions
+  (MANAGE_EMPLOYEES). felProfiles: solo la Cloud Function. productPrices queda abierto: lo
+  escriben el form de producto, la admin de listas y la compra de reventa.
+- **Sucursal**: sales y cashSessions nuevas solo con `branchId` en las sucursales de la cuenta
+  (OWNER o cuenta sin sucursales = todas). Solo al crear: el autocierre y el cierre del día
+  actualizan cajas de cualquier sucursal.
+
 ### Pendiente
-- Los permisos finos (cobrar, anular, editar recetas) y el alcance por sucursal siguen solo en
-  la app. Fase 4 del plan de PIN.
+- Lecturas por sucursal (hoy cualquier cuenta lee toda la empresa): las listas filtran en
+  memoria y una regla de lectura por sucursal rompería consultas sin `where(branchId)`.
+- Permisos finos en escrituras con efectos cruzados (venta → stock, compra → precios): mapear
+  cada efecto a su permiso es frágil; se dejó en la app.
 - El revendedor APROBADO conserva acceso a toda la empresa (no hay ninguno hoy). Limitarlo a
   sus pedidos/precios necesita guardar su `customerId` en el perfil para poder filtrar listas.
 - Roles ADMIN/MANAGER no se asignan desde la app: `functions/tools/set-user-role.js`.

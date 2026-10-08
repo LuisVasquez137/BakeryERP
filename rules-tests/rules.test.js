@@ -124,7 +124,7 @@ describe('flujos de la app', () => {
   test('personal aprobado lee y escribe datos de su empresa', async () => {
     const db = as('cajeraA');
     await assertSucceeds(getDoc(doc(db, 'companies/orgA/sales/s1')));
-    await assertSucceeds(setDoc(doc(db, 'companies/orgA/sales/s2'), { total: 5 }));
+    await assertSucceeds(setDoc(doc(db, 'companies/orgA/sales/s2'), { branchId: 'b1', total: 5 }));
   });
 
   test('revendedor: registro, escoger sucursal y completar ficha', async () => {
@@ -288,6 +288,83 @@ describe('colaboradores', () => {
     await assertFails(updateDoc(doc(as('encargadaA'), 'users/encargadaA'), { isDeviceAccount: true }));
     await assertFails(setDoc(doc(as('j2'), 'users/j2'), profile({ isApproved: false, isActive: false, isDeviceAccount: true })));
     await assertSucceeds(setDoc(doc(as('j3'), 'users/j3'), profile({ isApproved: false, isActive: false, isDeviceAccount: false })));
+  });
+});
+
+// ── Fase 4: historial, configuración y sucursal ────────────────────────────
+
+describe('fase 4', () => {
+  const seed = (path, data) => env.withSecurityRulesDisabled((ctx) => setDoc(doc(ctx.firestore(), path), data));
+
+  test('el historial de dinero no se borra, ni el dueño', async () => {
+    await seed('companies/orgA/cashSessions/cs1', { branchId: 'b1' });
+    await seed('companies/orgA/cashSessions/cs1/movements/m1', { amount: 5 });
+    await seed('companies/orgA/sales/s1/lines/l1', { qty: 1 });
+    await seed('companies/orgA/ingredients/i1/movements/k1', { qty: 1 });
+    await seed('companies/orgA/salesDaily/d1', { total: 1 });
+    for (const who of ['ownerA', 'cajeraA']) {
+      const db = as(who);
+      await assertFails(deleteDoc(doc(db, 'companies/orgA/sales/s1')));
+      await assertFails(deleteDoc(doc(db, 'companies/orgA/sales/s1/lines/l1')));
+      await assertFails(deleteDoc(doc(db, 'companies/orgA/cashSessions/cs1')));
+      await assertFails(deleteDoc(doc(db, 'companies/orgA/cashSessions/cs1/movements/m1')));
+      await assertFails(deleteDoc(doc(db, 'companies/orgA/ingredients/i1/movements/k1')));
+      await assertFails(deleteDoc(doc(db, 'companies/orgA/salesDaily/d1')));
+    }
+  });
+
+  test('lo que la app sí borra se sigue pudiendo borrar', async () => {
+    await seed('companies/orgA/cashSessions/cs1/openingDenominations/q100', { n: 1 });
+    await seed('companies/orgA/dailyCashCloses/dc1/depositDenominations/q100', { n: 1 });
+    await seed('companies/orgA/creditMovements/cm1', { amount: 1 });
+    await seed('companies/orgA/notifications/n1', { t: 1 });
+    await seed('companies/orgA/productionOrders/po1/lines/l1', { q: 1 });
+    const db = as('cajeraA');
+    await assertSucceeds(deleteDoc(doc(db, 'companies/orgA/cashSessions/cs1/openingDenominations/q100')));
+    await assertSucceeds(deleteDoc(doc(db, 'companies/orgA/dailyCashCloses/dc1/depositDenominations/q100')));
+    await assertSucceeds(deleteDoc(doc(db, 'companies/orgA/creditMovements/cm1')));
+    await assertSucceeds(deleteDoc(doc(db, 'companies/orgA/notifications/n1')));
+    await assertSucceeds(deleteDoc(doc(db, 'companies/orgA/productionOrders/po1/lines/l1')));
+  });
+
+  test('el historial se sigue escribiendo y corrigiendo', async () => {
+    const db = as('cajeraA');
+    await assertSucceeds(setDoc(doc(db, 'companies/orgA/sales/s2'), { branchId: 'b1', total: 5 }));
+    await assertSucceeds(updateDoc(doc(db, 'companies/orgA/sales/s1'), { status: 'VOIDED' }));
+    await assertSucceeds(setDoc(doc(db, 'companies/orgA/sales/s2/lines/l1'), { qty: 1 }));
+    await assertSucceeds(setDoc(doc(db, 'companies/orgA/cashSessions/cs9'), { branchId: 'b1' }));
+    await assertSucceeds(setDoc(doc(db, 'companies/orgA/cashSessions/cs9/movements/m1'), { amount: 5 }));
+  });
+
+  test('ventas y cajas nuevas solo en las sucursales de la cuenta', async () => {
+    await assertFails(setDoc(doc(as('cajeraA'), 'companies/orgA/sales/x1'), { branchId: 'b2', total: 5 }));
+    await assertFails(setDoc(doc(as('cajeraA'), 'companies/orgA/cashSessions/x1'), { branchId: 'b2' }));
+    await assertFails(setDoc(doc(as('cajeraA'), 'companies/orgA/sales/x2'), { total: 5 }));
+    await assertSucceeds(setDoc(doc(as('ownerA'), 'companies/orgA/sales/x3'), { branchId: 'b2', total: 5 }));
+    // Cuenta sin sucursales asignadas = todas (canAccessBranch de la app).
+    await assertSucceeds(setDoc(doc(as('managerUsersA'), 'companies/orgA/sales/x4'), { branchId: 'b2', total: 5 }));
+  });
+
+  test('configuración solo con su permiso', async () => {
+    const caj = as('cajeraA');
+    await assertFails(setDoc(doc(caj, 'companies/orgA/cashRegisters/r1'), { name: 'Caja 1' }));
+    await assertFails(setDoc(doc(caj, 'companies/orgA/saleQuickGroups/g1'), { name: 'Pan Q0.50' }));
+    await assertFails(setDoc(doc(caj, 'companies/orgA/priceLists/l1'), { name: 'X' }));
+    await assertFails(setDoc(doc(caj, 'companies/orgA/fixedBudget/f1'), { amount: 1 }));
+    await assertFails(setDoc(doc(caj, 'companies/orgA/jobPositions/j1'), { title: 'X' }));
+    await assertSucceeds(getDoc(doc(caj, 'companies/orgA/cashRegisters/r1')));
+    const own = as('ownerA');
+    await assertSucceeds(setDoc(doc(own, 'companies/orgA/cashRegisters/r1'), { name: 'Caja 1' }));
+    await assertSucceeds(setDoc(doc(own, 'companies/orgA/priceLists/l1'), { name: 'X' }));
+    await assertSucceeds(deleteDoc(doc(own, 'companies/orgA/cashRegisters/r1')));
+    await env.withSecurityRulesDisabled((ctx) => setDoc(doc(ctx.firestore(), 'users/posAdmin'),
+      profile({ permissions: ['MANAGE_POS_CONFIG'], branchIds: ['b1'] })));
+    await assertSucceeds(setDoc(doc(as('posAdmin'), 'companies/orgA/saleQuickGroups/g1'), { name: 'Pan Q0.50' }));
+  });
+
+  test('perfiles de facturación: solo la función', async () => {
+    await assertFails(setDoc(doc(as('ownerA'), 'companies/orgA/felProfiles/p1'), { nit: '123' }));
+    await assertSucceeds(getDoc(doc(as('ownerA'), 'companies/orgA/felProfiles/p1')));
   });
 });
 
