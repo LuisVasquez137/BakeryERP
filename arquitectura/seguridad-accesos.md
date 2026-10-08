@@ -33,8 +33,10 @@ Contra las reglas viejas fallaban 13 ataques y 2 flujos legítimos.
 - Storage: rutas con empresa (`companies/{c}`, `purchaseInvoices/{c}`, `specialOrders/{c}`)
   solo personal de esa empresa; rutas viejas sin empresa (`products/`, `assets/`, `recipes/`)
   personal aprobado de cualquier empresa. Las imágenes se muestran por URL con token, que no
-  pasa por reglas. Las reglas de Storage leen Firestore (`firestore.get`): al publicar, la CLI
-  pide dar permiso al agente de servicio de Storage.
+  pasa por reglas. Las reglas de Storage leen Firestore (`firestore.get`): eso exige que el
+  agente de Storage (`service-412638080390@gcp-sa-firebasestorage.iam.gserviceaccount.com`)
+  tenga `roles/firebaserules.firestoreServiceAgent`. La CLI con `--non-interactive` NO lo pidió;
+  se dio a mano el 2026-10-08. Sin ese rol, toda lectura/subida por SDK queda denegada.
 
 ### Pendiente
 - Los permisos finos (cobrar, anular, editar recetas) y el alcance por sucursal siguen solo en
