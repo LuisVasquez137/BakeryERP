@@ -218,6 +218,9 @@ private fun UserRow(user: User, isPending: Boolean, onClick: () -> Unit) {
 
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 RoleBadge(user.role)
+                if (user.isApproved && !user.isActive) {
+                    com.bakery.erp.ui.theme.BrandChip("Desactivada", com.bakery.erp.ui.theme.ChipTone.DANGER)
+                }
                 if (user.isDeviceAccount) {
                     com.bakery.erp.ui.theme.BrandChip("Equipo", com.bakery.erp.ui.theme.ChipTone.INFO)
                 }

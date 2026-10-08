@@ -284,12 +284,18 @@ class FirebaseAuthRepository(
             val updated = current.copy(
                 branchIds = branchIds,
                 permissions = permissions,
-                isActive = true,
+                // Aprobar a un pendiente lo activa; guardar permisos de alguien desactivado
+                // NO lo reactiva por accidente (eso es setUserActive).
+                isActive = if (current.isApproved) current.isActive else true,
                 isApproved = true,
                 isDeviceAccount = isDeviceAccount
             )
             usersCol().document(userId).set(updated.toMap())
         }
+
+    override suspend fun setUserActive(userId: String, active: Boolean): Result<Unit> = runCatching {
+        usersCol().document(userId).update("isActive" to active)
+    }
 
     // ── Registro de revendedor con código de invitación (en 2 pasos) ──────────
 

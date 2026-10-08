@@ -26,6 +26,13 @@ data class User(
     val operatorEmployeeId: String = ""
 )
 
+/**
+ * Puede usar la app: aprobado Y activo. Desactivar (`isActive = false`) es como el dueño le
+ * quita el acceso a alguien sin borrar su historial; las reglas de Firestore ya lo dejan sin
+ * datos, esto lo saca de las pantallas.
+ */
+val User.canEnter: Boolean get() = isApproved && isActive
+
 fun User.hasPermission(permission: Permission): Boolean =
     role == UserRole.OWNER || permissions.contains(permission.name)
 

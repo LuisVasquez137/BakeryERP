@@ -683,7 +683,8 @@ fun AppNavigation(
         if (state.operator == null) return@LaunchedEffect
         while (true) {
             kotlinx.coroutines.delay(30_000)
-            if (viewModel.lockIfIdle(OPERATOR_IDLE_LOCK_MS)) break
+            val limit = com.bakery.erp.ui.IdleLockPolicy.currentLimitMs ?: continue
+            if (viewModel.lockIfIdle(limit)) break
         }
     }
 
@@ -1978,7 +1979,8 @@ fun AppNavigation(
                     productViewModel = productViewModel,
                     documentPrinter = documentPrinter,
                     bluetoothPrinterManager = bluetoothPrinterManager,
-                    plantIssueViewModel = plantIssueViewModel
+                    plantIssueViewModel = plantIssueViewModel,
+                    operatorLockViewModel = vms.operatorLock
                 )
             }
         }
@@ -2536,9 +2538,6 @@ fun AppNavigation(
         }
     }
 }
-
-/** Minutos sin tocar la pantalla tras los que un equipo de sucursal vuelve a pedir PIN. */
-private const val OPERATOR_IDLE_LOCK_MS = 10 * 60 * 1000L
 
 @Composable
 private fun RequirePermission(

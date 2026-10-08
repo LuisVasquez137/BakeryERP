@@ -51,6 +51,18 @@ class UserViewModel(
         }
     }
 
+    fun setUserActive(orgId: String, userId: String, active: Boolean) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, error = null) }
+            repository.setUserActive(userId, active)
+                .onSuccess {
+                    _uiState.update { s -> s.copy(isLoading = false) }
+                    loadUsers(orgId)
+                }
+                .onFailure { _uiState.update { s -> s.copy(isLoading = false, error = it.message) } }
+        }
+    }
+
     fun clearSaved() { _uiState.update { it.copy(isSaved = false) } }
     fun clearError() { _uiState.update { it.copy(error = null) } }
 }

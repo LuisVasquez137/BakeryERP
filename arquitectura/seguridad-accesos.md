@@ -103,9 +103,11 @@ Auditoría de partida: `functions/tools/inspect-users-employees.js` (solo lectur
 - `OperatorLockScreen` se pinta encima del NavHost cuando `needsOperator` (cuenta de equipo
   sin persona): escoger nombre (primero los de las sucursales del equipo) → teclado de PIN →
   si el PIN era temporal, escoger uno propio dos veces (`empleadoCambiarPin`).
-- Bloqueo: "Cambiar de persona" en el Home y 10 min sin tocar la pantalla
-  (`OPERATOR_IDLE_LOCK_MS` en AppNavigation; toques detectados con pointerInput en pase
-  Initial, sin consumir). La sesión de la persona vive solo en memoria.
+- Bloqueo: "Cambiar de persona" en el Home y 15 min sin tocar la pantalla. Una pantalla "de
+  mirar" (`WatchedScreenIdleLock()`, hoy solo el detalle del lote, junto a `KeepScreenOn`) no
+  se bloquea por inactividad: en su lugar, iniciar el lote pide el PIN de la persona
+  identificada (StartShiftDialog, con "No soy yo"). Plazos en `ui/IdleLockPolicy.kt`. Toques detectados
+  con pointerInput en pase Initial, sin consumir. La sesión de la persona vive solo en memoria.
 - Abrir caja en un equipo: abre la persona identificada, sin lista para escoger.
 ### Fase 3 (hecha, oct 2026): el dinero queda a nombre de la persona
 - `User.operatorEmployeeId`: en memoria (no se guarda en `users/`), lo pone `effectiveUser`.
@@ -127,3 +129,11 @@ Auditoría de partida: `functions/tools/inspect-users-employees.js` (solo lectur
   la caja que otra persona dejó abierta, y la cierra o la entrega.
 - Tras entregar la gaveta en un equipo, el equipo pasa directo a quien la recibió (ya puso
   su PIN en el cierre); si su PIN era temporal, se bloquea para que escoja el suyo.
+
+## Desactivar cuentas (oct 2026)
+- Pantalla de permisos del usuario → "Desactivar cuenta" / "Reactivar cuenta" (solo OWNER/ADMIN,
+  nunca a uno mismo ni a un OWNER). Escribe solo `isActive` (`setUserActive`).
+- `User.canEnter` = aprobado Y activo: una cuenta desactivada cae en PendingApprovalScreen con
+  el texto "Esta cuenta fue desactivada", y las reglas ya le niegan los datos al instante.
+- `updateUserAccess` ya no reactiva por accidente: guardar permisos de alguien desactivado lo
+  deja desactivado (solo aprobar a un pendiente lo activa).

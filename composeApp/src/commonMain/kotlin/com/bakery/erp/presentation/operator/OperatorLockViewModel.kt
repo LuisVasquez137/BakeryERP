@@ -145,6 +145,13 @@ class OperatorLockViewModel(
 
     fun clearError() = _uiState.update { it.copy(error = null) }
 
+    /**
+     * Confirmar con PIN a la persona ya identificada antes de una acción que la deja a su
+     * nombre (p. ej. iniciar un lote). No toca el estado de la pantalla de bloqueo.
+     */
+    suspend fun confirmPin(companyId: String, employeeId: String, pin: String): Result<Unit> =
+        runCatching { accessRepository.verifyPin(companyId, employeeId, pin) }.map { }
+
     private fun clearSecrets() {
         verified = null
         currentPin = ""

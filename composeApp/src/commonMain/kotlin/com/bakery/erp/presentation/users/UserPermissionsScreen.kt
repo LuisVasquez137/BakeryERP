@@ -35,6 +35,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.Switch
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.filled.Block
+import com.bakery.erp.ui.theme.BrandColors
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -76,6 +82,7 @@ fun UserPermissionsScreen(
         mutableStateOf(user?.permissions?.toSet() ?: emptySet())
     }
     var isDeviceAccount by remember(user) { mutableStateOf(user?.isDeviceAccount ?: false) }
+    var confirmDeactivate by remember { mutableStateOf(false) }
 
     LaunchedEffect(companyId) {
         if (companyId.isNotEmpty() && branchState.branchList.isEmpty()) {
@@ -225,7 +232,50 @@ fun UserPermissionsScreen(
                             } else {
                                 Icon(Icons.Default.Save, null)
                                 Spacer(Modifier.width(8.dp))
-                                Text("Guardar y aprobar acceso", fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    if (user.isApproved) "Guardar cambios" else "Guardar y aprobar acceso",
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+
+                        // ── Desactivar / reactivar ────────────────────────────
+                        // Solo OWNER/ADMIN (las reglas lo exigen igual), nunca a uno mismo ni a
+                        // un OWNER: quitarle el acceso al dueño se hace a mano, con cuidado.
+                        val me = authState.accountUser
+                        val canToggle = user.isApproved && user.role != UserRole.OWNER && me != null &&
+                            me.id != user.id && (me.role == UserRole.OWNER || me.role == UserRole.ADMIN)
+                        if (canToggle) {
+                            PermDivider()
+                            PermSection("Acceso a la app")
+                            Text(
+                                if (user.isActive)
+                                    "Al desactivarla, esta cuenta no podrá entrar ni ver datos en ningún equipo. " +
+                                        "Su historial (ventas, cajas, compras) queda intacto y se puede reactivar."
+                                else
+                                    "Esta cuenta está desactivada: no puede entrar a la app.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (user.isActive) {
+                                OutlinedButton(
+                                    onClick = { confirmDeactivate = true },
+                                    enabled = !state.isLoading,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = BrandColors.Danger)
+                                ) {
+                                    Icon(Icons.Default.Block, null)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Desactivar cuenta", fontWeight = FontWeight.SemiBold)
+                                }
+                            } else {
+                                Button(
+                                    onClick = { viewModel.setUserActive(companyId, user.id, true) },
+                                    enabled = !state.isLoading,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Reactivar cuenta", fontWeight = FontWeight.SemiBold)
+                                }
                             }
                         }
 
@@ -234,6 +284,26 @@ fun UserPermissionsScreen(
                 }
             }
         }
+    }
+
+    if (confirmDeactivate && user != null) {
+        AlertDialog(
+            onDismissRequest = { confirmDeactivate = false },
+            title = { Text("¿Desactivar a ${user.displayName.ifEmpty { user.email }}?") },
+            text = {
+                Text(
+                    "No podrá entrar a la app desde ningún teléfono ni computadora. Si ahora mismo " +
+                        "la tiene abierta, deja de ver datos al instante. Puedes reactivarla cuando quieras."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDeactivate = false
+                    viewModel.setUserActive(companyId, user.id, false)
+                }) { Text("Desactivar", color = BrandColors.Danger) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDeactivate = false }) { Text("Cancelar") } }
+        )
     }
 }
 

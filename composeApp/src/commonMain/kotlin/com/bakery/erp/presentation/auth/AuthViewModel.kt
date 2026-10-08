@@ -9,6 +9,7 @@ import com.bakery.erp.domain.GoogleSignInCancelledException
 import com.bakery.erp.domain.GoogleSignInException
 import com.bakery.erp.model.ExternalCustomer
 import com.bakery.erp.model.OperatorSession
+import com.bakery.erp.model.canEnter
 import com.bakery.erp.model.effectiveUser
 import com.bakery.erp.model.requiresOperator
 import com.bakery.erp.model.User
@@ -74,7 +75,7 @@ class AuthViewModel(
                     }
                     is AuthState.Authenticated -> {
                         val hasOrg = state.user.orgId.isNotEmpty()
-                        val approved = state.user.isApproved
+                        val approved = state.user.canEnter
                         _uiState.update {
                             it.copy(
                                 isLoading = false,
@@ -239,7 +240,7 @@ class AuthViewModel(
                     // Actualiza el estado directamente para evitar la race condition
                     // entre signInWithCredential y authStateChanged de Firebase
                     val hasOrg = user.orgId.isNotEmpty()
-                    val approved = user.isApproved
+                    val approved = user.canEnter
                     _uiState.update {
                         it.copy(
                             isLoading = false,
@@ -355,7 +356,7 @@ class AuthViewModel(
         viewModelScope.launch {
             val user = repository.getCurrentUser() ?: return@launch
             val hasOrg = user.orgId.isNotEmpty()
-            val approved = user.isApproved
+            val approved = user.canEnter
             _uiState.update {
                 it.copy(
                     user = user,

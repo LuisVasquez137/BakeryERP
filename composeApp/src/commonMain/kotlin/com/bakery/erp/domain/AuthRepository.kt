@@ -52,6 +52,12 @@ interface AuthRepository {
     ): Result<Unit>
 
     /**
+     * Activa o desactiva una cuenta sin tocar nada más. Desactivada no entra a la app ni
+     * lee datos (firestore.rules), pero su historial queda intacto y se puede reactivar.
+     */
+    suspend fun setUserActive(userId: String, active: Boolean): Result<Unit>
+
+    /**
      * Paso 1 de alta de revendedor: crea la cuenta Firebase y el User con rol
      * RESELLER y `isApproved=false`. El User queda vinculado a la organización
      * pero todavía sin ExternalCustomer asociado — eso se completa en una

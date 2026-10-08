@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.time.Clock as KotlinClock
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -133,7 +134,9 @@ fun ProductionLotDetailScreen(
      * porque el panadero saca la harina de la mesa desde acá y no desde Insumos: es
      * la pantalla que ya tiene abierta con las manos en la masa.
      */
-    plantIssueViewModel: PlantIssueViewModel
+    plantIssueViewModel: PlantIssueViewModel,
+    /** Equipo compartido: confirmar con PIN a quien inicia el lote. */
+    operatorLockViewModel: com.bakery.erp.presentation.operator.OperatorLockViewModel? = null
 ) {
     val state by viewModel.uiState.collectAsState()
     val productState by productViewModel.uiState.collectAsState()
@@ -177,6 +180,9 @@ fun ProductionLotDetailScreen(
 
     // Mantener pantalla encendida mientras los panaderos tengan la lista abierta.
     KeepScreenOn()
+    // El panadero mira la receta sin tocar la tablet: aquí no se bloquea por inactividad;
+    // se identifica con su PIN al iniciar el lote (StartShiftDialog).
+    com.bakery.erp.ui.WatchedScreenIdleLock()
 
     LaunchedEffect(lotId) {
         if (companyId.isNotEmpty()) viewModel.observeLotDetail(companyId, lotId)
@@ -360,6 +366,8 @@ fun ProductionLotDetailScreen(
     // hasta que el panadero acuse el inicio del turno para que el cronómetro
     // arranque y quede registro auditable de la hora de inicio.
     var isStartingLot by remember { mutableStateOf(false) }
+    var startPinError by remember { mutableStateOf<String?>(null) }
+    val startScope = androidx.compose.runtime.rememberCoroutineScope()
 
     // Confirmación de cierre temprano (<1h de trabajo) para evitar cierres accidentales.
     var pendingEarlyComplete by remember { mutableStateOf<Int?>(null) }
@@ -546,13 +554,32 @@ fun ProductionLotDetailScreen(
                     .padding(padding)
                     .background(BrandColors.Ivory)
             ) {
+                // Equipo compartido: el lote queda a nombre de quien lo inicia, así que se
+                // confirma con su PIN. Después la pantalla no se bloquea por inactividad.
+                val operator = authState.operator
+                val lockVm = operatorLockViewModel
                 StartShiftDialog(
                     lot = lot,
                     isStarting = isStartingLot,
-                    onStart = {
+                    operatorName = operator?.name?.takeIf { lockVm != null },
+                    pinError = startPinError,
+                    onStart = { pin ->
                         isStartingLot = true
-                        viewModel.startLot(companyId, lot.id, user)
-                    }
+                        startPinError = null
+                        if (operator != null && lockVm != null) {
+                            startScope.launch {
+                                lockVm.confirmPin(companyId, operator.employeeId, pin)
+                                    .onSuccess { viewModel.startLot(companyId, lot.id, user) }
+                                    .onFailure { e ->
+                                        startPinError = e.message ?: "No se pudo verificar el PIN"
+                                        isStartingLot = false
+                                    }
+                            }
+                        } else {
+                            viewModel.startLot(companyId, lot.id, user)
+                        }
+                    },
+                    onNotMe = { authViewModel.lockOperator() }
                 )
             }
             // Al pasar a IN_PROGRESS el dialog se desmonta automáticamente.
@@ -1521,8 +1548,15 @@ private fun LateOrderCard(
 private fun StartShiftDialog(
     lot: ProductionLot,
     isStarting: Boolean,
-    onStart: () -> Unit
+    /** Persona identificada en un equipo compartido: se le pide su PIN. Null = cuenta propia. */
+    operatorName: String? = null,
+    pinError: String? = null,
+    onStart: (pin: String) -> Unit,
+    onNotMe: () -> Unit = {}
 ) {
+    // remember, no rememberSaveable: un PIN no se guarda en el estado de la actividad.
+    var pin by remember { mutableStateOf("") }
+    LaunchedEffect(pinError) { if (pinError != null) pin = "" }
     AlertDialog(
         onDismissRequest = { /* No se puede cerrar — solo iniciar o volver con back. */ },
         title = {
@@ -1573,12 +1607,34 @@ private fun StartShiftDialog(
                         )
                     }
                 }
+                if (operatorName != null) {
+                    Spacer(Modifier.height(4.dp))
+                    Text("Inicia: $operatorName", fontWeight = FontWeight.SemiBold, color = BrandColors.Primary)
+                    OutlinedTextField(
+                        value = pin,
+                        onValueChange = { v -> pin = v.filter { it.isDigit() }.take(6) },
+                        label = { Text("Tu PIN") },
+                        singleLine = true,
+                        enabled = !isStarting,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (pinError != null) {
+                        Text(pinError, color = BrandColors.Danger, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                    }
+                    TextButton(onClick = onNotMe, enabled = !isStarting) {
+                        Text("No soy $operatorName")
+                    }
+                }
             }
         },
         confirmButton = {
             Button(
-                onClick = onStart,
-                enabled = !isStarting,
+                onClick = { onStart(pin) },
+                enabled = !isStarting && (operatorName == null || pin.length >= 4),
                 modifier = Modifier.fillMaxWidth().height(48.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1565C0))
             ) {

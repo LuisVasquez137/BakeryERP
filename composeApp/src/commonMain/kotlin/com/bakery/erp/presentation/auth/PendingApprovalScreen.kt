@@ -39,11 +39,19 @@ import com.bakery.erp.ui.theme.BrandColors
 @Composable
 fun PendingApprovalScreen(viewModel: AuthViewModel) {
     val state by viewModel.uiState.collectAsState()
+    // Aprobado alguna vez pero apagado por el dueño: no es "esperar", es "te quitaron el acceso".
+    val deactivated = state.user?.let { it.isApproved && !it.isActive } == true
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Esperando aprobación", color = Color.White, fontWeight = FontWeight.SemiBold) },
+                title = {
+                    Text(
+                        if (deactivated) "Acceso desactivado" else "Esperando aprobación",
+                        color = Color.White,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                },
                 actions = {
                     IconButton(onClick = { viewModel.signOut() }) {
                         Icon(
@@ -75,7 +83,7 @@ fun PendingApprovalScreen(viewModel: AuthViewModel) {
             Spacer(Modifier.height(24.dp))
 
             Text(
-                text = "Cuenta pendiente de aprobación",
+                text = if (deactivated) "Esta cuenta fue desactivada" else "Cuenta pendiente de aprobación",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center,
@@ -85,7 +93,10 @@ fun PendingApprovalScreen(viewModel: AuthViewModel) {
             Spacer(Modifier.height(12.dp))
 
             Text(
-                text = "El administrador de tu panadería debe activar tu acceso. Una vez aprobado, podrás usar la app normalmente.",
+                text = if (deactivated)
+                    "El dueño de la panadería le quitó el acceso a esta cuenta. Si es un error, pídele que la vuelva a activar."
+                else
+                    "El administrador de tu panadería debe activar tu acceso. Una vez aprobado, podrás usar la app normalmente.",
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
