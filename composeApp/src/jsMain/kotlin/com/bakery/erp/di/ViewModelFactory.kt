@@ -209,6 +209,9 @@ actual fun createAppViewModels(): AppViewModels {
             finishedStockRepo, breadCountRepo, branchRepo
         ),
         branchSupplyReport = BranchSupplyReportViewModel(productionRepo, dispatchRepo, saleRepo, branchRepo),
+        productCost = com.bakery.erp.presentation.reports.productcost.ProductCostViewModel(
+            productRepoJs, recipeRepo, ingredientRepo, preparationRepo, purchaseRepo
+        ),
         customerOrder = CustomerOrderViewModel(
             customerOrderRepo, externalCustomerRepo, productionRepo,
             productRepoJs, branchRepo, priceListRepo

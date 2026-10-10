@@ -93,3 +93,15 @@ Banner rotatorio cada 6s entre alertas. Tap → navega a módulo correspondiente
 No hay colección `alerts/` en Firestore — son proyecciones derivadas. Evita sincronización y stale data.
 
 ---
+
+## Costo por producto (oct 2026)
+
+Paso 3 de `arquitectura/propuesta-rentabilidad-por-sucursal.md`. Home → "Costo por producto" (permiso `VIEW_FINANCIAL_REPORT`: el costo es dato financiero). Cálculo puro en `domain/MaterialCost.kt` (pruebas en `MaterialCostTest`), pantalla en `presentation/reports/productcost/`.
+
+- **Todo en Q por gramo.** La receta es % del panadero (razón entre pesos) y el producto declara peso en crudo: el gramo es la única unidad común. Masa: `Σ(% × Q/g) ÷ Σ%`, la misma proporción de la receta escalada.
+- **Precio del insumo** (`ingredientGramPrices`): promedio ponderado por cantidad de las líneas INGREDIENT de las compras de los últimos 90 días; si no hubo compra, la presentación predeterminada. Sin ninguno, o con unidad que no pasa a gramos ("Bote"), queda FUERA del mapa — no se inventa.
+- **Producto** (`productMaterialCost`) = peso en crudo × Q/g de su receta (por `yields`) + `doughFillings` × Q/g de esa otra masa + `decorations` × Q/g (preparación: costo del lote ÷ peso; o insumo comprado). Solo productos propios activos; reventa y productos ligados a insumo quedan fuera (su costo es el de compra).
+- **Huecos visibles, no escondidos**: sin receta / sin peso en crudo / receta vacía → sin costo (pestaña Pendientes). Insumo sin precio → cuenta Q0, el costo sale pero marcado "corto" y nombra el insumo (pestaña Insumos ordena por productos afectados).
+- **Lecturas**: `getRecipesWithYields` no trae componentes → `getRecipe` solo de las recetas que producen algo o son masa de relleno; `getLines` solo de compras del periodo cuyo `itemIds` trae materia prima.
+- Esponja/prefermento no se costea aparte: son los mismos insumos de la masa.
+- Datos al 10 oct 2026: pan 54/60 con receta y 55 con peso; repostería y pastelería sin peso en crudo y con recetas "de relleno" (solo harina+agua) → carga de datos pendiente antes del paso 4.

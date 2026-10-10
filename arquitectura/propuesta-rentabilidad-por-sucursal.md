@@ -293,7 +293,7 @@ mientras esos datos se juntan se construye el resto.
 - Va antes que el costo porque **cualquier tienda que empiece a cobrar lo necesita el primer
   día**, y los revendedores compran en todas.
 
-### Paso 3 — Costo de materia prima por producto (pan y repostería)
+### Paso 3 — Costo de materia prima por producto (pan y repostería) — HECHO (cálculo y pantalla) 10 oct 2026, ver `reportes.md` "Costo por producto"; falta la carga de datos de repostería
 - Precio promedio de cada insumo, sacado de las compras.
 - Receta × precio = costo de materia prima de cada masa → por pan, según su peso en crudo.
 - Pantalla "Costo por producto" con alertas: productos sin receta, insumos sin precio.

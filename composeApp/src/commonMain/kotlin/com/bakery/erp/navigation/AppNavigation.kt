@@ -481,6 +481,7 @@ sealed class Screen(val route: String) {
     object ProductionReport : Screen("reports/production")
     object FinancialReport  : Screen("reports/financial")
     object BranchSupplyReport : Screen("reports/branch-supply")
+    object ProductCostReport : Screen("reports/product-cost")
 
     // Pedidos de clientes
     object CustomerOrderList : Screen("customerOrders")
@@ -566,6 +567,7 @@ fun AppNavigation(
     val productionReportViewModel = vms.productionReport
     val financialReportViewModel = vms.financialReport
     val branchSupplyReportViewModel = vms.branchSupplyReport
+    val productCostViewModel = vms.productCost
     val customerOrderViewModel = vms.customerOrder
     val externalCustomerViewModel = vms.externalCustomer
     val organizationSettingsViewModel = vms.organizationSettings
@@ -834,6 +836,7 @@ fun AppNavigation(
                 onNavigateToProductionReport = { navController.navigate(Screen.ProductionReport.route) },
                 onNavigateToFinancialReport = { navController.navigate(Screen.FinancialReport.route) },
                 onNavigateToBranchSupplyReport = { navController.navigate(Screen.BranchSupplyReport.route) },
+                onNavigateToProductCostReport = { navController.navigate(Screen.ProductCostReport.route) },
                 onNavigateToCustomerOrders = { navController.navigate(Screen.CustomerOrderList.route) },
                 onNavigateToOrganizationSettings = { navController.navigate(Screen.OrganizationSettings.route) },
                 onNavigateToFelSetup = { navController.navigate(Screen.FelSetup.route) },
@@ -2360,6 +2363,20 @@ fun AppNavigation(
                     onNavigateBack = { navController.popBackStack() },
                     viewModel = branchSupplyReportViewModel,
                     productionViewModel = productionViewModel
+                )
+            }
+        }
+
+        composable(Screen.ProductCostReport.route) {
+            // Costo = dato financiero: mismo permiso que el reporte financiero.
+            RequirePermission(state.user, Permission.VIEW_FINANCIAL_REPORT,
+                onBack = { navController.popBackStack() }) {
+                com.bakery.erp.presentation.reports.productcost.ProductCostScreen(
+                    user = state.user,
+                    onNavigateBack = { navController.popBackStack() },
+                    onOpenProduct = { id -> navController.navigate(Screen.ProductDetail.route(id)) },
+                    onOpenIngredient = { id -> navController.navigate(Screen.IngredientDetail.route(id)) },
+                    viewModel = productCostViewModel
                 )
             }
         }
