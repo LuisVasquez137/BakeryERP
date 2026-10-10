@@ -97,6 +97,19 @@ kotlin {
             // descarga bajo demanda en vez de sumar ~3 MB al APK. Mismo criterio que la
             // foto de factura, que usa ACTION_IMAGE_CAPTURE en vez de abrir la cámara.
             implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
+            // Selfie del kiosko de asistencia. Aquí sí hace falta cámara propia (CameraX):
+            // con la app de cámara del sistema se le puede tomar foto a otra foto, y la
+            // detección de cara y parpadeo tiene que correr sobre la vista previa. Detector de
+            // ML Kit "unbundled": el modelo lo baja Play Services, no engorda el APK.
+            implementation("androidx.camera:camera-core:1.4.0")
+            implementation("androidx.camera:camera-camera2:1.4.0")
+            implementation("androidx.camera:camera-lifecycle:1.4.0")
+            implementation("androidx.camera:camera-view:1.4.0")
+            // ProcessCameraProvider.getInstance devuelve un ListenableFuture de Guava. Guava
+            // ya viaja en el APK (lo traen Firebase/Play Services) pero no en el classpath de
+            // compilación; se declara la MISMA versión para no sumar peso.
+            implementation("com.google.guava:guava:32.1.3-android")
+            implementation("com.google.android.gms:play-services-mlkit-face-detection:17.1.0")
         }
         commonMain.dependencies {
             implementation(libs.compose.runtime)
@@ -130,8 +143,8 @@ android {
         applicationId = "com.bakery.erp"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 17
-        versionName = "17"
+        versionCode = 21
+        versionName = "21"
     }
     packaging {
         resources {

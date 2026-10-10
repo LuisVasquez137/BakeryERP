@@ -135,7 +135,7 @@ nonWasmMain/  data/ (impls compartidas), di/AppModule.kt
 | `arquitectura/pos-ventas.md` | Venta por grupo de precio, control de cajas (horarios, bitácora, cadena de turnos), cobro, último cobro, créditos, anticipos |
 | `arquitectura/fel.md` | FEL Guatemala / Digifact: servidor, configuración, facturar al cobrar, ticket con QR, anular/reemitir, restaurante (ComandaYa) |
 | `arquitectura/reportes.md` | Agregaciones `aggregateXxxInRange`, reportes, Home y banner de alertas |
-| `arquitectura/otros.md` | Notificaciones/push, activos fijos |
+| `arquitectura/otros.md` | Notificaciones/push, activos fijos, selfie de asistencia |
 | `arquitectura/seguridad-accesos.md` | Reglas Firestore/Storage (se publican desde el repo, pruebas en `rules-tests/`), roles, plan cuenta de sucursal + PIN |
 | `arquitectura/decisiones-y-paleta.md` | Paleta completa, `BrandChip`, colores del Home, decisiones de diseño históricas |
 
@@ -158,7 +158,7 @@ nonWasmMain/  data/ (impls compartidas), di/AppModule.kt
 Email/password + Google. Multi-empresa: al registrarse crea Organization; `JoinOrgScreen` para unirse por código. Roles: OWNER, ADMIN, MANAGER, EMPLOYEE.
 
 ### Empleados
-CRUD perfil + documentos + historial + nómina. Modo kiosko (reloj de turno biométrico en tablet). Historial de asistencia con mes/año navegable.
+CRUD perfil + documentos + historial + nómina. Modo kiosko con selfie automática al marcar (cámara frontal, borrado a 60 días; ver `arquitectura/otros.md`). Historial de asistencia con mes/año navegable.
 
 ---
 
@@ -288,6 +288,7 @@ NUNCA usar estas APIs en `commonMain` o `nonWasmMain`:
 | Distribución | `DISPATCH_PACK`, `MANAGE_DELIVERY_RUNS`, `DRIVE_DELIVERY`, `RECEIVE_DISPATCH`, `MANAGE_FINISHED_STOCK`, `VIEW_DISPATCH_VALUE` |
 | Gastos | `VIEW_EXPENSES`, `ADD_VARIABLE_EXPENSE`, `ADD_GENERAL_EXPENSE`, `MANAGE_FIXED_BUDGET` |
 | Administración | `VIEW_ALL_BRANCHES`, `MANAGE_BRANCHES`, `MANAGE_USERS`, `MANAGE_EMPLOYEES` |
+| Colaboradores (una por pestaña de la ficha; `MANAGE_EMPLOYEES` = lista + Perfil + alta) | `VIEW_EMPLOYEE_SALARY` (Nómina y salario), `VIEW_EMPLOYEE_ATTENDANCE`, `VIEW_EMPLOYEE_DOCUMENTS`, `VIEW_EMPLOYEE_HISTORY`, `VIEW_EMPLOYEE_CREDIT`, `VIEW_EMPLOYEE_ACCESS` |
 | Activos Fijos | `VIEW_ASSETS`, `EDIT_ASSETS`, `MANAGE_ASSETS`, `ADD_ASSET_HISTORY` |
 
 Lista completa en `model/Permission.kt`.

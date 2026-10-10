@@ -77,6 +77,27 @@ class EmployeeAccessViewModel(
         }
     }
 
+    /**
+     * Lo que se dejó listo en el alta: se aplica en cuanto la ficha existe (el PIN lo guarda la
+     * Cloud Function, que necesita la ficha). Ya se validó el PIN en el formulario.
+     */
+    fun setupNewEmployee(companyId: String, employeeId: String, permissions: Set<String>, pin: String?, typedByEmployee: Boolean) {
+        viewModelScope.launch {
+            val problems = buildList {
+                if (permissions.isNotEmpty()) runCatching {
+                    employeeRepository.updateEmployeePermissions(companyId, employeeId, permissions.toList())
+                }.onFailure { add("los permisos") }
+                if (pin != null) runCatching {
+                    accessRepository.setPin(companyId, employeeId, pin, typedByEmployee)
+                }.onFailure { add("el PIN") }
+            }
+            if (problems.isNotEmpty()) _uiState.update {
+                it.copy(error = "No se pudo guardar ${problems.joinToString(" ni ")}. Hazlo desde la pestaña Acceso.")
+            }
+            load(companyId, employeeId)
+        }
+    }
+
     fun clearPinSaved() = _uiState.update { it.copy(pinSaved = false) }
     fun clearMessage() = _uiState.update { it.copy(message = null) }
     fun clearError() = _uiState.update { it.copy(error = null) }

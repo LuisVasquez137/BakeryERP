@@ -1,4 +1,4 @@
-﻿package com.bakery.erp.presentation.employees
+package com.bakery.erp.presentation.employees
 
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.model.Permission
@@ -97,6 +97,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.AttendanceRecord
+import com.bakery.erp.model.SelfieCheck
+import com.bakery.erp.model.hasSplitShift
+import com.bakery.erp.model.scheduleLabel
 import com.bakery.erp.model.AttendanceType
 import com.bakery.erp.model.DocumentType
 import com.bakery.erp.model.Employee
@@ -156,9 +159,19 @@ fun EmployeeDetailScreen(
     }
 
     // Por nombre y no por posición: "Créditos" y "Acceso" aparecen según lo que llegue.
-    val tabs = listOfNotNull("Perfil", "Asistencia", "Nómina", "Documentos", "Historial",
-        "Créditos".takeIf { creditViewModel != null },
-        "Acceso".takeIf { accessViewModel != null })
+    // Cada pestaña (menos Perfil) pide su propio permiso; el dueño las ve todas.
+    // Nómina = cuánto gana: VIEW_EMPLOYEE_SALARY, que también esconde el salario del Perfil.
+    fun can(p: Permission) = authState.user?.hasPermission(p) == true
+    val canSeeSalary = can(Permission.VIEW_EMPLOYEE_SALARY)
+    val tabs = listOfNotNull(
+        "Perfil",
+        "Asistencia".takeIf { can(Permission.VIEW_EMPLOYEE_ATTENDANCE) },
+        "Nómina".takeIf { canSeeSalary },
+        "Documentos".takeIf { can(Permission.VIEW_EMPLOYEE_DOCUMENTS) },
+        "Historial".takeIf { can(Permission.VIEW_EMPLOYEE_HISTORY) },
+        "Créditos".takeIf { creditViewModel != null && can(Permission.VIEW_EMPLOYEE_CREDIT) },
+        "Acceso".takeIf { accessViewModel != null && can(Permission.VIEW_EMPLOYEE_ACCESS) }
+    )
     val currentTab = tabs.getOrElse(selectedTab) { tabs.first() }
 
     LaunchedEffect(currentTab, companyId) {
@@ -221,10 +234,10 @@ fun EmployeeDetailScreen(
 
             else -> Column(modifier = Modifier.fillMaxSize().padding(padding)) {
                 // Deslizable: con seis pestañas repartidas a lo fijo los títulos no caben en teléfono.
-                ScrollableTabRow(selectedTabIndex = selectedTab, edgePadding = 8.dp) {
+                ScrollableTabRow(selectedTabIndex = tabs.indexOf(currentTab), edgePadding = 8.dp) {
                     tabs.forEachIndexed { index, title ->
                         Tab(
-                            selected = selectedTab == index,
+                            selected = currentTab == title,
                             onClick = { selectedTab = index },
                             text = { Text(title, style = MaterialTheme.typography.labelMedium) }
                         )
@@ -232,7 +245,7 @@ fun EmployeeDetailScreen(
                 }
 
                 when (currentTab) {
-                    "Perfil" -> ProfileTab(employee = employee)
+                    "Perfil" -> ProfileTab(employee = employee, showSalary = canSeeSalary)
                     "Asistencia" -> AttendanceTab(
                         employee = employee,
                         companyId = companyId,
@@ -297,7 +310,7 @@ fun EmployeeDetailScreen(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ProfileTab(employee: Employee) {
+private fun ProfileTab(employee: Employee, showSalary: Boolean) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
     Column(
         modifier = Modifier
@@ -381,8 +394,9 @@ private fun ProfileTab(employee: Employee) {
                     val dayNames = mapOf(1 to "Lun", 2 to "Mar", 3 to "Mié", 4 to "Jue", 5 to "Vie", 6 to "Sáb", 7 to "Dom")
                     ProfileRow("Días", employee.workDays.mapNotNull { dayNames[it] }.joinToString(", "))
                 }
-                if (employee.startTime.isNotBlank() && employee.endTime.isNotBlank()) {
-                    ProfileRow("Horario", "${employee.startTime} – ${employee.endTime}")
+                val schedule = employee.scheduleLabel()
+                if (schedule.isNotBlank()) {
+                    ProfileRow(if (employee.hasSplitShift) "Turno mixto" else "Horario", schedule)
                 }
             }
         }
@@ -391,7 +405,7 @@ private fun ProfileTab(employee: Employee) {
             if (employee.paymentType.isNotBlank()) ProfileRow("Tipo de pago", employee.paymentType)
             if (employee.bank.isNotBlank()) ProfileRow("Banco", employee.bank)
             if (employee.bankAccount.isNotBlank()) ProfileRow("Cuenta", employee.bankAccount)
-            if (employee.baseSalary > 0) ProfileRow("Salario base", "Q${employee.baseSalary.fmt(2)}")
+            if (showSalary && employee.baseSalary > 0) ProfileRow("Salario base", "Q${employee.baseSalary.fmt(2)}")
         }
 
         if (employee.notes.isNotBlank()) {
@@ -625,20 +639,29 @@ private fun AttendanceTableRow(record: AttendanceRecord) {
         ) {
             Column(modifier = Modifier.weight(2f)) {
                 Text(formatEmployeeDate(record.date), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                if (record.shiftNumber == 2) {
+                    Text("2do turno", style = MaterialTheme.typography.labelSmall, color = PrimaryBlue)
+                }
                 if (isLate) {
                     Text(formatLateTime(record.lateMinutes), style = MaterialTheme.typography.labelSmall, color = ErrorRed, fontWeight = FontWeight.SemiBold)
                 }
             }
-            Text(
-                if (record.clockIn > 0) formatTime(record.clockIn) else "—",
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.weight(1.5f)
-            )
-            Text(
-                if (record.clockOut > 0) formatTime(record.clockOut) else "—",
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.weight(1.5f)
-            )
+            Row(
+                modifier = Modifier.weight(1.5f),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(if (record.clockIn > 0) formatTime(record.clockIn) else "—", style = MaterialTheme.typography.bodySmall)
+                AttendanceSelfieThumb("entrada", record.clockIn, record.clockInSelfieCheck, record.clockInPhotoUrl)
+            }
+            Row(
+                modifier = Modifier.weight(1.5f),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(if (record.clockOut > 0) formatTime(record.clockOut) else "—", style = MaterialTheme.typography.bodySmall)
+                AttendanceSelfieThumb("salida", record.clockOut, record.clockOutSelfieCheck, record.clockOutPhotoUrl)
+            }
             Text(
                 if (record.hoursWorked > 0) "${record.hoursWorked.fmt(1)}h" else "—",
                 style = MaterialTheme.typography.bodySmall,
@@ -660,7 +683,8 @@ private fun AttendanceTableRow(record: AttendanceRecord) {
 
 @Composable
 private fun AttendanceKpiRow(records: List<AttendanceRecord>) {
-    val present = records.count { it.type == AttendanceType.PRESENT }
+    // Días, no marcas: un turno mixto deja dos marcas el mismo día.
+    val present = records.filter { it.type == AttendanceType.PRESENT }.map { it.date }.distinct().size
     val absent = records.count { it.type == AttendanceType.ABSENT }
     val lateCount = records.count { it.lateMinutes > 0 }
     val totalHours = records.sumOf { it.hoursWorked }
@@ -747,7 +771,11 @@ private fun AttendanceRecordCard(record: AttendanceRecord) {
     ) {
         Row(modifier = Modifier.padding(12.dp).fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column {
-                Text(formatEmployeeDate(record.date), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                Text(
+                    formatEmployeeDate(record.date) + if (record.shiftNumber == 2) " · 2do turno" else "",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium
+                )
                 if (record.clockIn > 0) {
                     Text(
                         "${formatTime(record.clockIn)}${if (record.clockOut > 0) " – ${formatTime(record.clockOut)}" else ""}",
@@ -757,6 +785,16 @@ private fun AttendanceRecordCard(record: AttendanceRecord) {
                 }
                 if (isLate) {
                     Text(formatLateTime(record.lateMinutes), style = MaterialTheme.typography.labelSmall, color = ErrorRed, fontWeight = FontWeight.SemiBold)
+                }
+                if (record.clockInSelfieCheck != SelfieCheck.NONE || record.clockOutSelfieCheck != SelfieCheck.NONE) {
+                    Row(
+                        modifier = Modifier.padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        AttendanceSelfieThumb("entrada", record.clockIn, record.clockInSelfieCheck, record.clockInPhotoUrl)
+                        AttendanceSelfieThumb("salida", record.clockOut, record.clockOutSelfieCheck, record.clockOutPhotoUrl)
+                    }
                 }
             }
             Column(horizontalAlignment = Alignment.End) {
@@ -936,6 +974,19 @@ private fun PayrollRecordCard(
 
 // ── Tab Documentos ────────────────────────────────────────────────────────────
 
+/** Tipos que se pueden subir, con su nombre en pantalla. También los usa el alta (EmployeeFormScreen). */
+internal val employeeDocumentTypes = listOf(
+    DocumentType.CONTRACT to "Contrato",
+    DocumentType.DPI to "DPI",
+    DocumentType.CV to "Currículum (CV)",
+    DocumentType.HEALTH_CARD to "Tarjeta de salud",
+    DocumentType.CERTIFICATION to "Tarjeta manip. alimentos",
+    DocumentType.BACKGROUND_CHECK to "Antecedentes penales",
+    DocumentType.POLICE_RECORD to "Antecedentes policiacos",
+    DocumentType.SIGNATURE to "Firma",
+    DocumentType.OTHER to "Otro documento"
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DocumentsTab(
@@ -947,17 +998,7 @@ private fun DocumentsTab(
     var selectedDocType by remember { mutableStateOf(DocumentType.OTHER) }
     var docTypeExpanded by remember { mutableStateOf(false) }
 
-    val documentTypes = listOf(
-        DocumentType.CONTRACT to "Contrato",
-        DocumentType.DPI to "DPI",
-        DocumentType.CV to "Currículum (CV)",
-        DocumentType.HEALTH_CARD to "Tarjeta de salud",
-        DocumentType.CERTIFICATION to "Tarjeta manip. alimentos",
-        DocumentType.BACKGROUND_CHECK to "Antecedentes penales",
-        DocumentType.POLICE_RECORD to "Antecedentes policiacos",
-        DocumentType.SIGNATURE to "Firma",
-        DocumentType.OTHER to "Otro documento"
-    )
+    val documentTypes = employeeDocumentTypes
 
     Column(modifier = Modifier.fillMaxSize()) {
         when {

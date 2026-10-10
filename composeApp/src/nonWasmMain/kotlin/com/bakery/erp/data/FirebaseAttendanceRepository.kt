@@ -3,6 +3,7 @@
 import com.bakery.erp.domain.AttendanceRepository
 import com.bakery.erp.model.AttendanceRecord
 import com.bakery.erp.model.AttendanceType
+import com.bakery.erp.model.SelfieCheck
 import dev.gitlive.firebase.firestore.DocumentSnapshot
 import dev.gitlive.firebase.firestore.FirebaseFirestore
 import dev.gitlive.firebase.firestore.Timestamp
@@ -43,8 +44,16 @@ class FirebaseAttendanceRepository(
         }.getOrNull()
     }
 
+    override suspend fun getTodayRecords(companyId: String, employeeId: String): List<AttendanceRecord> {
+        val today = startOfDay(Clock.System.now().toEpochMilliseconds())
+        return col(companyId, employeeId).get().documents
+            .map { it.toRecord() }
+            .filter { it.date >= today }
+            .sortedBy { it.clockIn }
+    }
+
     override suspend fun clockIn(
-        companyId: String, employeeId: String, startTime: String
+        companyId: String, employeeId: String, startTime: String, selfieCheck: SelfieCheck, shiftNumber: Int
     ): AttendanceRecord {
         val now = Clock.System.now().toEpochMilliseconds()
         val docRef = col(companyId, employeeId).document
@@ -57,16 +66,18 @@ class FirebaseAttendanceRepository(
             clockOut = 0L,
             type = AttendanceType.PRESENT,
             lateMinutes = lateMinutes,
-            verificationMethod = "biometric",
+            verificationMethod = verificationMethodFor(selfieCheck),
             createdAt = now,
-            updatedAt = now
+            updatedAt = now,
+            clockInSelfieCheck = selfieCheck,
+            shiftNumber = shiftNumber
         )
         docRef.set(record.toMap())
         return record
     }
 
     override suspend fun clockOut(
-        companyId: String, employeeId: String, recordId: String
+        companyId: String, employeeId: String, recordId: String, selfieCheck: SelfieCheck
     ): AttendanceRecord {
         val doc = col(companyId, employeeId).document(recordId)
         val existing = doc.get().toRecord()
@@ -77,10 +88,24 @@ class FirebaseAttendanceRepository(
             clockOut = now,
             hoursWorked = worked,
             overtimeHours = overtime,
-            updatedAt = now
+            updatedAt = now,
+            clockOutSelfieCheck = selfieCheck
         )
         doc.set(updated.toMap())
         return updated
+    }
+
+    override suspend fun attachSelfiePhoto(
+        companyId: String, employeeId: String, recordId: String, isClockIn: Boolean, photoUrl: String
+    ) {
+        val field = if (isClockIn) "clockInPhotoUrl" else "clockOutPhotoUrl"
+        col(companyId, employeeId).document(recordId).update(field to photoUrl)
+    }
+
+    private fun verificationMethodFor(check: SelfieCheck): String = when (check) {
+        SelfieCheck.NONE -> "manual"
+        SelfieCheck.SKIPPED -> "sin_foto"
+        else -> "selfie"
     }
 
     override suspend fun saveAttendance(
@@ -137,7 +162,12 @@ class FirebaseAttendanceRepository(
         "verificationMethod" to verificationMethod,
         "notes" to notes,
         "createdAt" to createdAt,
-        "updatedAt" to updatedAt
+        "updatedAt" to updatedAt,
+        "clockInSelfieCheck" to clockInSelfieCheck.name,
+        "clockInPhotoUrl" to clockInPhotoUrl,
+        "clockOutSelfieCheck" to clockOutSelfieCheck.name,
+        "clockOutPhotoUrl" to clockOutPhotoUrl,
+        "shiftNumber" to shiftNumber
     )
 
     private fun DocumentSnapshot.toRecord(): AttendanceRecord {
@@ -157,9 +187,21 @@ class FirebaseAttendanceRepository(
             verificationMethod = get<String?>("verificationMethod") ?: "",
             notes = get<String?>("notes") ?: "",
             createdAt = readMillis("createdAt"),
-            updatedAt = readMillis("updatedAt")
+            updatedAt = readMillis("updatedAt"),
+            clockInSelfieCheck = readSelfieCheck("clockInSelfieCheck"),
+            clockInPhotoUrl = runCatching { get<String?>("clockInPhotoUrl") }.getOrNull() ?: "",
+            clockOutSelfieCheck = readSelfieCheck("clockOutSelfieCheck"),
+            clockOutPhotoUrl = runCatching { get<String?>("clockOutPhotoUrl") }.getOrNull() ?: "",
+            shiftNumber = (runCatching { get<Long?>("shiftNumber")?.toInt() }.getOrNull()
+                ?: runCatching { get<Double?>("shiftNumber")?.toInt() }.getOrNull()
+                ?: 1)
         )
     }
+
+    private fun DocumentSnapshot.readSelfieCheck(field: String): SelfieCheck =
+        runCatching { get<String?>(field) }.getOrNull()
+            ?.let { runCatching { SelfieCheck.valueOf(it) }.getOrNull() }
+            ?: SelfieCheck.NONE
 
     private fun DocumentSnapshot.readMillis(field: String): Long =
         runCatching { get<Timestamp?>(field)?.toMilliseconds()?.toLong() }.getOrNull()

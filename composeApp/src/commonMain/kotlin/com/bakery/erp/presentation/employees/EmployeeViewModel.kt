@@ -1,4 +1,4 @@
-﻿package com.bakery.erp.presentation.employees
+package com.bakery.erp.presentation.employees
 
 import com.bakery.erp.util.fmtDate
 import com.bakery.erp.model.PayrollStatus
@@ -9,6 +9,11 @@ import com.bakery.erp.model.CreditMovement
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bakery.erp.domain.AttendanceRepository
+import com.bakery.erp.domain.AttendanceSelfieUploader
+import com.bakery.erp.model.SelfieCheck
+import com.bakery.erp.model.nextEntry
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 import com.bakery.erp.domain.AuthRepository
 import com.bakery.erp.domain.BranchRepository
 import com.bakery.erp.domain.EmployeeDocumentRepository
@@ -47,6 +52,8 @@ data class EmployeeUiState(
     val isLoading: Boolean = false,
     val isDetailLoading: Boolean = false,
     val isSaved: Boolean = false,
+    /** Id de la ficha recién guardada: tras un alta el formulario abre la ficha completa. */
+    val savedEmployeeId: String? = null,
     val isDeleted: Boolean = false,
     val error: String? = null,
 
@@ -59,6 +66,8 @@ data class EmployeeUiState(
     // Ingreso a Turno (pantalla externa)
     val shiftClockInEmployee: Employee? = null,
     val shiftTodayRecord: AttendanceRecord? = null,
+    /** Qué entrada le toca hoy a la persona elegida en el kiosko (null = cargando). */
+    val shiftEntry: com.bakery.erp.model.EntryAvailability? = null,
     val isShiftClockInLoading: Boolean = false,
     val shiftClockInSuccess: Boolean = false,
 
@@ -89,7 +98,8 @@ class EmployeeViewModel(
     private val authRepository: AuthRepository,
     private val historyRepository: EmployeeHistoryRepository,
     /** El descuento de créditos y adelantos en la planilla se escribe en la cuenta del colaborador. */
-    private val creditRepository: com.bakery.erp.domain.CreditRepository
+    private val creditRepository: com.bakery.erp.domain.CreditRepository,
+    private val selfieUploader: AttendanceSelfieUploader
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(EmployeeUiState())
@@ -128,6 +138,11 @@ class EmployeeViewModel(
                 val users = runCatching { authRepository.getUsersForOrg(companyId) }.getOrElse { emptyList() }
                 _uiState.update { it.copy(users = users) }
             }
+            // El "Jefe inmediato" del formulario se escoge entre colaboradores.
+            if (_uiState.value.employees.isEmpty()) {
+                val employees = runCatching { employeeRepository.getEmployees(companyId) }.getOrElse { emptyList() }
+                _uiState.update { it.copy(employees = employees) }
+            }
             if (_uiState.value.branches.isEmpty()) {
                 val branches = runCatching { branchRepository.getBranches(companyId) }.getOrElse { emptyList() }
                 _uiState.update { it.copy(branches = branches.filter { b -> b.active }) }
@@ -161,7 +176,16 @@ class EmployeeViewModel(
         _uiState.update { it.copy(searchQuery = query) }
     }
 
-    fun saveEmployee(companyId: String, employee: Employee, photoBytes: ByteArray? = null) {
+    /**
+     * [pendingDocuments]: los que se escogieron en el alta, antes de que la ficha tuviera id.
+     * Se suben después de crearla; si alguno falla la ficha queda igual y se avisa cuál.
+     */
+    fun saveEmployee(
+        companyId: String,
+        employee: Employee,
+        photoBytes: ByteArray? = null,
+        pendingDocuments: List<Pair<EmployeeDocument, ByteArray>> = emptyList()
+    ) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             val finalEmployee = if (photoBytes != null) {
@@ -172,9 +196,19 @@ class EmployeeViewModel(
             } else {
                 employee
             }
-            runCatching { employeeRepository.saveEmployee(companyId, finalEmployee) }
-                .onSuccess { _uiState.update { it.copy(isLoading = false, isSaved = true) } }
-                .onFailure { err -> _uiState.update { it.copy(isLoading = false, error = err.message) } }
+            val id = runCatching { employeeRepository.saveEmployee(companyId, finalEmployee) }
+                .getOrElse { err -> _uiState.update { it.copy(isLoading = false, error = err.message) }; return@launch }
+            // En serie: son pocos y así un corte deja subidos los primeros, no una mezcla.
+            val failed = pendingDocuments.filter { (doc, bytes) ->
+                runCatching { documentRepository.uploadDocument(companyId, id, doc.copy(employeeId = id), bytes) }.isFailure
+            }.map { it.first.name }
+            _uiState.update {
+                it.copy(
+                    isLoading = false, isSaved = true, savedEmployeeId = id,
+                    error = if (failed.isEmpty()) null
+                        else "Colaborador guardado, pero no se subió: ${failed.joinToString()}. Súbelo desde Documentos."
+                )
+            }
         }
     }
 
@@ -275,38 +309,66 @@ class EmployeeViewModel(
 
     fun selectShiftEmployee(companyId: String, employee: Employee) {
         viewModelScope.launch {
-            _uiState.update { it.copy(shiftClockInEmployee = employee, isShiftClockInLoading = true, shiftTodayRecord = null) }
-            val today = runCatching { attendanceRepository.getTodayRecord(companyId, employee.id) }.getOrNull()
-            _uiState.update { it.copy(shiftTodayRecord = today, isShiftClockInLoading = false) }
+            _uiState.update {
+                it.copy(shiftClockInEmployee = employee, isShiftClockInLoading = true, shiftTodayRecord = null, shiftEntry = null)
+            }
+            val today = runCatching { attendanceRepository.getTodayRecords(companyId, employee.id) }.getOrElse { emptyList() }
+            _uiState.update {
+                it.copy(shiftEntry = employee.nextEntry(today, minutesOfDayNow()), isShiftClockInLoading = false)
+            }
         }
     }
 
     fun clearShiftEmployee() {
-        _uiState.update { it.copy(shiftClockInEmployee = null, shiftTodayRecord = null, isShiftClockInLoading = false) }
+        _uiState.update {
+            it.copy(shiftClockInEmployee = null, shiftTodayRecord = null, shiftEntry = null, isShiftClockInLoading = false)
+        }
     }
 
-    fun clockInShiftEmployee(companyId: String) {
+    private fun minutesOfDayNow(): Int {
+        val now = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault())
+        return now.hour * 60 + now.minute
+    }
+
+    /**
+     * La marca se registra primero y la selfie se sube después, sin hacer esperar a la
+     * persona: si la subida falla la marca queda con su check pero sin URL, y el historial
+     * la muestra como "foto no subida".
+     */
+    fun clockInShiftEmployee(companyId: String, selfie: ByteArray?, check: SelfieCheck) {
         val employee = _uiState.value.shiftClockInEmployee ?: return
         viewModelScope.launch {
             _uiState.update { it.copy(isShiftClockInLoading = true, error = null) }
-            runCatching { attendanceRepository.clockIn(companyId, employee.id, employee.startTime) }
+            runCatching {
+                // Se vuelve a decidir con la hora y las marcas de AHORA (la ficha pudo quedar
+                // abierta un rato): en turno mixto define qué entrada es y contra qué hora se
+                // mide la tardanza.
+                val today = attendanceRepository.getTodayRecords(companyId, employee.id)
+                val entry = employee.nextEntry(today, minutesOfDayNow())
+                if (entry !is com.bakery.erp.model.EntryAvailability.Available) {
+                    _uiState.update { it.copy(shiftEntry = entry) }
+                    error("Ya está marcada la entrada de este turno")
+                }
+                attendanceRepository.clockIn(companyId, employee.id, entry.startTime, check, entry.shiftNumber)
+            }
                 .onSuccess { record ->
                     _uiState.update { it.copy(shiftTodayRecord = record, isShiftClockInLoading = false, shiftClockInSuccess = true) }
+                    if (selfie != null) uploadSelfie(companyId, employee.id, record.id, isClockIn = true, selfie)
                 }
                 .onFailure { err -> _uiState.update { it.copy(isShiftClockInLoading = false, error = err.message) } }
         }
     }
 
-    fun clockOutShiftEmployee(companyId: String) {
-        val employee = _uiState.value.shiftClockInEmployee ?: return
-        val recordId = _uiState.value.shiftTodayRecord?.id ?: return
+    private fun uploadSelfie(
+        companyId: String, employeeId: String, recordId: String, isClockIn: Boolean, bytes: ByteArray
+    ) {
         viewModelScope.launch {
-            _uiState.update { it.copy(isShiftClockInLoading = true, error = null) }
-            runCatching { attendanceRepository.clockOut(companyId, employee.id, recordId) }
-                .onSuccess { record ->
-                    _uiState.update { it.copy(shiftTodayRecord = record, isShiftClockInLoading = false, shiftClockInSuccess = true) }
+            runCatching {
+                val url = selfieUploader.uploadSelfie(bytes, companyId, employeeId, recordId, isClockIn)
+                if (url.isNotEmpty()) {
+                    attendanceRepository.attachSelfiePhoto(companyId, employeeId, recordId, isClockIn, url)
                 }
-                .onFailure { err -> _uiState.update { it.copy(isShiftClockInLoading = false, error = err.message) } }
+            }
         }
     }
 
@@ -478,7 +540,7 @@ class EmployeeViewModel(
     // ── Utilidades ───────────────────────────────────────────────────────────
 
     fun clearShiftSuccess() { _uiState.update { it.copy(shiftClockInSuccess = false) } }
-    fun clearSaved() { _uiState.update { it.copy(isSaved = false) } }
+    fun clearSaved() { _uiState.update { it.copy(isSaved = false, savedEmployeeId = null) } }
     fun clearDeleted() { _uiState.update { it.copy(isDeleted = false) } }
     fun clearPayrollSaved() { _uiState.update { it.copy(isPayrollSaved = false) } }
     fun clearPayrollDeleted() { _uiState.update { it.copy(isPayrollDeleted = false) } }

@@ -1,6 +1,9 @@
 package com.bakery.erp.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import androidx.core.content.ContextCompat
 import android.net.Uri
 import androidx.core.content.FileProvider
 import java.io.File
@@ -71,7 +74,7 @@ actual fun ImagePickerButton(
         }
     }
 
-    fun launchCamera() {
+    fun openCamera() {
         runCatching {
             val file = File.createTempFile("captura_", ".jpg", context.cacheDir)
             // Se entrega por FileProvider y no como "file://": desde Android 7 pasarle una
@@ -82,6 +85,18 @@ actual fun ImagePickerButton(
             pendingPhotoUri = uri
             cameraLauncher.launch(uri)
         }
+    }
+
+    // La app declara CAMERA (selfie del kiosko de asistencia). Con el permiso declarado y no
+    // concedido, ACTION_IMAGE_CAPTURE lanza SecurityException: hay que pedirlo antes.
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted -> if (granted) openCamera() }
+
+    fun launchCamera() {
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+        if (granted) openCamera() else cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
     }
 
     Column(

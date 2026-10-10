@@ -188,6 +188,8 @@ val appModule = module {
     single<RecipeImageUploader> { NoOpRecipeImageUploader() }
     single<AssetImageUploader> { NoOpAssetImageUploader() }
     single<SpecialOrderImageUploader> { NoOpSpecialOrderImageUploader() }
+    // Android lo sobreescribe con AndroidAttendanceSelfieUploader (selfie del kiosko).
+    single<com.bakery.erp.domain.AttendanceSelfieUploader> { com.bakery.erp.domain.NoOpAttendanceSelfieUploader() }
     single<PurchaseInvoiceImageUploader> { NoOpPurchaseInvoiceImageUploader() }
     single<EmployeeDocumentRepository> { NoOpEmployeeDocumentRepository() }
     single<ReceiptPrinter> { NoOpReceiptPrinter() }
@@ -210,7 +212,7 @@ val appModule = module {
     single { BranchViewModel(get()) }
     single { ExpenseViewModel(get()) }
     single { FixedBudgetViewModel(get()) }
-    single { EmployeeViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    single { EmployeeViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { com.bakery.erp.presentation.employees.EmployeeAccessViewModel(get(), get()) }
     single { com.bakery.erp.presentation.operator.OperatorLockViewModel(get(), get()) }
     single { JobPositionViewModel(get()) }

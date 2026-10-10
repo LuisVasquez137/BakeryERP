@@ -2,6 +2,7 @@ package com.bakery.erp.di
 
 import com.bakery.erp.auth.AndroidGoogleAuthHandler
 import com.bakery.erp.data.AndroidAssetImageUploader
+import com.bakery.erp.data.AndroidAttendanceSelfieUploader
 import com.bakery.erp.data.AndroidBluetoothPrinterManager
 import com.bakery.erp.data.AndroidDocumentPrinter
 import com.bakery.erp.data.AndroidReceiptPrinter
@@ -12,6 +13,7 @@ import com.bakery.erp.data.AndroidSpecialOrderImageUploader
 import com.bakery.erp.data.FirebaseEmployeeDocumentRepository
 import com.bakery.erp.data.FirebaseProductRepository
 import com.bakery.erp.domain.AssetImageUploader
+import com.bakery.erp.domain.AttendanceSelfieUploader
 import com.bakery.erp.domain.BluetoothPrinterManager
 import com.bakery.erp.domain.DocumentPrinter
 import com.bakery.erp.domain.EmployeeDocumentRepository
@@ -34,6 +36,7 @@ val androidModule = module {
     single<RecipeImageUploader> { AndroidRecipeImageUploader(get()) }
     single<AssetImageUploader> { AndroidAssetImageUploader(get()) }
     single<SpecialOrderImageUploader> { AndroidSpecialOrderImageUploader(get()) }
+    single<AttendanceSelfieUploader> { AndroidAttendanceSelfieUploader(get()) }
     single<PurchaseInvoiceImageUploader> { AndroidPurchaseInvoiceImageUploader(get()) }
     single<EmployeeDocumentRepository> { FirebaseEmployeeDocumentRepository(get(), get()) }
     single<BluetoothPrinterManager> { AndroidBluetoothPrinterManager(androidContext()) }

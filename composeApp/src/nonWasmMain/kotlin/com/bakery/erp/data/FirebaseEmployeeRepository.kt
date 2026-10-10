@@ -1,4 +1,4 @@
-﻿package com.bakery.erp.data
+package com.bakery.erp.data
 
 import com.bakery.erp.domain.EmployeeRepository
 import com.bakery.erp.model.CostCenter
@@ -27,7 +27,7 @@ class FirebaseEmployeeRepository(
     override suspend fun getEmployee(companyId: String, employeeId: String): Employee? =
         runCatching { col(companyId).document(employeeId).get().toEmployee() }.getOrNull()
 
-    override suspend fun saveEmployee(companyId: String, employee: Employee) {
+    override suspend fun saveEmployee(companyId: String, employee: Employee): String {
         val docRef = if (employee.id.isEmpty()) col(companyId).document
                      else col(companyId).document(employee.id)
         val now = Clock.System.now().toEpochMilliseconds()
@@ -41,6 +41,7 @@ class FirebaseEmployeeRepository(
         // (permisos, estado del PIN) y un set() los borraría; además las reglas
         // rechazan que el formulario los toque.
         if (employee.id.isEmpty()) docRef.set(final.toMap()) else docRef.update(final.toMap())
+        return docRef.id
     }
 
     override suspend fun updateEmployeePermissions(companyId: String, employeeId: String, permissions: List<String>) {
@@ -89,6 +90,9 @@ class FirebaseEmployeeRepository(
         "workDays" to workDays.joinToString(","),
         "startTime" to startTime,
         "endTime" to endTime,
+        "splitShift" to splitShift,
+        "secondStartTime" to secondStartTime,
+        "secondEndTime" to secondEndTime,
         "paymentType" to paymentType,
         "bank" to bank,
         "bankAccount" to bankAccount,
@@ -141,6 +145,9 @@ class FirebaseEmployeeRepository(
             workDays = workDays,
             startTime = get<String?>("startTime") ?: "",
             endTime = get<String?>("endTime") ?: "",
+            splitShift = runCatching { get<Boolean?>("splitShift") }.getOrNull() ?: false,
+            secondStartTime = runCatching { get<String?>("secondStartTime") }.getOrNull() ?: "",
+            secondEndTime = runCatching { get<String?>("secondEndTime") }.getOrNull() ?: "",
             paymentType = get<String?>("paymentType") ?: "",
             bank = get<String?>("bank") ?: "",
             bankAccount = get<String?>("bankAccount") ?: "",

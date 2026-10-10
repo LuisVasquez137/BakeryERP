@@ -53,6 +53,16 @@ service firebase.storage {
       allow write: if isStaffOf(companyId) && sizeOk();
     }
 
+    // Selfies del kiosko de asistencia. Prefijo propio (no bajo companies/) porque la
+    // regla de ciclo de vida del bucket las borra a los 60 días por prefijo
+    // (functions/tools/setup-attendance-selfie-lifecycle.js). Pesan ~25 KB: 1 MB
+    // corta cualquier otra cosa que se quiera subir aquí.
+    match /attendanceSelfies/{companyId}/{allPaths=**} {
+      allow read: if isStaffOf(companyId);
+      allow write: if isStaffOf(companyId)
+        && (request.resource == null || request.resource.size < 1024 * 1024);
+    }
+
     match /specialOrders/{companyId}/{allPaths=**} {
       allow read: if isStaffOf(companyId);
       allow write: if isStaffOf(companyId) && sizeOk();

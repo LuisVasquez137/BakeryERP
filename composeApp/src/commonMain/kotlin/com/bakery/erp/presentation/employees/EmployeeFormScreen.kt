@@ -1,6 +1,29 @@
-﻿package com.bakery.erp.presentation.employees
+package com.bakery.erp.presentation.employees
 
+import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.Tab
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.shape.RoundedCornerShape
+import com.bakery.erp.model.DocumentType
+import com.bakery.erp.model.EmployeeDocument
+import com.bakery.erp.model.Permission
+import com.bakery.erp.model.UserRole
+import com.bakery.erp.domain.pinProblem
+import com.bakery.erp.presentation.users.PermissionChecklist
+import com.bakery.erp.ui.DocumentPickerButton
+import com.bakery.erp.ui.theme.BrandChip
+import com.bakery.erp.ui.theme.ChipTone
 import com.bakery.erp.model.canAccessBranch
+import com.bakery.erp.model.hasPermission
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,6 +38,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -39,6 +64,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
@@ -63,10 +89,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bakery.erp.model.Branch
+import com.bakery.erp.model.CostCenter
+import com.bakery.erp.presentation.expenses.CostCenterPicker
 import com.bakery.erp.model.Employee
 import com.bakery.erp.model.EmployeeStatus
 import com.bakery.erp.model.JobPosition
-import com.bakery.erp.model.User
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.ui.AdaptiveContainer
 import com.bakery.erp.ui.ImagePickerButton
@@ -100,8 +127,12 @@ private val BANKS = listOf("Banrural", "G&T Continental", "Industrial", "Agromer
 fun EmployeeFormScreen(
     employeeId: String?,
     onNavigateBack: () -> Unit,
+    /** Tras un alta: abrir la ficha con sus pestañas (documentos, etc.) en lugar de volver a la lista. */
+    onCreated: (String) -> Unit = { onNavigateBack() },
     authViewModel: AuthViewModel,
-    viewModel: EmployeeViewModel
+    viewModel: EmployeeViewModel,
+    /** Para aplicar el PIN y los permisos del alta en cuanto la ficha existe. */
+    accessViewModel: EmployeeAccessViewModel? = null
 ) {
     val state by viewModel.uiState.collectAsState()
     val authState by authViewModel.uiState.collectAsState()
@@ -118,8 +149,19 @@ fun EmployeeFormScreen(
             viewModel.loadEmployeeDetail(companyId, employeeId)
         }
     }
+    // PIN y permisos del alta: van por la Cloud Function / el VM de acceso, y necesitan el id.
+    var pendingAccess by remember { mutableStateOf<NewEmployeeExtras?>(null) }
     LaunchedEffect(state.isSaved) {
-        if (state.isSaved) { viewModel.clearSaved(); onNavigateBack() }
+        if (state.isSaved) {
+            val newId = state.savedEmployeeId
+            viewModel.clearSaved()
+            if (isNew && newId != null) {
+                pendingAccess?.takeIf { it.permissions.isNotEmpty() || it.pin != null }?.let { a ->
+                    accessViewModel?.setupNewEmployee(companyId, newId, a.permissions, a.pin, a.pinTypedByEmployee)
+                }
+                onCreated(newId)
+            } else onNavigateBack()
+        }
     }
 
     if (!isNew && state.isDetailLoading) {
@@ -160,11 +202,20 @@ fun EmployeeFormScreen(
             authState.user?.canAccessBranch(b.id) == true || (!isNew && b.id == state.selectedEmployee?.branchId)
         },
         jobPositions = state.jobPositions,
-        users = state.users,
+        employees = state.employees,
+        canSeeSalary = authState.user?.hasPermission(com.bakery.erp.model.Permission.VIEW_EMPLOYEE_SALARY) == true,
         isLoading = state.isLoading,
         error = state.error,
         onNavigateBack = onNavigateBack,
-        onSave = { employee, photoBytes -> viewModel.saveEmployee(companyId, employee, photoBytes) },
+        // Las demás pestañas solo en el alta: al editar, eso vive en la ficha (detalle).
+        canAttachDocuments = isNew && authState.user?.hasPermission(Permission.VIEW_EMPLOYEE_DOCUMENTS) == true,
+        canSetupAccess = isNew && accessViewModel != null &&
+            (authState.user?.role == UserRole.OWNER || authState.user?.role == UserRole.ADMIN) &&
+            authState.user?.hasPermission(Permission.VIEW_EMPLOYEE_ACCESS) == true,
+        onSave = { employee, photoBytes, extras ->
+            pendingAccess = extras
+            viewModel.saveEmployee(companyId, employee, photoBytes, extras.documents)
+        },
         onDelete = if (!isNew) { { viewModel.deleteEmployee(companyId, employeeId!!) } } else null,
         isDeleted = state.isDeleted,
         clearDeleted = { viewModel.clearDeleted() }
@@ -179,11 +230,18 @@ private fun EmployeeFormContent(
     companyId: String,
     branches: List<Branch>,
     jobPositions: List<JobPosition>,
-    users: List<User>,
+    /** Para "Jefe inmediato": el jefe es una persona (colaborador), no una cuenta. */
+    employees: List<Employee>,
+    /** Sin VIEW_EMPLOYEE_SALARY el salario ni se muestra ni se cambia (se guarda el que había). */
+    canSeeSalary: Boolean,
     isLoading: Boolean,
     error: String?,
     onNavigateBack: () -> Unit,
-    onSave: (Employee, ByteArray?) -> Unit,
+    /** Alta: pestaña Documentos (se suben al guardar). */
+    canAttachDocuments: Boolean,
+    /** Alta: pestaña Acceso (PIN y permisos), solo dueño/administrador. */
+    canSetupAccess: Boolean,
+    onSave: (Employee, ByteArray?, NewEmployeeExtras) -> Unit,
     onDelete: (() -> Unit)?,
     isDeleted: Boolean,
     clearDeleted: () -> Unit
@@ -213,16 +271,24 @@ private fun EmployeeFormContent(
 
     // ── Sección 3: Empleo ─────────────────────────────────────────────────────
     var selectedBranch by remember { mutableStateOf<Branch?>(null) }
+    // A quién se le carga el sueldo: el piloto marca en la planta pero es de Reparto. Ver
+    // `CostCenter`.
+    var costCenter by rememberSaveable { mutableStateOf(existing?.costCenter ?: CostCenter.BRANCH) }
     var selectedPosition by remember { mutableStateOf<JobPosition?>(null) }
     var selectedDepartment by rememberSaveable { mutableStateOf(existing?.department ?: "") }
-    var selectedSupervisorUser by remember { mutableStateOf<User?>(null) }
-    var selectedLinkedUser by remember { mutableStateOf<User?>(null) }
+    // Jefe inmediato: id + nombre guardados tal cual. Las fichas viejas pueden traer el id de
+    // una CUENTA (antes la lista era de usuarios): se respeta mientras nadie lo cambie.
+    var supervisorId by rememberSaveable { mutableStateOf(existing?.supervisorId ?: "") }
+    var supervisorName by rememberSaveable { mutableStateOf(existing?.supervisorName ?: "") }
     var selectedContractType by rememberSaveable { mutableStateOf(existing?.contractType ?: "") }
 
     // ── Sección 4: Horario ────────────────────────────────────────────────────
     var workDays by remember { mutableStateOf(existing?.workDays ?: emptyList<Int>()) }
     var startTime by rememberSaveable { mutableStateOf(existing?.startTime ?: "") }
     var endTime by rememberSaveable { mutableStateOf(existing?.endTime ?: "") }
+    var splitShift by rememberSaveable { mutableStateOf(existing?.splitShift ?: false) }
+    var secondStartTime by rememberSaveable { mutableStateOf(existing?.secondStartTime ?: "") }
+    var secondEndTime by rememberSaveable { mutableStateOf(existing?.secondEndTime ?: "") }
 
     // ── Sección 5: Financiero ─────────────────────────────────────────────────
     var selectedPaymentType by rememberSaveable { mutableStateOf(existing?.paymentType ?: "") }
@@ -238,12 +304,20 @@ private fun EmployeeFormContent(
     // ── Sección 7: Notas ──────────────────────────────────────────────────────
     var notes by rememberSaveable { mutableStateOf(existing?.notes ?: "") }
 
+    // ── Otras pestañas del alta (remember: bytes y PIN no van al estado guardado) ──
+    var pendingDocs by remember { mutableStateOf(listOf<Pair<EmployeeDocument, ByteArray>>()) }
+    var pendingPermissions by remember { mutableStateOf(setOf<String>()) }
+    var pendingPin by remember { mutableStateOf<String?>(null) }
+    var pendingPinTypedByEmployee by remember { mutableStateOf(false) }
+    val formTabs = listOfNotNull("Datos", "Documentos".takeIf { canAttachDocuments }, "Acceso".takeIf { canSetupAccess })
+    var selectedFormTab by rememberSaveable { mutableStateOf("Datos") }
+    val currentFormTab = selectedFormTab.takeIf { it in formTabs } ?: "Datos"
+
     // ── Dropdown expand state ─────────────────────────────────────────────────
     var branchExpanded by remember { mutableStateOf(false) }
     var positionExpanded by remember { mutableStateOf(false) }
     var departmentExpanded by remember { mutableStateOf(false) }
     var supervisorExpanded by remember { mutableStateOf(false) }
-    var linkedUserExpanded by remember { mutableStateOf(false) }
     var genderExpanded by remember { mutableStateOf(false) }
     var maritalExpanded by remember { mutableStateOf(false) }
     var contractExpanded by remember { mutableStateOf(false) }
@@ -257,10 +331,12 @@ private fun EmployeeFormContent(
     var showEndPicker by remember { mutableStateOf(false) }
     var showStartTimePicker by remember { mutableStateOf(false) }
     var showEndTimePicker by remember { mutableStateOf(false) }
+    var showSecondStartPicker by remember { mutableStateOf(false) }
+    var showSecondEndPicker by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
 
     // Initialize selects from existing data
-    LaunchedEffect(branches, jobPositions, users, existing) {
+    LaunchedEffect(branches, jobPositions, existing) {
         if (selectedBranch == null && branches.isNotEmpty()) {
             selectedBranch = when {
                 existing != null -> branches.find { it.id == existing.branchId }
@@ -270,12 +346,6 @@ private fun EmployeeFormContent(
         }
         if (selectedPosition == null && jobPositions.isNotEmpty() && existing != null) {
             selectedPosition = jobPositions.find { it.id == existing.positionId }
-        }
-        if (selectedSupervisorUser == null && users.isNotEmpty() && existing != null && existing.supervisorId.isNotBlank()) {
-            selectedSupervisorUser = users.find { it.id == existing.supervisorId }
-        }
-        if (selectedLinkedUser == null && users.isNotEmpty() && existing != null && existing.userId.isNotBlank()) {
-            selectedLinkedUser = users.find { it.id == existing.userId }
         }
     }
 
@@ -305,6 +375,31 @@ private fun EmployeeFormContent(
             onConfirm = { h, m ->
                 endTime = "${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}"
                 showEndTimePicker = false
+            }
+        )
+    }
+
+    if (showSecondStartPicker) {
+        val parts = secondStartTime.split(":").mapNotNull { it.toIntOrNull() }
+        TimePickerDialog(
+            initialHour = parts.getOrElse(0) { 15 },
+            initialMinute = parts.getOrElse(1) { 0 },
+            onDismiss = { showSecondStartPicker = false },
+            onConfirm = { h, m ->
+                secondStartTime = "${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}"
+                showSecondStartPicker = false
+            }
+        )
+    }
+    if (showSecondEndPicker) {
+        val parts = secondEndTime.split(":").mapNotNull { it.toIntOrNull() }
+        TimePickerDialog(
+            initialHour = parts.getOrElse(0) { 19 },
+            initialMinute = parts.getOrElse(1) { 0 },
+            onDismiss = { showSecondEndPicker = false },
+            onConfirm = { h, m ->
+                secondEndTime = "${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}"
+                showSecondEndPicker = false
             }
         )
     }
@@ -349,6 +444,69 @@ private fun EmployeeFormContent(
         )
     }
 
+    val branch = if (branches.size == 1) branches.first() else selectedBranch
+    val canSubmit = name.isNotBlank() && branch != null && !isLoading
+    fun submit() {
+        if (name.isBlank()) return
+        val b = branch ?: return
+        val pos = selectedPosition
+        onSave(
+            Employee(
+                id = existing?.id ?: "",
+                name = name.trim(),
+                employeeCode = employeeCode.trim(),
+                photoUrl = existing?.photoUrl ?: "",
+                dpi = dpi.trim(),
+                nit = nit.trim(),
+                birthDate = birthDateMillis ?: 0L,
+                gender = selectedGender,
+                maritalStatus = selectedMarital,
+                phone = phone.trim(),
+                phoneAux = phoneAux.trim(),
+                email = email.trim(),
+                address = address.trim(),
+                emergencyContact = emergencyContact.trim(),
+                emergencyPhone = emergencyPhone.trim(),
+                branchId = b.id,
+                branchName = b.name,
+                costCenter = costCenter,
+                department = selectedDepartment,
+                positionId = pos?.id ?: "",
+                positionTitle = pos?.title ?: "",
+                supervisorId = supervisorId,
+                supervisorName = supervisorName,
+                contractType = selectedContractType,
+                workDays = workDays.sorted(),
+                startTime = startTime.trim(),
+                endTime = endTime.trim(),
+                // Sin hora de entrada del 2º turno no hay turno mixto: se guarda apagado.
+                splitShift = splitShift && secondStartTime.isNotBlank(),
+                secondStartTime = if (splitShift) secondStartTime.trim() else "",
+                secondEndTime = if (splitShift) secondEndTime.trim() else "",
+                paymentType = selectedPaymentType,
+                bank = selectedBank,
+                bankAccount = bankAccount.trim(),
+                baseSalary = if (canSeeSalary) baseSalaryStr.toDoubleOrNull() ?: 0.0
+                             else existing?.baseSalary ?: 0.0,
+                status = selectedStatus,
+                hireDate = hireDateMillis ?: 0L,
+                endDate = endDateMillis ?: 0L,
+                notes = notes.trim(),
+                active = selectedStatus == EmployeeStatus.ACTIVE,
+                createdAt = existing?.createdAt ?: 0L,
+                // Ya no se edita (la identidad sale del PIN); se conserva el que tuviera.
+                userId = existing?.userId ?: ""
+            ),
+            photoBytes,
+            NewEmployeeExtras(
+                documents = pendingDocs,
+                permissions = pendingPermissions,
+                pin = pendingPin,
+                pinTypedByEmployee = pendingPinTypedByEmployee
+            )
+        )
+    }
+
     Box(Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
@@ -375,7 +533,41 @@ private fun EmployeeFormContent(
         },
         containerColor = BrandColors.Ivory
     ) { padding ->
-        AdaptiveContainer(modifier = Modifier.padding(padding)) {
+      Column(Modifier.fillMaxSize().padding(padding)) {
+        if (formTabs.size > 1) {
+            ScrollableTabRow(selectedTabIndex = formTabs.indexOf(currentFormTab), edgePadding = 8.dp) {
+                formTabs.forEach { title ->
+                    val count = if (title == "Documentos" && pendingDocs.isNotEmpty()) " (${pendingDocs.size})" else ""
+                    Tab(
+                        selected = currentFormTab == title,
+                        onClick = { selectedFormTab = title },
+                        text = { Text(title + count, style = MaterialTheme.typography.labelMedium) }
+                    )
+                }
+            }
+        }
+        when (currentFormTab) {
+        "Documentos" -> NewEmployeeDocumentsTab(
+            pending = pendingDocs,
+            onAdd = { pendingDocs = pendingDocs + it },
+            onRemove = { i -> pendingDocs = pendingDocs.filterIndexed { idx, _ -> idx != i } },
+            canSubmit = canSubmit,
+            isLoading = isLoading,
+            onSubmit = { submit() }
+        )
+        "Acceso" -> NewEmployeeAccessTab(
+            employeeName = name.ifBlank { "el colaborador" },
+            permissions = pendingPermissions,
+            onPermissionsChange = { pendingPermissions = it },
+            hasPin = pendingPin != null,
+            pinTypedByEmployee = pendingPinTypedByEmployee,
+            onPinSet = { pin, typed -> pendingPin = pin; pendingPinTypedByEmployee = typed },
+            onPinClear = { pendingPin = null },
+            canSubmit = canSubmit,
+            isLoading = isLoading,
+            onSubmit = { submit() }
+        )
+        else -> AdaptiveContainer(modifier = Modifier.weight(1f)) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -556,6 +748,13 @@ private fun EmployeeFormContent(
                     }
                 }
 
+                CostCenterPicker(
+                    selected = costCenter,
+                    branchLabel = branch?.name.orEmpty(),
+                    onSelect = { costCenter = it },
+                    label = "¿A quién se le carga su sueldo?"
+                )
+
                 if (jobPositions.isNotEmpty()) {
                     EmpDropdownCustom(
                         label = "Puesto",
@@ -580,7 +779,7 @@ private fun EmployeeFormContent(
                                 onClick = {
                                     selectedPosition = pos
                                     if (selectedDepartment.isBlank()) selectedDepartment = pos.department
-                                    if (baseSalaryStr.isBlank() && pos.minSalary > 0) baseSalaryStr = pos.minSalary.toString()
+                                    if (canSeeSalary && baseSalaryStr.isBlank() && pos.minSalary > 0) baseSalaryStr = pos.minSalary.toString()
                                     positionExpanded = false
                                 }
                             )
@@ -597,28 +796,40 @@ private fun EmployeeFormContent(
                     onSelect = { selectedDepartment = it; departmentExpanded = false }
                 )
 
-                if (users.isNotEmpty()) {
-                    EmpDropdownCustom(
-                        label = "Jefe inmediato",
-                        displayValue = selectedSupervisorUser?.displayName ?: "",
-                        expanded = supervisorExpanded,
-                        onExpandedChange = { supervisorExpanded = it }
-                    ) {
-                        DropdownMenuItem(text = { Text("— Sin jefe —") }, onClick = {
-                            selectedSupervisorUser = null
-                            supervisorExpanded = false
-                        })
-                        users.forEach { user ->
-                            DropdownMenuItem(
-                                text = {
-                                    Column {
-                                        Text(user.displayName, style = MaterialTheme.typography.bodyMedium)
-                                        Text(user.email, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                // Posibles jefes: colaboradores activos, menos la persona misma.
+                val supervisorOptions = employees
+                    .filter { it.id != existing?.id && it.status == EmployeeStatus.ACTIVE }
+                    .sortedBy { it.name.lowercase() }
+                EmpDropdownCustom(
+                    label = "Jefe inmediato",
+                    displayValue = supervisorName,
+                    expanded = supervisorExpanded,
+                    onExpandedChange = { supervisorExpanded = it }
+                ) {
+                    DropdownMenuItem(text = { Text("— Sin jefe —") }, onClick = {
+                        supervisorId = ""
+                        supervisorName = ""
+                        supervisorExpanded = false
+                    })
+                    if (supervisorOptions.isEmpty()) {
+                        DropdownMenuItem(
+                            text = { Text("Todavía no hay otros colaboradores", color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                            onClick = { supervisorExpanded = false }
+                        )
+                    }
+                    supervisorOptions.forEach { e ->
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text(e.name, style = MaterialTheme.typography.bodyMedium)
+                                    val detail = listOf(e.positionTitle, e.branchName).filter { it.isNotBlank() }.joinToString(" · ")
+                                    if (detail.isNotBlank()) {
+                                        Text(detail, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
-                                },
-                                onClick = { selectedSupervisorUser = user; supervisorExpanded = false }
-                            )
-                        }
+                                }
+                            },
+                            onClick = { supervisorId = e.id; supervisorName = e.name; supervisorExpanded = false }
+                        )
                     }
                 }
 
@@ -655,7 +866,7 @@ private fun EmployeeFormContent(
                         value = startTime,
                         onValueChange = {},
                         readOnly = true,
-                        label = { Text("Hora entrada") },
+                        label = { Text(if (splitShift) "Entrada 1er turno" else "Hora entrada") },
                         placeholder = { Text("08:00") },
                         trailingIcon = {
                             IconButton(onClick = { showStartTimePicker = true }) {
@@ -668,7 +879,7 @@ private fun EmployeeFormContent(
                         value = endTime,
                         onValueChange = {},
                         readOnly = true,
-                        label = { Text("Hora salida") },
+                        label = { Text(if (splitShift) "Salida 1er turno" else "Hora salida") },
                         placeholder = { Text("17:00") },
                         trailingIcon = {
                             IconButton(onClick = { showEndTimePicker = true }) {
@@ -677,6 +888,56 @@ private fun EmployeeFormContent(
                         },
                         modifier = Modifier.weight(1f).clickable { showEndTimePicker = true }
                     )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Turno mixto", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                        Text(
+                            "Dos entradas al día; cada una se marca en el kiosko y cuenta su propia tardanza",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(checked = splitShift, onCheckedChange = { splitShift = it })
+                }
+
+                if (splitShift) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        OutlinedTextField(
+                            value = secondStartTime,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Entrada 2do turno") },
+                            placeholder = { Text("15:00") },
+                            trailingIcon = {
+                                IconButton(onClick = { showSecondStartPicker = true }) {
+                                    Icon(Icons.Default.AccessTime, null, tint = PrimaryBlue, modifier = Modifier.size(18.dp))
+                                }
+                            },
+                            isError = secondStartTime.isBlank(),
+                            supportingText = if (secondStartTime.isBlank()) {
+                                { Text("Obligatoria para el turno mixto") }
+                            } else null,
+                            modifier = Modifier.weight(1f).clickable { showSecondStartPicker = true }
+                        )
+                        OutlinedTextField(
+                            value = secondEndTime,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Salida 2do turno") },
+                            placeholder = { Text("19:00") },
+                            trailingIcon = {
+                                IconButton(onClick = { showSecondEndPicker = true }) {
+                                    Icon(Icons.Default.AccessTime, null, tint = PrimaryBlue, modifier = Modifier.size(18.dp))
+                                }
+                            },
+                            modifier = Modifier.weight(1f).clickable { showSecondEndPicker = true }
+                        )
+                    }
                 }
 
                 // ── 6. Financiero ─────────────────────────────────────────────
@@ -712,15 +973,17 @@ private fun EmployeeFormContent(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                 )
 
-                OutlinedTextField(
-                    value = baseSalaryStr,
-                    onValueChange = { baseSalaryStr = it },
-                    label = { Text("Salario base (Q)") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    prefix = { Text("Q") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
-                )
+                if (canSeeSalary) {
+                    OutlinedTextField(
+                        value = baseSalaryStr,
+                        onValueChange = { baseSalaryStr = it },
+                        label = { Text("Salario base (Q)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        prefix = { Text("Q") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                    )
+                }
 
                 // ── 7. Estado ─────────────────────────────────────────────────
                 EmpFormSection("Estado Laboral")
@@ -767,39 +1030,6 @@ private fun EmployeeFormContent(
                     )
                 }
 
-                // ── 8. Vinculación de cuenta ──────────────────────────────────
-                if (users.isNotEmpty()) {
-                    EmpFormSection("Cuenta del Sistema")
-
-                    EmpDropdownCustom(
-                        label = "Vincular con usuario",
-                        displayValue = selectedLinkedUser?.displayName ?: "",
-                        expanded = linkedUserExpanded,
-                        onExpandedChange = { linkedUserExpanded = it }
-                    ) {
-                        DropdownMenuItem(text = { Text("— Sin vincular —") }, onClick = {
-                            selectedLinkedUser = null
-                            linkedUserExpanded = false
-                        })
-                        users.forEach { user ->
-                            DropdownMenuItem(
-                                text = {
-                                    Column {
-                                        Text(user.displayName, style = MaterialTheme.typography.bodyMedium)
-                                        Text(user.email, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                },
-                                onClick = { selectedLinkedUser = user; linkedUserExpanded = false }
-                            )
-                        }
-                    }
-
-                    Text(
-                        "Vincula este colaborador con una cuenta de acceso al sistema para evitar duplicados.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
 
                 // ── 9. Notas ──────────────────────────────────────────────────
                 EmpFormSection("Notas")
@@ -820,59 +1050,11 @@ private fun EmployeeFormContent(
 
                 Spacer(Modifier.height(8.dp))
 
-                val branch = if (branches.size == 1) branches.first() else selectedBranch
-
                 Button(
-                    onClick = {
-                        if (name.isBlank()) return@Button
-                        val b = branch ?: return@Button
-                        val pos = selectedPosition
-                        onSave(
-                            Employee(
-                                id = existing?.id ?: "",
-                                name = name.trim(),
-                                employeeCode = employeeCode.trim(),
-                                photoUrl = existing?.photoUrl ?: "",
-                                dpi = dpi.trim(),
-                                nit = nit.trim(),
-                                birthDate = birthDateMillis ?: 0L,
-                                gender = selectedGender,
-                                maritalStatus = selectedMarital,
-                                phone = phone.trim(),
-                                phoneAux = phoneAux.trim(),
-                                email = email.trim(),
-                                address = address.trim(),
-                                emergencyContact = emergencyContact.trim(),
-                                emergencyPhone = emergencyPhone.trim(),
-                                branchId = b.id,
-                                branchName = b.name,
-                                department = selectedDepartment,
-                                positionId = pos?.id ?: "",
-                                positionTitle = pos?.title ?: "",
-                                supervisorId = selectedSupervisorUser?.id ?: "",
-                                supervisorName = selectedSupervisorUser?.displayName ?: "",
-                                contractType = selectedContractType,
-                                workDays = workDays.sorted(),
-                                startTime = startTime.trim(),
-                                endTime = endTime.trim(),
-                                paymentType = selectedPaymentType,
-                                bank = selectedBank,
-                                bankAccount = bankAccount.trim(),
-                                baseSalary = baseSalaryStr.toDoubleOrNull() ?: 0.0,
-                                status = selectedStatus,
-                                hireDate = hireDateMillis ?: 0L,
-                                endDate = endDateMillis ?: 0L,
-                                notes = notes.trim(),
-                                active = selectedStatus == EmployeeStatus.ACTIVE,
-                                createdAt = existing?.createdAt ?: 0L,
-                                userId = selectedLinkedUser?.id ?: ""
-                            ),
-                            photoBytes
-                        )
-                    },
+                    onClick = { submit() },
                     modifier = Modifier.fillMaxWidth().height(52.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
-                    enabled = name.isNotBlank() && branch != null && !isLoading
+                    enabled = canSubmit
                 ) {
                     if (isLoading) CircularProgressIndicator(Modifier.size(20.dp), color = Color.White)
                     else Text("Guardar colaborador", fontWeight = FontWeight.Bold)
@@ -881,6 +1063,8 @@ private fun EmployeeFormContent(
                 Spacer(Modifier.height(16.dp))
             }
         }
+        }
+      }
     }
     LoadingOverlay(visible = isLoading)
     }
@@ -985,6 +1169,239 @@ private fun EmpDropdownCustom(
             modifier = Modifier.menuAnchor().fillMaxWidth()
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }) {
+            content()
+        }
+    }
+}
+
+// ── Pestañas extra del alta ───────────────────────────────────────────────────
+
+/** Lo que se capturó en las otras pestañas del alta y se aplica cuando la ficha ya tiene id. */
+data class NewEmployeeExtras(
+    val documents: List<Pair<EmployeeDocument, ByteArray>> = emptyList(),
+    val permissions: Set<String> = emptySet(),
+    val pin: String? = null,
+    val pinTypedByEmployee: Boolean = false
+)
+
+/** Botón de guardar repetido en cada pestaña: si falta algo de Datos, lo dice. */
+@Composable
+private fun NewEmployeeSaveButton(canSubmit: Boolean, isLoading: Boolean, onSubmit: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (!canSubmit && !isLoading) {
+            Text(
+                "Para guardar, llena el nombre y la sucursal en la pestaña Datos.",
+                style = MaterialTheme.typography.bodySmall,
+                color = BrandColors.MutedSlate
+            )
+        }
+        Button(
+            onClick = onSubmit,
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
+            enabled = canSubmit
+        ) {
+            if (isLoading) CircularProgressIndicator(Modifier.size(20.dp), color = Color.White)
+            else Text("Guardar colaborador", fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NewEmployeeDocumentsTab(
+    pending: List<Pair<EmployeeDocument, ByteArray>>,
+    onAdd: (Pair<EmployeeDocument, ByteArray>) -> Unit,
+    onRemove: (Int) -> Unit,
+    canSubmit: Boolean,
+    isLoading: Boolean,
+    onSubmit: () -> Unit
+) {
+    var selectedDocType by remember { mutableStateOf(DocumentType.DPI) }
+    var docTypeExpanded by remember { mutableStateOf(false) }
+    val typeName = employeeDocumentTypes.find { it.first == selectedDocType }?.second ?: "documento"
+
+    AdaptiveContainer {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(1.dp),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Adjuntar documento", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = PrimaryBlue)
+                        HorizontalDivider(color = PrimaryBlue.copy(alpha = 0.12f))
+                        Text(
+                            "Se suben al guardar el colaborador.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = BrandColors.MutedSlate
+                        )
+                        ExposedDropdownMenuBox(expanded = docTypeExpanded, onExpandedChange = { docTypeExpanded = it }) {
+                            OutlinedTextField(
+                                value = typeName,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Tipo de documento") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(docTypeExpanded) },
+                                modifier = Modifier.menuAnchor().fillMaxWidth()
+                            )
+                            ExposedDropdownMenu(expanded = docTypeExpanded, onDismissRequest = { docTypeExpanded = false }) {
+                                employeeDocumentTypes.forEach { (type, label) ->
+                                    DropdownMenuItem(text = { Text(label) }, onClick = { selectedDocType = type; docTypeExpanded = false })
+                                }
+                            }
+                        }
+                        DocumentPickerButton(
+                            onDocumentSelected = { bytes, filename ->
+                                onAdd(
+                                    EmployeeDocument(
+                                        type = selectedDocType,
+                                        name = filename,
+                                        fileType = if (filename.endsWith(".pdf", true)) "pdf" else "image",
+                                        uploadedAt = Clock.System.now().toEpochMilliseconds()
+                                    ) to bytes
+                                )
+                            }
+                        ) { pickDocument ->
+                            Button(
+                                onClick = pickDocument,
+                                colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.UploadFile, null)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Seleccionar $typeName")
+                            }
+                        }
+                    }
+                }
+            }
+            if (pending.isNotEmpty()) {
+                item { Text("Por subir", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold) }
+                itemsIndexed(pending) { index, (doc, _) ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        elevation = CardDefaults.cardElevation(1.dp),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(start = 14.dp, top = 6.dp, bottom = 6.dp, end = 4.dp).fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.AttachFile, null, tint = PrimaryBlue, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(doc.name, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    employeeDocumentTypes.find { it.first == doc.type }?.second ?: "",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.outline
+                                )
+                            }
+                            IconButton(onClick = { onRemove(index) }) {
+                                Icon(Icons.Default.Close, "Quitar", tint = MaterialTheme.colorScheme.outline, modifier = Modifier.size(18.dp))
+                            }
+                        }
+                    }
+                }
+            }
+            item {
+                Spacer(Modifier.height(8.dp))
+                NewEmployeeSaveButton(canSubmit, isLoading, onSubmit)
+            }
+        }
+    }
+}
+
+@Composable
+private fun NewEmployeeAccessTab(
+    employeeName: String,
+    permissions: Set<String>,
+    onPermissionsChange: (Set<String>) -> Unit,
+    hasPin: Boolean,
+    pinTypedByEmployee: Boolean,
+    onPinSet: (pin: String, typedByEmployee: Boolean) -> Unit,
+    onPinClear: () -> Unit,
+    canSubmit: Boolean,
+    isLoading: Boolean,
+    onSubmit: () -> Unit
+) {
+    var showPinDialog by remember { mutableStateOf(false) }
+    var pinError by remember { mutableStateOf<String?>(null) }
+
+    if (showPinDialog) {
+        SetPinDialog(
+            employeeName = employeeName,
+            isSaving = false,
+            error = pinError,
+            onDismiss = { showPinDialog = false; pinError = null },
+            onSave = { pin, confirm, typed ->
+                // Misma validación que la pestaña Acceso; aquí solo se guarda hasta tener la ficha.
+                pinError = pinProblem(pin) ?: if (pin != confirm) "Los dos PIN no coinciden." else null
+                if (pinError == null) { onPinSet(pin, typed); showPinDialog = false }
+            }
+        )
+    }
+
+    AdaptiveContainer {
+        Column(
+            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            NewEmployeeCard("PIN") {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    when {
+                        !hasPin -> BrandChip("Sin PIN", ChipTone.NEUTRAL)
+                        pinTypedByEmployee -> BrandChip("PIN listo", ChipTone.SUCCESS)
+                        else -> BrandChip("PIN temporal", ChipTone.ATTENTION)
+                    }
+                }
+                Text(
+                    "Con el PIN se identifica en los equipos de las sucursales. Se guarda junto con el colaborador.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = BrandColors.MutedSlate
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { pinError = null; showPinDialog = true }) {
+                        Icon(Icons.Default.Key, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (hasPin) "Cambiar PIN" else "Asignar PIN")
+                    }
+                    if (hasPin) TextButton(onClick = onPinClear) { Text("Quitar") }
+                }
+            }
+            NewEmployeeCard("Qué puede hacer con su PIN") {
+                Text(
+                    "En cada equipo podrá hacer lo que tenga marcado aquí Y permita la cuenta de ese equipo.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = BrandColors.MutedSlate
+                )
+                PermissionChecklist(selected = permissions, onChange = onPermissionsChange)
+            }
+            NewEmployeeSaveButton(canSubmit, isLoading, onSubmit)
+            Spacer(Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun NewEmployeeCard(title: String, content: @Composable () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(1.dp),
+        shape = RoundedCornerShape(10.dp)
+    ) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = PrimaryBlue)
+            HorizontalDivider(color = PrimaryBlue.copy(alpha = 0.12f))
             content()
         }
     }

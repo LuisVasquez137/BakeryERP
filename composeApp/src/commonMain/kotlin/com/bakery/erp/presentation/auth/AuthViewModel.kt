@@ -254,7 +254,15 @@ class AuthViewModel(
                     if (hasOrg && approved) loadInviteCode()
                 }
                 .onFailure { e ->
-                    _uiState.update { it.copy(isLoading = false, error = e.message ?: "Error con Google Sign-In") }
+                    // Firebase rechaza el token de Google si el reloj del teléfono está
+                    // desfasado (lo ve "vencido" o "del futuro"); el mensaje en inglés no
+                    // le dice nada a quien está en la sucursal.
+                    val raw = e.message ?: ""
+                    val msg = if (raw.contains("incorrect, malformed or has expired", ignoreCase = true)) {
+                        "Firebase rechazó la credencial de Google. Revisa que la fecha y hora del " +
+                            "teléfono estén en automático y vuelve a intentarlo.\n\nDetalle técnico: $raw"
+                    } else raw.ifBlank { "Error con Google Sign-In" }
+                    _uiState.update { it.copy(isLoading = false, error = msg) }
                 }
         }
     }

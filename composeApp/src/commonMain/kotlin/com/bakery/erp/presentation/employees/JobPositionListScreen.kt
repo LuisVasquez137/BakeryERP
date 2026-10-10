@@ -48,6 +48,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.bakery.erp.model.hasPermission
 import com.bakery.erp.model.JobPosition
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.ui.theme.BrandColors.Primary as PrimaryBlue
@@ -147,6 +148,7 @@ fun JobPositionListScreen(
                     items(positions, key = { it.id }) { position ->
                         JobPositionCard(
                             position = position,
+                            showSalary = authState.user?.hasPermission(com.bakery.erp.model.Permission.VIEW_EMPLOYEE_SALARY) == true,
                             onClick = { onNavigateToDetail(position.id) }
                         )
                     }
@@ -179,7 +181,7 @@ private fun DepartmentHeader(department: String) {
 }
 
 @Composable
-private fun JobPositionCard(position: JobPosition, onClick: () -> Unit) {
+private fun JobPositionCard(position: JobPosition, showSalary: Boolean, onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -207,7 +209,7 @@ private fun JobPositionCard(position: JobPosition, onClick: () -> Unit) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                if (position.minSalary > 0.0 || position.maxSalary > 0.0) {
+                if (showSalary && (position.minSalary > 0.0 || position.maxSalary > 0.0)) {
                     Spacer(Modifier.height(2.dp))
                     Text(
                         "Q${position.minSalary.toInt()} – Q${position.maxSalary.toInt()}",

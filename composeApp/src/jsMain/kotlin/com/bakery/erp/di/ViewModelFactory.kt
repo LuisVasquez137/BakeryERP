@@ -164,7 +164,9 @@ actual fun createAppViewModels(): AppViewModels {
         employee = EmployeeViewModel(
             employeeRepo, branchRepo, attendanceRepo, payrollRepo,
             jobPositionRepo, FirebaseEmployeeDocumentRepositoryJs(firestore, storage), authRepo, historyRepo,
-            creditRepo
+            creditRepo,
+            // El kiosko web no toma selfie: sus marcas quedan como "sin foto".
+            com.bakery.erp.domain.NoOpAttendanceSelfieUploader()
         ),
         employeeAccess = com.bakery.erp.presentation.employees.EmployeeAccessViewModel(
             employeeRepo, employeeAccessRepo

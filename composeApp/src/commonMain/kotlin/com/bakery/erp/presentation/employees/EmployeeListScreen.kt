@@ -1,5 +1,9 @@
 package com.bakery.erp.presentation.employees
 
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.ui.unit.Dp
+import com.bakery.erp.ui.theme.BrandChip
+import com.bakery.erp.ui.theme.ChipTone
 import com.bakery.erp.model.canAccessBranch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -377,8 +381,10 @@ internal fun EmployeeDetailContent(
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Top
+            verticalAlignment = Alignment.CenterVertically
         ) {
+            EmployeeAvatar(employee, size = 88.dp)
+            Spacer(Modifier.width(16.dp))
             Column(Modifier.weight(1f).padding(end = 16.dp)) {
                 Text(
                     employee.name,
@@ -405,6 +411,8 @@ internal fun EmployeeDetailContent(
             }
         }
 
+        ProfileCompletenessBar(employee)
+
         HorizontalDivider()
 
         if (employee.branchName.isNotEmpty()) {
@@ -427,6 +435,75 @@ internal fun EmployeeDetailContent(
         }
         if (employee.notes.isNotEmpty()) {
             EmployeeDetailRow(Icons.Default.Notes, "Notas", employee.notes)
+        }
+    }
+}
+
+@Composable
+private fun EmployeeAvatar(employee: Employee, size: Dp) {
+    Box(
+        modifier = Modifier.size(size).clip(CircleShape).background(BrandColors.Primary.copy(alpha = 0.10f)),
+        contentAlignment = Alignment.Center
+    ) {
+        if (employee.photoUrl.isNotBlank()) {
+            ProductImage(imageUrl = employee.photoUrl, contentDescription = employee.name, modifier = Modifier.size(size))
+        } else {
+            Icon(Icons.Default.AccountCircle, null, modifier = Modifier.size(size * 0.66f), tint = BrandColors.Primary.copy(alpha = 0.5f))
+        }
+    }
+}
+
+/**
+ * Qué tan llena está la ficha. Solo campos del documento del colaborador, que ya viene en la
+ * lista: no cuesta ninguna lectura. El salario no cuenta a propósito (no todos pueden verlo).
+ */
+internal fun Employee.missingProfileFields(): Pair<Int, List<String>> {
+    val checks = listOf(
+        "Foto" to photoUrl.isNotBlank(),
+        "DPI" to dpi.isNotBlank(),
+        "NIT" to nit.isNotBlank(),
+        "Fecha de nacimiento" to (birthDate > 0L),
+        "Teléfono" to phone.isNotBlank(),
+        "Dirección" to address.isNotBlank(),
+        "Contacto de emergencia" to (emergencyContact.isNotBlank() && emergencyPhone.isNotBlank()),
+        "Sucursal" to branchId.isNotBlank(),
+        "Puesto" to positionId.isNotBlank(),
+        "Tipo de contrato" to contractType.isNotBlank(),
+        "Fecha de ingreso" to (hireDate > 0L),
+        "Horario" to (workDays.isNotEmpty() && startTime.isNotBlank() && endTime.isNotBlank()),
+        "Tipo de pago" to paymentType.isNotBlank()
+    )
+    val missing = checks.filterNot { it.second }.map { it.first }
+    val percent = (checks.size - missing.size) * 100 / checks.size
+    return percent to missing
+}
+
+@Composable
+private fun ProfileCompletenessBar(employee: Employee) {
+    val (percent, missing) = employee.missingProfileFields()
+    val complete = missing.isEmpty()
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                "Información al $percent%",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = if (complete) BrandColors.Success else BrandColors.TextSlate
+            )
+            if (complete) BrandChip("Completa", ChipTone.SUCCESS)
+        }
+        LinearProgressIndicator(
+            progress = { percent / 100f },
+            modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
+            color = if (complete) BrandColors.Success else BrandColors.Primary,
+            trackColor = BrandColors.PrimaryContainer
+        )
+        if (!complete) {
+            Text(
+                "Falta: ${missing.joinToString()}",
+                style = MaterialTheme.typography.bodySmall,
+                color = BrandColors.MutedSlate
+            )
         }
     }
 }

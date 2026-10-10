@@ -1,6 +1,8 @@
 package com.bakery.erp.presentation.employees
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -22,7 +25,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Login
-import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
@@ -35,6 +37,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -61,9 +64,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.bakery.erp.model.AttendanceRecord
 import com.bakery.erp.model.Employee
 import com.bakery.erp.model.EmployeeStatus
+import com.bakery.erp.model.EntryAvailability
+import com.bakery.erp.model.SelfieCheck
+import com.bakery.erp.model.hasSplitShift
+import com.bakery.erp.model.scheduleLabel
+import com.bakery.erp.ui.SelfieCamera
+import com.bakery.erp.ui.SelfieCameraStatus
+import com.bakery.erp.ui.isSelfieCameraAvailable
+import com.bakery.erp.ui.theme.BrandChip
+import com.bakery.erp.ui.theme.ChipTone
 import com.bakery.erp.presentation.auth.AuthViewModel
 import kotlinx.coroutines.delay
 import kotlinx.datetime.Instant
@@ -75,13 +86,15 @@ import com.bakery.erp.ui.theme.BrandColors
 private val KioskGreen = Color(0xFF1B5E20)
 private val KioskRed = Color(0xFFB00020)
 
-private enum class KioskStep { LIST, CONFIRM, SUCCESS }
+private enum class KioskStep { LIST, CONFIRM, SELFIE, SUCCESS }
 
 private data class SuccessInfo(
     val employeeName: String,
-    val wasClockIn: Boolean,
     val time: String,
-    val lateMinutes: Int
+    val lateMinutes: Int,
+    val withPhoto: Boolean,
+    /** "1er turno"/"2do turno" en horario mixto; vacío en turno simple. */
+    val shiftLabel: String
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -98,7 +111,19 @@ fun ShiftClockInScreen(
 
     var kioskStep by remember { mutableStateOf(KioskStep.LIST) }
     var successInfo by remember { mutableStateOf<SuccessInfo?>(null) }
-    var pendingAction by remember { mutableStateOf("") }
+    var pendingCheck by remember { mutableStateOf(SelfieCheck.NONE) }
+
+    // El kiosko solo marca la ENTRADA: lo que se controla es la hora de llegada.
+    fun submit(selfie: ByteArray?, check: SelfieCheck) {
+        pendingCheck = check
+        viewModel.clockInShiftEmployee(companyId, selfie, check)
+    }
+
+    // Sin cámara en este equipo (web) se marca directo, y la marca queda "sin foto".
+    fun startMark() {
+        if (isSelfieCameraAvailable) kioskStep = KioskStep.SELFIE
+        else submit(null, SelfieCheck.SKIPPED)
+    }
     var searchQuery by rememberSaveable { mutableStateOf("") }
 
     LaunchedEffect(companyId) {
@@ -108,7 +133,12 @@ fun ShiftClockInScreen(
     }
 
     LaunchedEffect(state.error) {
-        state.error?.let { snackbarHostState.showSnackbar(it); viewModel.clearError() }
+        state.error?.let {
+            // Falló el registro después de la foto: vuelve a la ficha para reintentar.
+            if (kioskStep == KioskStep.SELFIE) kioskStep = KioskStep.CONFIRM
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearError()
+        }
     }
 
     LaunchedEffect(state.shiftClockInSuccess) {
@@ -116,12 +146,12 @@ fun ShiftClockInScreen(
             val record = state.shiftTodayRecord
             val employee = state.shiftClockInEmployee
             if (record != null && employee != null) {
-                val isClockIn = pendingAction == "clockIn"
                 successInfo = SuccessInfo(
                     employeeName = employee.name,
-                    wasClockIn = isClockIn,
-                    time = kioskFormatTime(if (isClockIn) record.clockIn else record.clockOut),
-                    lateMinutes = record.lateMinutes
+                    time = kioskFormatTime(record.clockIn),
+                    lateMinutes = record.lateMinutes,
+                    withPhoto = pendingCheck != SelfieCheck.SKIPPED,
+                    shiftLabel = if (employee.hasSplitShift) shiftName(record.shiftNumber) else ""
                 )
                 kioskStep = KioskStep.SUCCESS
             }
@@ -131,7 +161,8 @@ fun ShiftClockInScreen(
 
     LaunchedEffect(kioskStep) {
         if (kioskStep == KioskStep.SUCCESS) {
-            delay(3_500)
+            // Con tardanza se queda más tiempo: el aviso es para leerlo.
+            delay(successScreenMillis(successInfo?.lateMinutes ?: 0))
             kioskStep = KioskStep.LIST
             viewModel.clearShiftEmployee()
             successInfo = null
@@ -183,20 +214,22 @@ fun ShiftClockInScreen(
             KioskStep.CONFIRM -> KioskConfirmContent(
                 modifier = Modifier.fillMaxSize(),
                 employee = state.shiftClockInEmployee,
-                todayRecord = state.shiftTodayRecord,
+                entry = state.shiftEntry,
                 isLoading = state.isShiftClockInLoading,
-                onClockIn = {
-                    pendingAction = "clockIn"
-                    viewModel.clockInShiftEmployee(companyId)
-                },
-                onClockOut = {
-                    pendingAction = "clockOut"
-                    viewModel.clockOutShiftEmployee(companyId)
-                },
+                onClockIn = { startMark() },
                 onCancel = {
                     kioskStep = KioskStep.LIST
                     viewModel.clearShiftEmployee()
                 }
+            )
+
+            KioskStep.SELFIE -> KioskSelfieContent(
+                modifier = Modifier.fillMaxSize(),
+                employeeName = state.shiftClockInEmployee?.name ?: "",
+                isSaving = state.isShiftClockInLoading,
+                onCaptured = { jpeg, check -> submit(jpeg, check) },
+                onSkip = { submit(null, SelfieCheck.SKIPPED) },
+                onCancel = { kioskStep = KioskStep.CONFIRM }
             )
 
             KioskStep.SUCCESS -> KioskSuccessContent(
@@ -296,8 +329,9 @@ private fun KioskEmployeeCard(employee: Employee, onClick: () -> Unit) {
                 if (employee.positionTitle.isNotBlank()) {
                     Text(employee.positionTitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                if (employee.startTime.isNotBlank() && employee.endTime.isNotBlank()) {
-                    Text("${employee.startTime} – ${employee.endTime}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                val schedule = employee.scheduleLabel()
+                if (schedule.isNotBlank()) {
+                    Text(schedule, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
                 }
             }
             Icon(Icons.Default.Login, null, tint = KioskBlue, modifier = Modifier.size(22.dp))
@@ -311,16 +345,16 @@ private fun KioskEmployeeCard(employee: Employee, onClick: () -> Unit) {
 private fun KioskConfirmContent(
     modifier: Modifier,
     employee: Employee?,
-    todayRecord: AttendanceRecord?,
+    entry: EntryAvailability?,
     isLoading: Boolean,
     onClockIn: () -> Unit,
-    onClockOut: () -> Unit,
     onCancel: () -> Unit
 ) {
     if (employee == null) return
 
-    val isClockedIn = todayRecord != null && todayRecord.clockIn > 0 && todayRecord.clockOut == 0L
-    val hasClockedOut = todayRecord != null && todayRecord.clockOut > 0
+    val available = entry as? EntryAvailability.Available
+    val alreadyIn = entry != null && available == null
+    val split = employee.hasSplitShift
 
     Box(
         modifier = modifier.background(BrandColors.Ivory),
@@ -364,7 +398,8 @@ private fun KioskConfirmContent(
                 )
             }
 
-            if (employee.startTime.isNotBlank() && employee.endTime.isNotBlank()) {
+            val schedule = employee.scheduleLabel()
+            if (schedule.isNotBlank()) {
                 Surface(shape = RoundedCornerShape(50), color = KioskBlue.copy(alpha = 0.08f)) {
                     Row(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
@@ -372,39 +407,38 @@ private fun KioskConfirmContent(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(Icons.Default.Schedule, null, tint = KioskBlue, modifier = Modifier.size(14.dp))
-                        Text("Turno: ${employee.startTime} – ${employee.endTime}", style = MaterialTheme.typography.labelMedium, color = KioskBlue)
+                        Text(
+                            (if (split) "Turno mixto: " else "Turno: ") + schedule,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = KioskBlue
+                        )
                     }
                 }
             }
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
-            when {
-                hasClockedOut -> Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFFDCF1DC)),
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(modifier = Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.CheckCircle, null, tint = KioskGreen, modifier = Modifier.size(18.dp))
-                        Text(
-                            "Turno completado — Entrada: ${kioskFormatTime(todayRecord!!.clockIn)} · Salida: ${kioskFormatTime(todayRecord.clockOut)}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = KioskGreen
-                        )
-                    }
-                }
-
-                isClockedIn -> Card(
+            val doneMessage = when (entry) {
+                is EntryAvailability.Done -> if (split && entry.entries.size > 1)
+                    "Ya marcaste tus dos entradas de hoy: " +
+                        entry.entries.joinToString(" y ") { kioskFormatTime(it.clockIn) }
+                else "Ya marcaste tu entrada hoy a las ${kioskFormatTime(entry.entries.last().clockIn)}"
+                is EntryAvailability.SecondOpensLater ->
+                    "Ya marcaste la entrada del 1er turno a las ${kioskFormatTime(entry.first.clockIn)}. " +
+                        "La del 2do turno se marca a partir de las ${entry.opensAt}."
+                else -> null
+            }
+            if (doneMessage != null) {
+                Card(
                     colors = CardDefaults.cardColors(containerColor = BrandColors.PrimaryContainer),
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(modifier = Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Login, null, tint = KioskBlue, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.CheckCircle, null, tint = KioskBlue, modifier = Modifier.size(18.dp))
                         Text(
-                            "Entrada marcada: ${kioskFormatTime(todayRecord!!.clockIn)}",
-                            style = MaterialTheme.typography.bodySmall,
+                            doneMessage,
+                            style = MaterialTheme.typography.bodyMedium,
                             color = KioskBlue
                         )
                     }
@@ -413,10 +447,10 @@ private fun KioskConfirmContent(
 
             Spacer(Modifier.height(4.dp))
 
-            if (isLoading) {
+            if (isLoading || entry == null) {
                 CircularProgressIndicator(color = KioskBlue, modifier = Modifier.size(36.dp))
             } else {
-                if (!isClockedIn && !hasClockedOut) {
+                if (available != null) {
                     Button(
                         onClick = onClockIn,
                         colors = ButtonDefaults.buttonColors(containerColor = KioskGreen),
@@ -425,26 +459,130 @@ private fun KioskConfirmContent(
                     ) {
                         Icon(Icons.Default.Login, null, modifier = Modifier.size(22.dp))
                         Spacer(Modifier.width(10.dp))
-                        Text("MARCAR ENTRADA", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    }
-                }
-
-                if (isClockedIn) {
-                    Button(
-                        onClick = onClockOut,
-                        colors = ButtonDefaults.buttonColors(containerColor = KioskRed),
-                        modifier = Modifier.fillMaxWidth().height(60.dp),
-                        shape = RoundedCornerShape(14.dp)
-                    ) {
-                        Icon(Icons.Default.Logout, null, modifier = Modifier.size(22.dp))
-                        Spacer(Modifier.width(10.dp))
-                        Text("MARCAR SALIDA", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text(
+                            if (split) "MARCAR ENTRADA · ${shiftName(available.shiftNumber).uppercase()}" else "MARCAR ENTRADA",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
             }
 
             TextButton(onClick = onCancel, enabled = !isLoading) {
-                Text("Cancelar", color = MaterialTheme.colorScheme.outline)
+                Text(if (alreadyIn) "Volver" else "Cancelar", color = MaterialTheme.colorScheme.outline)
+            }
+        }
+    }
+}
+
+// ── Selfie ────────────────────────────────────────────────────────────────────
+
+/** Tras este tiempo sin foto aparece "Marcar sin foto": la cámara nunca deja a nadie sin marcar. */
+private const val SELFIE_SKIP_AFTER_MS = 15_000L
+
+/**
+ * Pensada para la tablet en horizontal: todo apilado al centro y el círculo chico a
+ * propósito (a lo sumo 200 dp o un tercio del alto), para que nadie sienta que se está
+ * tomando una foto de cuerpo entero. La foto se dispara sola.
+ */
+@Composable
+private fun KioskSelfieContent(
+    modifier: Modifier,
+    employeeName: String,
+    isSaving: Boolean,
+    onCaptured: (ByteArray, SelfieCheck) -> Unit,
+    onSkip: () -> Unit,
+    onCancel: () -> Unit
+) {
+    var status by remember { mutableStateOf(SelfieCameraStatus.STARTING) }
+    var showSkip by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        delay(SELFIE_SKIP_AFTER_MS)
+        showSkip = true
+    }
+    val cameraBroken = status == SelfieCameraStatus.NO_PERMISSION || status == SelfieCameraStatus.NO_CAMERA
+    val captured = status == SelfieCameraStatus.CAPTURED
+
+    val ringColor = when (status) {
+        SelfieCameraStatus.BLINK -> KioskBlue
+        SelfieCameraStatus.CAPTURED -> KioskGreen
+        SelfieCameraStatus.MULTIPLE_FACES -> BrandColors.Accent
+        else -> MaterialTheme.colorScheme.outlineVariant
+    }
+    val message = when (status) {
+        SelfieCameraStatus.STARTING -> "Abriendo cámara…"
+        SelfieCameraStatus.NO_PERMISSION -> "La app no tiene permiso para usar la cámara"
+        SelfieCameraStatus.NO_CAMERA -> "Este equipo no tiene cámara frontal disponible"
+        SelfieCameraStatus.LOOK_AT_CAMERA -> "Acércate y mira a la cámara"
+        SelfieCameraStatus.MULTIPLE_FACES -> "Solo una persona frente a la cámara"
+        SelfieCameraStatus.BLINK -> "Parpadea"
+        SelfieCameraStatus.CAPTURED -> "¡Listo!"
+    }
+
+    BoxWithConstraints(
+        modifier = modifier.background(BrandColors.Ivory).padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        val circle = minOf(200.dp, maxHeight / 3, maxWidth * 0.6f)
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                employeeName,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                "Marcando entrada",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Box(
+                modifier = Modifier
+                    .size(circle)
+                    .border(4.dp, ringColor, CircleShape)
+                    .padding(6.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black),
+                contentAlignment = Alignment.Center
+            ) {
+                if (!cameraBroken) {
+                    SelfieCamera(
+                        modifier = Modifier.fillMaxSize().clip(CircleShape),
+                        onStatus = { status = it },
+                        onCaptured = onCaptured
+                    )
+                }
+                if (captured || isSaving) {
+                    Box(
+                        Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(color = Color.White, modifier = Modifier.size(36.dp))
+                    }
+                }
+            }
+
+            Text(
+                message,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = if (cameraBroken) KioskRed else KioskBlue,
+                textAlign = TextAlign.Center
+            )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onCancel, enabled = !captured && !isSaving) {
+                    Text("Cancelar", color = MaterialTheme.colorScheme.outline)
+                }
+                if ((showSkip || cameraBroken) && !captured && !isSaving) {
+                    OutlinedButton(onClick = onSkip) {
+                        Text("Marcar sin foto")
+                    }
+                }
             }
         }
     }
@@ -459,46 +597,45 @@ private fun KioskSuccessContent(
 ) {
     if (info == null) return
 
-    var countdown by remember { mutableIntStateOf(3) }
+    val totalSeconds = (successScreenMillis(info.lateMinutes) / 1_000).toInt()
+    var countdown by remember { mutableIntStateOf(totalSeconds) }
     LaunchedEffect(Unit) {
-        repeat(3) {
+        repeat(totalSeconds) {
             delay(1_000)
             countdown--
         }
     }
-
-    val bgColor = if (info.wasClockIn) Color(0xFFF0FFF4) else Color(0xFFFFF0F0)
-    val accentColor = if (info.wasClockIn) KioskGreen else KioskRed
+    val isLate = info.lateMinutes > 0
 
     Box(
-        modifier = modifier.background(bgColor),
+        modifier = modifier.background(BrandColors.Ivory),
         contentAlignment = Alignment.Center
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-            modifier = Modifier.padding(40.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.padding(32.dp).widthIn(max = 560.dp)
         ) {
             Box(
                 modifier = Modifier
-                    .size(100.dp)
+                    .size(84.dp)
                     .clip(CircleShape)
-                    .background(accentColor),
+                    .background(KioskGreen),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = if (info.wasClockIn) Icons.Default.CheckCircle else Icons.Default.Logout,
+                    imageVector = Icons.Default.CheckCircle,
                     contentDescription = null,
                     tint = Color.White,
-                    modifier = Modifier.size(56.dp)
+                    modifier = Modifier.size(48.dp)
                 )
             }
 
             Text(
-                if (info.wasClockIn) "Entrada registrada" else "Salida registrada",
-                style = MaterialTheme.typography.headlineMedium,
+                if (info.shiftLabel.isBlank()) "Entrada registrada" else "Entrada registrada · ${info.shiftLabel}",
+                style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
-                color = accentColor,
+                color = KioskGreen,
                 textAlign = TextAlign.Center
             )
 
@@ -511,34 +648,49 @@ private fun KioskSuccessContent(
 
             Text(
                 info.time,
-                fontSize = 52.sp,
+                fontSize = 48.sp,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface
             )
 
-            if (info.wasClockIn && info.lateMinutes > 0) {
-                Surface(shape = RoundedCornerShape(50), color = KioskRed.copy(alpha = 0.12f)) {
-                    Text(
-                        kioskFormatLateTime(info.lateMinutes),
-                        style = MaterialTheme.typography.titleSmall,
-                        color = KioskRed,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-                    )
-                }
-            } else if (info.wasClockIn) {
-                Surface(shape = RoundedCornerShape(50), color = KioskGreen.copy(alpha = 0.12f)) {
-                    Text(
-                        "A tiempo",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = KioskGreen,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-                    )
-                }
+            if (info.withPhoto) {
+                BrandChip("Foto registrada", ChipTone.INFO)
+            } else {
+                BrandChip("Marcada sin foto", ChipTone.ATTENTION)
             }
 
-            Spacer(Modifier.height(8.dp))
+            if (isLate) {
+                // Tono de aviso, no de regaño: naranja de relleno y texto AccentDeep (paleta).
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = BrandColors.Accent.copy(alpha = 0.14f)),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp).fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            "Has llegado ${kioskFormatLateTime(info.lateMinutes)} tarde",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = BrandColors.AccentDeep,
+                            textAlign = TextAlign.Center
+                        )
+                        Text(
+                            "Esfuérzate por llegar un poco más temprano para evitar penalizaciones innecesarias.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            } else {
+                BrandChip("A tiempo, ¡gracias por tu puntualidad!", ChipTone.SUCCESS)
+            }
+
+            Spacer(Modifier.height(4.dp))
             Text(
                 "Volviendo en $countdown...",
                 style = MaterialTheme.typography.bodyMedium,
@@ -548,6 +700,10 @@ private fun KioskSuccessContent(
     }
 }
 
+private fun shiftName(shiftNumber: Int) = if (shiftNumber == 2) "2do turno" else "1er turno"
+
+private fun successScreenMillis(lateMinutes: Int): Long = if (lateMinutes > 0) 7_000L else 4_000L
+
 // ── Utilidades ────────────────────────────────────────────────────────────────
 
 private fun kioskFormatTime(millis: Long): String {
@@ -556,12 +712,12 @@ private fun kioskFormatTime(millis: Long): String {
     return "${ldt.hour.toString().padStart(2, '0')}:${ldt.minute.toString().padStart(2, '0')}"
 }
 
-private fun kioskFormatLateTime(minutes: Int): String = when {
-    minutes <= 0 -> ""
-    minutes < 60 -> "$minutes minutos tarde"
-    else -> {
-        val h = minutes / 60
-        val m = minutes % 60
-        if (m == 0) "$h hora${if (h > 1) "s" else ""} tarde" else "$h h $m min tarde"
-    }
+/** "1 minuto", "25 minutos", "1 hora", "1 hora y 10 minutos". */
+private fun kioskFormatLateTime(minutes: Int): String {
+    fun mins(n: Int) = "$n minuto${if (n == 1) "" else "s"}"
+    if (minutes < 60) return mins(minutes)
+    val h = minutes / 60
+    val m = minutes % 60
+    val hours = "$h hora${if (h == 1) "" else "s"}"
+    return if (m == 0) hours else "$hours y ${mins(m)}"
 }

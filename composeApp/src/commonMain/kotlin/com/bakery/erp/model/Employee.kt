@@ -42,6 +42,13 @@ data class Employee(
     val workDays: List<Int> = emptyList(),
     val startTime: String = "",
     val endTime: String = "",
+    /**
+     * Turno mixto: dos entradas al día (p. ej. 07:00–11:00 y 15:00–19:00). El kiosko pide una
+     * marca por turno y la tardanza de cada una se mide contra su propia hora de entrada.
+     */
+    val splitShift: Boolean = false,
+    val secondStartTime: String = "",
+    val secondEndTime: String = "",
     // Financial
     val paymentType: String = "",
     val bank: String = "",

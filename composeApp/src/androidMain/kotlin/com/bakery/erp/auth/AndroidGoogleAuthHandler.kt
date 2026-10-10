@@ -7,6 +7,7 @@ import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.NoCredentialException
+import com.bakery.erp.data.CurrentActivityHolder
 import com.bakery.erp.domain.GoogleAuthHandler
 import com.bakery.erp.domain.GoogleSignInCancelledException
 import com.bakery.erp.domain.GoogleSignInException
@@ -60,8 +61,13 @@ class AndroidGoogleAuthHandler(private val context: Context) : GoogleAuthHandler
     ): String {
         val request = GetCredentialRequest.Builder().addCredentialOption(option).build()
 
+        // El selector de cuentas necesita una Activity: con el contexto de la aplicación
+        // funciona en Android 14+ (lo abre el sistema) pero en equipos más viejos falla con
+        // "Failed to launch the selector UI".
+        val uiContext = CurrentActivityHolder.activity ?: context
+
         val result = try {
-            credentialManager.getCredential(request = request, context = context)
+            credentialManager.getCredential(request = request, context = uiContext)
         } catch (e: GetCredentialCancellationException) {
             throw GoogleSignInCancelledException()
         } catch (e: NoCredentialException) {

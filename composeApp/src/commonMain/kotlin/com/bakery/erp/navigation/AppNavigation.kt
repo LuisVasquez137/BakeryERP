@@ -2071,8 +2071,15 @@ fun AppNavigation(
                 EmployeeFormScreen(
                     employeeId = employeeId,
                     onNavigateBack = { navController.popBackStack() },
+                    // El formulario sale de la pila: "atrás" desde la ficha vuelve a la lista.
+                    onCreated = { newId ->
+                        navController.navigate(Screen.EmployeeDetail.route(newId)) {
+                            popUpTo(Screen.EmployeeForm.route) { inclusive = true }
+                        }
+                    },
                     authViewModel = viewModel,
-                    viewModel = employeeViewModel
+                    viewModel = employeeViewModel,
+                    accessViewModel = vms.employeeAccess
                 )
             }
         }
@@ -2126,7 +2133,9 @@ fun AppNavigation(
         ) { backStackEntry ->
             val employeeId = backStackEntry.stringArg("employeeId") ?: return@composable
             val payrollId = backStackEntry.stringArg("payrollId")
+            // Nómina: gestionar colaboradores Y ver salarios (RequirePermission es "o", por eso anidado).
             RequirePermission(state.user, Permission.MANAGE_EMPLOYEES, onBack = { navController.popBackStack() }) {
+            RequirePermission(state.user, Permission.VIEW_EMPLOYEE_SALARY, onBack = { navController.popBackStack() }) {
                 PayrollFormScreen(
                     employeeId = employeeId,
                     payrollId = payrollId,
@@ -2134,6 +2143,7 @@ fun AppNavigation(
                     authViewModel = viewModel,
                     viewModel = employeeViewModel
                 )
+            }
             }
         }
 

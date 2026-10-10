@@ -188,8 +188,9 @@ fun EmployeeAccessTab(
     }
 }
 
+/** También lo usa el alta del colaborador (EmployeeFormScreen), que guarda el PIN hasta tener la ficha. */
 @Composable
-private fun SetPinDialog(
+internal fun SetPinDialog(
     employeeName: String,
     isSaving: Boolean,
     error: String?,

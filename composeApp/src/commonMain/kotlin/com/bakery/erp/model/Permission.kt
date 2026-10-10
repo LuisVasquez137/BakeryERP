@@ -45,6 +45,23 @@ enum class Permission {
 
     // Colaboradores
     MANAGE_EMPLOYEES,
+    /**
+     * Ver y editar cuánto gana cada quien (salario, nómina, rangos de los puestos). Aparte de
+     * MANAGE_EMPLOYEES a propósito: la encargada registra a la gente de su sucursal sin
+     * enterarse del sueldo de nadie.
+     */
+    VIEW_EMPLOYEE_SALARY,
+    /**
+     * Una por pestaña de la ficha del colaborador. MANAGE_EMPLOYEES solo da la lista, el
+     * Perfil y el alta/edición; lo demás se reparte para que no todos vean todo (sus
+     * papeles, sus faltas, lo que debe).
+     */
+    VIEW_EMPLOYEE_ATTENDANCE,
+    VIEW_EMPLOYEE_DOCUMENTS,
+    VIEW_EMPLOYEE_HISTORY,
+    VIEW_EMPLOYEE_CREDIT,
+    /** Ver la pestaña Acceso (PIN y permisos). Cambiar algo ahí sigue siendo solo OWNER/ADMIN. */
+    VIEW_EMPLOYEE_ACCESS,
 
     // Activos Fijos
     VIEW_ASSETS, EDIT_ASSETS, MANAGE_ASSETS, ADD_ASSET_HISTORY,
@@ -129,6 +146,12 @@ enum class Permission {
         EDIT_PREPARATIONS -> "Editar preparaciones"
         MANAGE_PREPARATION_BATCHES -> "Producir lotes de preparación"
         MANAGE_EMPLOYEES -> "Gestionar colaboradores"
+        VIEW_EMPLOYEE_SALARY -> "Ver y editar salarios"
+        VIEW_EMPLOYEE_ATTENDANCE -> "Ver asistencia de colaboradores"
+        VIEW_EMPLOYEE_DOCUMENTS -> "Ver y adjuntar documentos de colaboradores"
+        VIEW_EMPLOYEE_HISTORY -> "Ver historial de colaboradores"
+        VIEW_EMPLOYEE_CREDIT -> "Ver créditos de colaboradores"
+        VIEW_EMPLOYEE_ACCESS -> "Ver acceso (PIN) de colaboradores"
         VIEW_ASSETS -> "Ver activos fijos"
         EDIT_ASSETS -> "Crear y editar activos"
         MANAGE_ASSETS -> "Eliminar, dar de baja y transferir"
@@ -199,6 +222,12 @@ enum class Permission {
         EDIT_PREPARATIONS -> "Puede crear y editar preparaciones"
         MANAGE_PREPARATION_BATCHES -> "Puede producir lotes de preparación y descontar inventario"
         MANAGE_EMPLOYEES -> "Puede gestionar la información de los colaboradores"
+        VIEW_EMPLOYEE_SALARY -> "Puede ver y editar el salario de los colaboradores, su nómina y los rangos de salario de los puestos"
+        VIEW_EMPLOYEE_ATTENDANCE -> "Puede ver la pestaña Asistencia en la ficha del colaborador"
+        VIEW_EMPLOYEE_DOCUMENTS -> "Puede ver, adjuntar y borrar los documentos del colaborador (DPI, antecedentes, contrato…)"
+        VIEW_EMPLOYEE_HISTORY -> "Puede ver y agregar eventos en el historial del colaborador"
+        VIEW_EMPLOYEE_CREDIT -> "Puede ver la cuenta de crédito del colaborador (fiados y adelantos)"
+        VIEW_EMPLOYEE_ACCESS -> "Puede ver la pestaña Acceso del colaborador; cambiar el PIN o permisos sigue siendo del dueño o administrador"
         VIEW_ASSETS -> "Puede ver el inventario de activos fijos de la empresa"
         EDIT_ASSETS -> "Puede crear y editar activos fijos"
         MANAGE_ASSETS -> "Puede eliminar, dar de baja, vender y transferir activos"
@@ -258,7 +287,8 @@ enum class Permission {
         ISSUE_PLANT_MATERIAL -> "Producción"
         VIEW_PREPARATIONS, EDIT_PREPARATIONS,
         MANAGE_PREPARATION_BATCHES -> "Preparaciones"
-        MANAGE_EMPLOYEES -> "Administración"
+        MANAGE_EMPLOYEES, VIEW_EMPLOYEE_SALARY, VIEW_EMPLOYEE_ATTENDANCE, VIEW_EMPLOYEE_DOCUMENTS,
+        VIEW_EMPLOYEE_HISTORY, VIEW_EMPLOYEE_CREDIT, VIEW_EMPLOYEE_ACCESS -> "Administración"
         VIEW_ASSETS, EDIT_ASSETS,
         MANAGE_ASSETS, ADD_ASSET_HISTORY -> "Activos Fijos"
         MANAGE_PRICE_LISTS -> "Catálogo"
@@ -290,5 +320,6 @@ enum class Permission {
      * decidido. Quitar el permiso de su grupo lo escondería de donde se busca; lo
      * que corresponde es que el atajo no lo incluya.
      */
-    val isSensitive: Boolean get() = this == VIEW_DISPATCH_VALUE || this == VIEW_SALES_VALUE
+    val isSensitive: Boolean get() =
+        this == VIEW_DISPATCH_VALUE || this == VIEW_SALES_VALUE || this == VIEW_EMPLOYEE_SALARY
 }

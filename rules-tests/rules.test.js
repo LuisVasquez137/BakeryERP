@@ -390,4 +390,12 @@ describe('storage', () => {
     await assertFails(put('stranger', 'products/p1.jpg'));
     await assertFails(put('stranger', 'otra/ruta.jpg'));
   });
+
+  test('selfies de asistencia: solo la empresa dueña', async () => {
+    await assertSucceeds(put('cajeraA', 'attendanceSelfies/orgA/e1/r1_in.jpg'));
+    await assertSucceeds(read('cajeraA', 'attendanceSelfies/orgA/e1/r1_in.jpg'));
+    await assertFails(read('ownerB', 'attendanceSelfies/orgA/e1/r1_in.jpg'));
+    await assertFails(put('ownerB', 'attendanceSelfies/orgA/e1/r2_in.jpg'));
+    await assertFails(put('stranger', 'attendanceSelfies/orgA/e1/r3_in.jpg'));
+  });
 });

@@ -1,5 +1,6 @@
 package com.bakery.erp.presentation.employees
 
+import com.bakery.erp.model.hasPermission
 import com.bakery.erp.model.canAccessBranch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -188,7 +189,8 @@ fun JobPositionDetailScreen(
                                     }
                                 }
 
-                                if (position.minSalary > 0 || position.maxSalary > 0) {
+                                if (authState.user?.hasPermission(com.bakery.erp.model.Permission.VIEW_EMPLOYEE_SALARY) == true &&
+                                    (position.minSalary > 0 || position.maxSalary > 0)) {
                                     HorizontalDivider(color = PrimaryBlue.copy(alpha = 0.10f))
                                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                                         Text("Rango salarial:", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -50,6 +50,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.bakery.erp.model.hasPermission
 import com.bakery.erp.model.JobPosition
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.ui.AdaptiveContainer
@@ -113,6 +114,7 @@ fun JobPositionFormScreen(
         existing = existing,
         isNew = isNew,
         companyId = companyId,
+        canSeeSalary = authState.user?.hasPermission(com.bakery.erp.model.Permission.VIEW_EMPLOYEE_SALARY) == true,
         isLoading = state.isLoading,
         error = state.error,
         onNavigateBack = onNavigateBack,
@@ -127,6 +129,7 @@ private fun JobPositionFormContent(
     existing: JobPosition?,
     isNew: Boolean,
     companyId: String,
+    canSeeSalary: Boolean,
     isLoading: Boolean,
     error: String?,
     onNavigateBack: () -> Unit,
@@ -220,6 +223,8 @@ private fun JobPositionFormContent(
                 )
 
                 // ── Rango salarial ────────────────────────────────────────────
+                // Solo con VIEW_EMPLOYEE_SALARY: sin él, se guarda el rango que ya tenía.
+                if (canSeeSalary) {
                 PosFormSection("Rango Salarial Referencial")
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -241,6 +246,7 @@ private fun JobPositionFormContent(
                         prefix = { Text("Q") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
                     )
+                }
                 }
 
                 // ── Responsabilidades ─────────────────────────────────────────
@@ -326,8 +332,8 @@ private fun JobPositionFormContent(
                             department = department.trim(),
                             responsibilities = responsibilities.map { it.trim() }.filter { it.isNotBlank() },
                             requirements = requirements.map { it.trim() }.filter { it.isNotBlank() },
-                            minSalary = minSalaryStr.toDoubleOrNull() ?: 0.0,
-                            maxSalary = maxSalaryStr.toDoubleOrNull() ?: 0.0,
+                            minSalary = if (canSeeSalary) minSalaryStr.toDoubleOrNull() ?: 0.0 else existing?.minSalary ?: 0.0,
+                            maxSalary = if (canSeeSalary) maxSalaryStr.toDoubleOrNull() ?: 0.0 else existing?.maxSalary ?: 0.0,
                             active = active,
                             createdAt = existing?.createdAt ?: 0L
                         )
