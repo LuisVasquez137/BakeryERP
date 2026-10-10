@@ -282,3 +282,16 @@ que el de las sucursales. Antes la caja solo cobraba `salePrice`: no había form
 - **Al cobrar, la caja vuelve sola a mostrador**: quedarse en modo revendedor le cobraría barato al
   siguiente de la fila.
 - Tests: `ListPriceResolutionTest`.
+
+### Alta de revendedores sin app (oct 2026)
+
+Antes un revendedor solo existía si se registraba en la app (`ResellerSetupScreen` → aprobar). La
+mayoría no tiene la app, así que **Revendedores** (Home, `ResellerApprovalScreen`) ahora tiene
+"Agregar revendedor" y un lápiz en cada tarjeta que abren `ExternalCustomerFormScreen`.
+- Alta desde aquí = `registrationStatus` ACTIVE y sin `linkedUserId`: entra directo a la caja.
+- Para un revendedor el formulario **exige lista de precios** (sin lista la caja no entra al modo
+  revendedor) y pide cómo compra: sucursal y hora si retira, referencia si se le entrega.
+- La pantalla solo muestra tipo RESELLER; los clientes recurrentes siguen en Pedidos de clientes.
+- Inactivar (switch "Activo") lo saca de la caja sin borrar su historial.
+- Los 4 de prueba se borraron con `functions/tools/delete-test-resellers.js` (respaldo en JSON);
+  sus 5 pedidos de prueba quedan, guardan el nombre como copia.

@@ -21,6 +21,7 @@ data class ExternalCustomerUiState(
     val selectedCustomer: ExternalCustomer? = null,
     val priceLists: List<PriceList> = emptyList(),
     val producingBranches: List<Branch> = emptyList(),
+    val sellingBranches: List<Branch> = emptyList(),
     /** Mapa `producingBranchId → turnos` cacheado para no recargar al expandir cada card. */
     val shiftsByBranch: Map<String, List<ProductionShift>> = emptyMap(),
     val isLoading: Boolean = false,
@@ -55,6 +56,18 @@ class ExternalCustomerViewModel(
         viewModelScope.launch {
             runCatching { priceListRepo.getLists(companyId) }
                 .onSuccess { _uiState.value = _uiState.value.copy(priceLists = it) }
+                .onFailure { _uiState.value = _uiState.value.copy(error = it.message) }
+        }
+    }
+
+    /** Sucursales con caja: donde el revendedor pasa a comprar. Para el formulario. */
+    fun loadSellingBranches(companyId: String) {
+        viewModelScope.launch {
+            runCatching {
+                branchRepo.getBranches(companyId)
+                    .filter { it.active && BranchCapability.CAN_SELL in it.capabilities }
+            }
+                .onSuccess { _uiState.value = _uiState.value.copy(sellingBranches = it) }
                 .onFailure { _uiState.value = _uiState.value.copy(error = it.message) }
         }
     }

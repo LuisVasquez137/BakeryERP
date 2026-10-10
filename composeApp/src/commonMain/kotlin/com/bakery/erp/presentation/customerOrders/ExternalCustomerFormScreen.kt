@@ -55,7 +55,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.ExternalCustomer
+import com.bakery.erp.model.Branch
 import com.bakery.erp.model.ExternalCustomerType
+import com.bakery.erp.model.ResellerDeliveryMode
 import com.bakery.erp.model.PriceList
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.ui.AdaptiveContainer
@@ -82,6 +84,7 @@ fun ExternalCustomerFormScreen(
     LaunchedEffect(customerId, companyId) {
         if (companyId.isNotEmpty()) {
             viewModel.loadPriceLists(companyId)
+            viewModel.loadSellingBranches(companyId)
             if (needsLoad) viewModel.loadCustomerById(companyId, customerId!!)
             else viewModel.selectCustomer(null)
         }
@@ -94,7 +97,7 @@ fun ExternalCustomerFormScreen(
         state.error?.let { snackbarHostState.showSnackbar(it); viewModel.clearError() }
     }
 
-    val title = if (needsLoad) "Editar cliente" else "Nuevo cliente externo"
+    val title = if (needsLoad) "Editar cliente" else "Nuevo cliente"
 
     Scaffold(
         containerColor = WarmIvory,
@@ -124,6 +127,7 @@ fun ExternalCustomerFormScreen(
                 FormContent(
                     existing = state.selectedCustomer,
                     priceLists = state.priceLists,
+                    branches = state.sellingBranches,
                     isSaving = state.isLoading,
                     onSave = { viewModel.saveCustomer(companyId, it) },
                     onDelete = { id -> viewModel.deleteCustomer(companyId, id) }
@@ -138,6 +142,7 @@ fun ExternalCustomerFormScreen(
 private fun FormContent(
     existing: ExternalCustomer?,
     priceLists: List<PriceList>,
+    branches: List<Branch>,
     isSaving: Boolean,
     onSave: (ExternalCustomer) -> Unit,
     onDelete: (id: String) -> Unit
@@ -155,6 +160,12 @@ private fun FormContent(
     var priceListId by rememberSaveable { mutableStateOf(existing?.priceListId ?: "") }
     var active by rememberSaveable { mutableStateOf(existing?.active ?: true) }
     var notes by rememberSaveable { mutableStateOf(existing?.notes ?: "") }
+    // Cómo compra el revendedor: lo mismo que pide la app al registrarse (ResellerSetupScreen).
+    var deliveryMode by rememberSaveable { mutableStateOf(existing?.deliveryMode ?: ResellerDeliveryMode.PICKUP) }
+    var preferredBranchId by rememberSaveable { mutableStateOf(existing?.preferredBranchId ?: "") }
+    var pickupTime by rememberSaveable { mutableStateOf(existing?.preferredPickupTime ?: "") }
+    var addressReference by rememberSaveable { mutableStateOf(existing?.deliveryAddressReference ?: "") }
+    val isReseller = type == ExternalCustomerType.RESELLER
     var showDeleteDialog by remember { mutableStateOf(false) }
 
     val scroll = rememberScrollState()
@@ -233,10 +244,13 @@ private fun FormContent(
             onExpandedChange = { listExpanded = !listExpanded }
         ) {
             OutlinedTextField(
-                value = selectedList?.name ?: "Default por tipo",
+                value = selectedList?.name ?: if (isReseller) "" else "Default por tipo",
                 onValueChange = {},
                 readOnly = true,
-                label = { Text("Lista de precios") },
+                label = { Text(if (isReseller) "Lista de precios *" else "Lista de precios") },
+                supportingText = if (isReseller) {
+                    { Text("Con estos precios se le cobra en caja. Sin lista no se le puede vender como revendedor.") }
+                } else null,
                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = listExpanded) },
                 modifier = Modifier
                     .menuAnchor(MenuAnchorType.PrimaryNotEditable, true)
@@ -246,16 +260,82 @@ private fun FormContent(
                 expanded = listExpanded,
                 onDismissRequest = { listExpanded = false }
             ) {
-                DropdownMenuItem(
-                    text = { Text("Default por tipo (sin asignar)") },
-                    onClick = { priceListId = ""; listExpanded = false }
-                )
+                if (!isReseller) {
+                    DropdownMenuItem(
+                        text = { Text("Default por tipo (sin asignar)") },
+                        onClick = { priceListId = ""; listExpanded = false }
+                    )
+                }
                 priceLists.forEach { list ->
                     DropdownMenuItem(
-                        text = { Text("${list.name} · ${list.type}") },
+                        text = { Text(list.name) },
                         onClick = { priceListId = list.id; listExpanded = false }
                     )
                 }
+            }
+        }
+
+        if (isReseller) {
+            Text("¿Cómo compra?", style = MaterialTheme.typography.labelLarge, color = PrimaryBlue)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(ResellerDeliveryMode.PICKUP, ResellerDeliveryMode.DELIVERY).forEach { opt ->
+                    FilterChip(
+                        selected = deliveryMode == opt,
+                        onClick = { deliveryMode = opt },
+                        label = { Text(ResellerDeliveryMode.label(opt)) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = PrimaryBlue,
+                            selectedLabelColor = Color.White
+                        )
+                    )
+                }
+            }
+            if (deliveryMode == ResellerDeliveryMode.PICKUP) {
+                var branchExpanded by remember { mutableStateOf(false) }
+                ExposedDropdownMenuBox(
+                    expanded = branchExpanded,
+                    onExpandedChange = { branchExpanded = !branchExpanded }
+                ) {
+                    OutlinedTextField(
+                        value = branches.firstOrNull { it.id == preferredBranchId }?.name
+                            ?: if (preferredBranchId.isEmpty()) "Cualquiera" else existing?.preferredBranchName.orEmpty(),
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Sucursal donde compra") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = branchExpanded) },
+                        modifier = Modifier
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable, true)
+                            .fillMaxWidth()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = branchExpanded,
+                        onDismissRequest = { branchExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Cualquiera") },
+                            onClick = { preferredBranchId = ""; branchExpanded = false }
+                        )
+                        branches.forEach { b ->
+                            DropdownMenuItem(
+                                text = { Text(b.name) },
+                                onClick = { preferredBranchId = b.id; branchExpanded = false }
+                            )
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    value = pickupTime,
+                    onValueChange = { v -> pickupTime = v.filter { it.isDigit() || it == ':' }.take(5) },
+                    label = { Text("Hora en que pasa (ej. 06:30)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+            } else {
+                OutlinedTextField(
+                    value = addressReference, onValueChange = { addressReference = it },
+                    label = { Text("Referencia para llegar") },
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         }
 
@@ -291,11 +371,27 @@ private fun FormContent(
                     priceListId = priceListId,
                     priceListName = priceLists.firstOrNull { it.id == priceListId }?.name ?: "",
                     active = active,
-                    notes = notes.trim()
+                    notes = notes.trim(),
+                    deliveryMode = if (isReseller) deliveryMode else existing?.deliveryMode ?: ResellerDeliveryMode.PICKUP,
+                    preferredBranchId = when {
+                        !isReseller -> existing?.preferredBranchId.orEmpty()
+                        deliveryMode == ResellerDeliveryMode.PICKUP -> preferredBranchId
+                        else -> ""
+                    },
+                    preferredBranchName = when {
+                        !isReseller -> existing?.preferredBranchName.orEmpty()
+                        deliveryMode == ResellerDeliveryMode.PICKUP ->
+                            branches.firstOrNull { it.id == preferredBranchId }?.name
+                                ?: existing?.preferredBranchName?.takeIf { existing.preferredBranchId == preferredBranchId }.orEmpty()
+                        else -> ""
+                    },
+                    preferredPickupTime = if (isReseller) pickupTime.trim() else existing?.preferredPickupTime.orEmpty(),
+                    deliveryAddressReference = if (isReseller) addressReference.trim()
+                                               else existing?.deliveryAddressReference.orEmpty()
                 )
                 onSave(final)
             },
-            enabled = !isSaving && name.isNotBlank(),
+            enabled = !isSaving && name.isNotBlank() && (!isReseller || priceListId.isNotEmpty()),
             modifier = Modifier.fillMaxWidth(),
             colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
             shape = RoundedCornerShape(10.dp)

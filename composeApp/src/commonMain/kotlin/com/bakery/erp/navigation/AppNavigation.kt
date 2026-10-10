@@ -2475,6 +2475,9 @@ fun AppNavigation(
                     onNavigateToPriceListAdmin = {
                         navController.navigate(Screen.PriceListAdmin.route)
                     },
+                    onNavigateToForm = { id ->
+                        navController.navigate(Screen.ExternalCustomerForm.route(id))
+                    },
                     authViewModel = viewModel,
                     viewModel = externalCustomerViewModel
                 )

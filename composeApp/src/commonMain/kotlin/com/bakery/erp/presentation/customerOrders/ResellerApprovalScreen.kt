@@ -19,6 +19,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccessTime
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.LocalShipping
@@ -31,6 +33,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
@@ -65,6 +68,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.ExternalCustomer
+import com.bakery.erp.model.ExternalCustomerType
 import com.bakery.erp.model.PriceList
 import com.bakery.erp.model.ProductionShift
 import com.bakery.erp.model.ResellerDeliveryMode
@@ -83,6 +87,7 @@ private val MutedText = Color(0xFF6E6E6E)
 fun ResellerApprovalScreen(
     onNavigateBack: () -> Unit,
     onNavigateToPriceListAdmin: () -> Unit,
+    onNavigateToForm: (customerId: String?) -> Unit,
     authViewModel: AuthViewModel,
     viewModel: ExternalCustomerViewModel
 ) {
@@ -119,13 +124,15 @@ fun ResellerApprovalScreen(
         "Activos" to ResellerRegistrationStatus.ACTIVE,
         "Rechazados" to ResellerRegistrationStatus.REJECTED
     )
-    val filtered = state.customers.filter { it.registrationStatus == tabs[tabIndex].second }
+    // Solo revendedores: los clientes recurrentes se manejan desde Pedidos de clientes.
+    val resellers = state.customers.filter { it.type == ExternalCustomerType.RESELLER }
+    val filtered = resellers.filter { it.registrationStatus == tabs[tabIndex].second }
 
     Scaffold(
         containerColor = WarmIvory,
         topBar = {
             TopAppBar(
-                title = { Text("Aprobar revendedores", fontWeight = FontWeight.SemiBold) },
+                title = { Text("Revendedores", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
@@ -138,6 +145,16 @@ fun ResellerApprovalScreen(
                 )
             )
         },
+        floatingActionButton = {
+            // Para los que no tienen la app: el encargado los da de alta aquí, ya activos.
+            ExtendedFloatingActionButton(
+                onClick = { onNavigateToForm(null) },
+                containerColor = PrimaryBlue,
+                contentColor = Color.White,
+                icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                text = { Text("Agregar revendedor") }
+            )
+        },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         AdaptiveContainer(modifier = Modifier.padding(padding).fillMaxSize()) {
@@ -148,7 +165,7 @@ fun ResellerApprovalScreen(
                     contentColor = PrimaryBlue
                 ) {
                     tabs.forEachIndexed { idx, (label, status) ->
-                        val count = state.customers.count { it.registrationStatus == status }
+                        val count = resellers.count { it.registrationStatus == status }
                         Tab(
                             selected = tabIndex == idx,
                             onClick = { tabIndex = idx },
@@ -162,12 +179,13 @@ fun ResellerApprovalScreen(
                     }
                 }
                 when {
-                    state.isLoading && state.customers.isEmpty() -> Box(
+                    state.isLoading && resellers.isEmpty() -> Box(
                         Modifier.fillMaxSize(), Alignment.Center
                     ) { CircularProgressIndicator(color = PrimaryBlue) }
                     filtered.isEmpty() -> EmptyState(tabs[tabIndex].second)
                     else -> LazyColumn(
-                        contentPadding = PaddingValues(16.dp),
+                        // Abajo deja lugar para el botón flotante.
+                        contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 88.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         items(filtered, key = { it.id }) { reseller ->
@@ -176,6 +194,7 @@ fun ResellerApprovalScreen(
                                 state = state,
                                 isPending = reseller.registrationStatus == ResellerRegistrationStatus.PENDING_APPROVAL,
                                 onCreatePriceList = onNavigateToPriceListAdmin,
+                                onEdit = { onNavigateToForm(reseller.id) },
                                 onApprove = { viewModel.approveReseller(companyId, it) },
                                 onReject = { viewModel.rejectReseller(companyId, it) }
                             )
@@ -213,10 +232,12 @@ private fun EmptyState(status: String) {
             color = PrimaryBlue,
             fontWeight = FontWeight.SemiBold
         )
-        if (status == ResellerRegistrationStatus.PENDING_APPROVAL) {
+        if (status != ResellerRegistrationStatus.REJECTED) {
             Spacer(Modifier.size(6.dp))
             Text(
-                "Cuando alguien se registre con tu código de invitación marcándose como revendedor, aparecerá aquí.",
+                if (status == ResellerRegistrationStatus.PENDING_APPROVAL)
+                    "Cuando alguien se registre con tu código de invitación marcándose como revendedor, aparecerá aquí."
+                else "Si el revendedor no tiene la app, agregalo con el botón de abajo.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MutedText,
                 modifier = Modifier.padding(horizontal = 16.dp)
@@ -232,6 +253,7 @@ private fun ResellerCard(
     state: ExternalCustomerUiState,
     isPending: Boolean,
     onCreatePriceList: () -> Unit,
+    onEdit: () -> Unit,
     onApprove: (ExternalCustomer) -> Unit,
     onReject: (ExternalCustomer) -> Unit
 ) {
@@ -300,7 +322,14 @@ private fun ResellerCard(
                             Spacer(Modifier.width(10.dp))
                         }
                         ModalityBadge(reseller.deliveryMode)
+                        if (!reseller.active && !isPending) {
+                            Spacer(Modifier.width(6.dp))
+                            com.bakery.erp.ui.theme.BrandChip("Inactivo", com.bakery.erp.ui.theme.ChipTone.NEUTRAL)
+                        }
                     }
+                }
+                IconButton(onClick = onEdit) {
+                    Icon(Icons.Default.Edit, contentDescription = "Editar", tint = PrimaryBlue)
                 }
             }
 
@@ -308,7 +337,7 @@ private fun ResellerCard(
                 Column(Modifier.padding(horizontal = 14.dp, vertical = 4.dp)) {
                     // Sección: lo que el revendedor dejó dicho
                     Text(
-                        "Solicitud del revendedor",
+                        if (reseller.linkedUserId.isEmpty()) "Cómo compra" else "Solicitud del revendedor",
                         style = MaterialTheme.typography.labelSmall,
                         color = MutedText,
                         fontWeight = FontWeight.SemiBold
