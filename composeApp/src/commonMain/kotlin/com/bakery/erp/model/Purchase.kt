@@ -296,8 +296,26 @@ data class PurchaseLine(
      * proveedor del catálogo a propósito: la papa se compra donde esté más barata ese día, y
      * dar de alta cada puesto del mercado sería un catálogo que nadie mantiene.
      */
-    val placeName: String = ""
+    val placeName: String = "",
+    /**
+     * A quién le corresponde el gasto de esta línea (ver [CostCenter]). Solo tiene sentido en
+     * las líneas que se gastan (`purchaseLineIsExpense`); en las de inventario va vacío,
+     * porque su costo lo recoge la producción o la venta de la sucursal que lo recibió.
+     *
+     * Vive en la línea y no en el encabezado por la compra rápida: un mismo desembolso trae la
+     * gasolina del camión (Reparto) y los trapos de la tienda.
+     */
+    val costCenter: String = CostCenter.BRANCH
 )
+
+/**
+ * Pone [costCenter] en las líneas que se gastan y lo limpia en las de inventario. La factura lo
+ * elige una vez para todo el papel y lo estampa al guardar, así una línea que se agrega después
+ * de elegir no se queda sin él.
+ */
+fun List<PurchaseLine>.withExpenseCostCenter(costCenter: String): List<PurchaseLine> = map {
+    it.copy(costCenter = if (purchaseLineIsExpense(it.lineKind)) costCenter else CostCenter.BRANCH)
+}
 
 /** Sucursal efectiva de la línea: la suya si la declaró, si no la del encabezado. */
 fun PurchaseLine.effectiveBranchId(purchase: Purchase): String =

@@ -25,6 +25,11 @@ data class Employee(
     // Job
     val branchId: String = "",
     val branchName: String = "",
+    /**
+     * A quién se le carga su sueldo (ver [CostCenter]). Vacío = a [branchId], donde trabaja.
+     * El piloto marca en la planta pero su sueldo es de Reparto; el contador, de Generales.
+     */
+    val costCenter: String = CostCenter.BRANCH,
     val department: String = "",
     val positionId: String = "",
     val positionTitle: String = "",

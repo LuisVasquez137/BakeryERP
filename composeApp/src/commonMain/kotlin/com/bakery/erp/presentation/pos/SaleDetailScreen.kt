@@ -17,6 +17,7 @@ import com.bakery.erp.model.Permission
 import com.bakery.erp.model.Sale
 import com.bakery.erp.model.SaleLine
 import com.bakery.erp.model.SalePaymentMethod
+import com.bakery.erp.ui.theme.BrandColors
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.ui.AdaptiveContainer
@@ -222,6 +223,12 @@ private fun SaleHeaderCard(sale: Sale, canSeeValue: Boolean) {
                  color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text("Método: ${SalePaymentMethod.label(sale.paymentMethod)}",
                  style = MaterialTheme.typography.bodySmall)
+            if (sale.resellerName.isNotBlank()) {
+                Text("Revendedor: ${sale.resellerName}" +
+                        if (sale.resellerPriceListName.isNotBlank()) " · lista ${sale.resellerPriceListName}" else "",
+                     style = MaterialTheme.typography.bodySmall,
+                     color = BrandColors.Primary)
+            }
             if (sale.invoiceStatus.isNotBlank()) {
                 Spacer(Modifier.height(4.dp))
                 SaleInvoiceChip(sale)

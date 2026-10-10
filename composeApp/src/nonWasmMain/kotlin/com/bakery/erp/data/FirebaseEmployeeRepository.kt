@@ -1,6 +1,7 @@
 ﻿package com.bakery.erp.data
 
 import com.bakery.erp.domain.EmployeeRepository
+import com.bakery.erp.model.CostCenter
 import com.bakery.erp.model.Employee
 import com.bakery.erp.model.EmployeePinStatus
 import com.bakery.erp.model.EmployeeStatus
@@ -76,6 +77,7 @@ class FirebaseEmployeeRepository(
         "emergencyPhone" to emergencyPhone,
         "branchId" to branchId,
         "branchName" to branchName,
+        "costCenter" to costCenter,
         "department" to department,
         "positionId" to positionId,
         "positionTitle" to positionTitle,
@@ -127,6 +129,7 @@ class FirebaseEmployeeRepository(
             emergencyPhone = get<String?>("emergencyPhone") ?: "",
             branchId = get<String?>("branchId") ?: "",
             branchName = get<String?>("branchName") ?: "",
+            costCenter = CostCenter.normalize(runCatching { get<String?>("costCenter") }.getOrNull()),
             department = get<String?>("department") ?: "",
             positionId = get<String?>("positionId") ?: "",
             positionTitle = get<String?>("positionTitle") ?: (get<String?>("position") ?: ""),

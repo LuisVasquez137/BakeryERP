@@ -195,3 +195,14 @@ solo lectura de compras de reventa vs. `finishedStocks`.
 Form `FinishedStockAdjustScreen` con 4 opciones (Merma, Ajuste menor/mayor, Venta directa), valida no negativo, razón obligatoria, preview "Nuevo stock: X".
 
 KPIs ocultan valor de inventario sin `VIEW_DISPATCH_VALUE`. Permiso: `MANAGE_FINISHED_STOCK`.
+
+## Precio por escalón en las listas (oct 2026)
+
+`PriceList.priceSteps` = tabla "precio al público → precio de la lista" (Q0.50 → Q0.40, Q1.50 → Q1.25). Nace porque el dueño piensa el precio del revendedor por escalón y ningún porcentaje da los dos (80% y 83.3%), y ponerle precio fijo a cada pan de Q1.50 es repetir lo mismo en muchos productos.
+
+- **Cascada**: precio fijo del producto (`ProductPrice`) → escalón → porcentaje (`priceFactor`) → sin precio. Regla única en `model/PriceList.kt::listRulePrice` (redondea a centavos); la usan `resolveListPrices` (caja de revendedor + pedido del revendedor) y las pantallas de producto.
+- Firestore: arreglos paralelos `priceStepPublicPrices` / `priceStepListPrices` (GitLive no guarda listas de objetos); se leen como `Double` o `Long`.
+- El escalón se reporta como `PriceSource.LIST_FACTOR` ("regla de la lista"), sin etiqueta nueva en despacho/ventas.
+- Despacho (`resolveWholesalePrice`): mira el escalón antes del porcentaje; el porcentaje sigue SIN redondear allí para no cambiar el valor de lo ya despachado.
+- El grupo de precio ("Pan Q0.50") con escalón se cobra junto: todos sus panes caen en el mismo escalón.
+- Pantalla de listas: textos en lenguaje del dueño ("¿Para quién es esta lista?", "Usarla cuando nadie eligió otra (★)") porque "tipo de canal" y "default" no se entendían.

@@ -3,7 +3,10 @@
 import com.bakery.erp.domain.ExpenseRepository
 import com.bakery.erp.domain.report.BranchExpenseStat
 import com.bakery.erp.domain.report.ExpenseSummary
+import com.bakery.erp.model.CostCenter
 import com.bakery.erp.model.Expense
+import com.bakery.erp.model.costCenterReportKey
+import com.bakery.erp.model.costCenterReportName
 import com.bakery.erp.model.isFromPurchase
 import com.bakery.erp.model.ExpenseCategory
 import dev.gitlive.firebase.firestore.DocumentSnapshot
@@ -63,7 +66,13 @@ class FirebaseExpenseRepository(
         val total = expenses.sumOf { it.amount }
         val byCategory = expenses.groupBy { it.category }
             .mapValues { (_, list) -> list.sumOf { it.amount } }
-        val byBranch = expenses.groupBy { it.branchId to it.branchName }
+        // Generales y Reparto salen en su propio renglón aunque se hayan anotado en una
+        // sucursal: si no, la planta donde se paga todo cargaría con el contador y el piloto.
+        val byBranch = expenses
+            .groupBy {
+                costCenterReportKey(it.costCenter, it.branchId) to
+                    costCenterReportName(it.costCenter, it.branchName)
+            }
             .map { (key, list) ->
                 BranchExpenseStat(
                     branchId = key.first,
@@ -101,6 +110,7 @@ class FirebaseExpenseRepository(
         "cashSessionId" to cashSessionId,
         "cashRegisterName" to cashRegisterName,
         "photoUrl" to photoUrl,
+        "costCenter" to costCenter,
         "createdAt" to if (createdAt == 0L) Clock.System.now().toEpochMilliseconds() else createdAt,
         "updatedAt" to Clock.System.now().toEpochMilliseconds()
     )
@@ -121,6 +131,7 @@ class FirebaseExpenseRepository(
         cashSessionId = get<String?>("cashSessionId") ?: "",
         cashRegisterName = get<String?>("cashRegisterName") ?: "",
         photoUrl = get<String?>("photoUrl") ?: "",
+        costCenter = CostCenter.normalize(runCatching { get<String?>("costCenter") }.getOrNull()),
         sourcePurchaseId = runCatching { get<String?>("sourcePurchaseId") }.getOrNull() ?: "",
         sourcePurchaseLineId = runCatching { get<String?>("sourcePurchaseLineId") }.getOrNull() ?: "",
         createdAt = readTimestampAsMillis("createdAt"),

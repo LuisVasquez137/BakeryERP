@@ -5,6 +5,8 @@ import com.bakery.erp.domain.PriceSource
 import com.bakery.erp.domain.ResolvedPrice
 import com.bakery.erp.model.PriceList
 import com.bakery.erp.model.PriceListType
+import com.bakery.erp.model.PriceStep
+import com.bakery.erp.model.samePrice
 import com.bakery.erp.model.ProductPrice
 import com.bakery.erp.model.priceDocId
 import dev.gitlive.firebase.firestore.DocumentSnapshot
@@ -134,7 +136,23 @@ class FirebasePriceListRepository(
             )
         }
 
-        // 2) Factor sobre el precio de venta al cliente final (solo WHOLESALE/CUSTOM).
+        // 2) Escalón de la lista por precio público (Q0.50 → Q0.40), solo WHOLESALE/CUSTOM.
+        if (chosenList.priceSteps.isNotEmpty() && chosenList.type != PriceListType.RETAIL) {
+            val retailPrice = runCatching { productDoc(companyId, productId).get().get<Double?>("salePrice") }
+                .getOrNull() ?: 0.0
+            chosenList.priceSteps.firstOrNull { samePrice(it.publicPrice, retailPrice) && it.listPrice > 0 }?.let {
+                return ResolvedPrice(
+                    unitPrice = it.listPrice,
+                    priceListId = chosenList.id,
+                    priceListName = chosenList.name,
+                    found = true,
+                    source = PriceSource.LIST_FACTOR
+                )
+            }
+        }
+
+        // 3) Factor sobre el precio de venta al cliente final (solo WHOLESALE/CUSTOM). Sin
+        // redondear, como siempre: el valor de los despachos viejos no cambia.
         val factor = chosenList.priceFactor
         if (factor != null && factor > 0 &&
             (chosenList.type == PriceListType.WHOLESALE || chosenList.type == PriceListType.CUSTOM)
@@ -154,7 +172,7 @@ class FirebasePriceListRepository(
             }
         }
 
-        // 3) Sin precio resoluble.
+        // 4) Sin precio resoluble.
         return ResolvedPrice(
             unitPrice = 0.0,
             priceListId = chosenList.id,
@@ -173,6 +191,9 @@ class FirebasePriceListRepository(
         "isDefault" to isDefault,
         "active" to active,
         "priceFactor" to priceFactor,
+        // Arreglos paralelos: GitLive no guarda listas de objetos.
+        "priceStepPublicPrices" to priceSteps.map { it.publicPrice },
+        "priceStepListPrices" to priceSteps.map { it.listPrice },
         "notes" to notes,
         "createdAt" to if (createdAt == 0L) Clock.System.now().toEpochMilliseconds() else createdAt,
         "updatedAt" to Clock.System.now().toEpochMilliseconds()
@@ -185,10 +206,18 @@ class FirebasePriceListRepository(
         isDefault = get<Boolean?>("isDefault") ?: false,
         active = get<Boolean?>("active") ?: true,
         priceFactor = runCatching { get<Double?>("priceFactor") }.getOrNull(),
+        priceSteps = readNumberList("priceStepPublicPrices")
+            .zip(readNumberList("priceStepListPrices")) { pub, lst -> PriceStep(pub, lst) },
         notes = get<String?>("notes"),
         createdAt = readTimestampAsMillis("createdAt"),
         updatedAt = readTimestampAsMillis("updatedAt")
     )
+
+    /** Un precio entero (Q2) puede volver como Long desde la web: se aceptan los dos. */
+    private fun DocumentSnapshot.readNumberList(field: String): List<Double> =
+        runCatching { get<List<Double>?>(field) }.getOrNull()
+            ?: runCatching { get<List<Long>?>(field)?.map { it.toDouble() } }.getOrNull()
+            ?: emptyList()
 
     private fun ProductPrice.toMap(): Map<String, Any?> = firestoreSafeOf(
         "id" to id,

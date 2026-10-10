@@ -87,6 +87,8 @@ import com.bakery.erp.model.Preparation
 import com.bakery.erp.model.PreparationUsage
 import com.bakery.erp.model.PriceList
 import com.bakery.erp.model.PriceListType
+import com.bakery.erp.model.samePrice
+import com.bakery.erp.model.listRulePrice
 import com.bakery.erp.model.Product
 import com.bakery.erp.model.ProductCharacteristics
 import com.bakery.erp.model.ProductDecoration
@@ -2052,8 +2054,8 @@ private fun PricesTabContent(
         val value = if (isRetailDefault) salePrice else rawInput
         val hasOverride = !isRetailDefault && rawInput.toDoubleOrNull()?.let { it > 0 } == true
         val hadOverrideBefore = list.id in listsWithExistingOverride
-        val autoFromFactor: Double? = if (!isRetailDefault && list.priceFactor != null && retail > 0)
-            retail * list.priceFactor!! else null
+        val autoFromFactor: Double? = if (!isRetailDefault) list.listRulePrice(retail) else null
+        val stepHit = list.priceSteps.any { samePrice(it.publicPrice, retail) }
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(10.dp),
@@ -2092,6 +2094,8 @@ private fun PricesTabContent(
                 val hint: String? = when {
                     isRetailDefault -> "Editar en la pestaña General"
                     hasOverride -> "Precio fijo · ignora el factor de la lista"
+                    autoFromFactor != null && stepHit ->
+                        "Escalón de la lista: lo de Q${retail.fmt(2)} sale a Q${autoFromFactor.fmt(2)}"
                     autoFromFactor != null -> "Aplica ${(list.priceFactor!! * 100).toInt()}% sobre Q${retail.fmt(2)} = Q${autoFromFactor.fmt(2)}"
                     list.priceFactor == null -> "Sin factor: si no defines precio, este producto saldrá como 'precio no definido' al despachar."
                     retail <= 0 -> "Define primero el precio al cliente final en General."

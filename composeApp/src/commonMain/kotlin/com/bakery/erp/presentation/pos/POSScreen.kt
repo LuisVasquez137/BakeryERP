@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -185,6 +186,15 @@ fun POSScreen(
     var pendingSheetOpen by remember { mutableStateOf(false) }
     var overflowOpen by remember { mutableStateOf(false) }
     var lastCheckoutOpen by remember { mutableStateOf(false) }
+    var resellerPickerOpen by remember { mutableStateOf(false) }
+    LaunchedEffect(resellerPickerOpen) {
+        if (resellerPickerOpen) viewModel.loadResellers(companyId)
+    }
+    val resale = state.resellerSale
+    /** Un toque: entra a venta a revendedor, o vuelve a mostrador si ya está en una. */
+    fun toggleResellerSale() {
+        if (resale != null) viewModel.endResellerSale() else resellerPickerOpen = true
+    }
 
     fun handlePrintRequest() {
         if (bluetoothPrinterManager.isPlatformSupported &&
@@ -366,6 +376,11 @@ fun POSScreen(
                                         onDismissRequest = { overflowOpen = false }
                                     ) {
                                         DropdownMenuItem(
+                                            text = { Text(if (resale != null) "Volver a mostrador" else "Venta a revendedor") },
+                                            onClick = { overflowOpen = false; toggleResellerSale() },
+                                            leadingIcon = { Icon(Icons.Default.Storefront, null) }
+                                        )
+                                        DropdownMenuItem(
                                             text = { Text("Anotar gasto") },
                                             onClick = { overflowOpen = false; onNavigateToCashExpense(sess.id) },
                                             leadingIcon = { Icon(Icons.Default.Receipt, null) }
@@ -417,6 +432,12 @@ fun POSScreen(
                                     lastCheckoutOpen = true
                                 }) {
                                     Icon(Icons.Default.History, "Último cobro")
+                                }
+                                TextButton(onClick = { toggleResellerSale() }) {
+                                    Text(
+                                        if (resale != null) "Mostrador" else "Revendedor",
+                                        color = MaterialTheme.colorScheme.onPrimary
+                                    )
                                 }
                                 IconButton(onClick = { onNavigateToCashExpense(sess.id) }) {
                                     Icon(Icons.Default.Receipt, "Anotar un gasto de esta caja")
@@ -490,6 +511,7 @@ fun POSScreen(
             if (wide) {
                 Row(Modifier.fillMaxSize().padding(padding)) {
                     Column(Modifier.weight(3f).fillMaxHeight()) {
+                        resale?.let { ResellerSaleBanner(it, onEnd = { viewModel.endResellerSale() }) }
                         CategoryFilterChips(
                             categories = state.posCategories,
                             selectedFilter = selectedFilter,
@@ -498,6 +520,7 @@ fun POSScreen(
                         if (selectedGroup != null) {
                             GroupSellPanel(
                                 group = selectedGroup,
+                                unitPrice = viewModel.groupPriceFor(selectedGroup),
                                 inCart = state.cart.firstOrNull { it.quickGroupId == selectedGroup.id }?.quantity ?: 0.0,
                                 onAdd = { qty ->
                                 viewModel.addGroupToCart(selectedGroup, qty)
@@ -518,6 +541,8 @@ fun POSScreen(
                                 groupQtyInCart = groupQtyInCart,
                                 popularity = state.popularityByKey,
                                 onGroupClick = { groupQuantityFor = it },
+                                priceOf = { viewModel.unitPriceFor(it) },
+                                groupPriceOf = { viewModel.groupPriceFor(it) },
                                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
                             )
                         }
@@ -540,6 +565,7 @@ fun POSScreen(
                 }
             } else {
                 Column(Modifier.fillMaxSize().padding(padding)) {
+                    resale?.let { ResellerSaleBanner(it, onEnd = { viewModel.endResellerSale() }) }
                     CategoryFilterChips(
                         categories = state.posCategories,
                         selectedFilter = selectedFilter,
@@ -548,6 +574,7 @@ fun POSScreen(
                     if (selectedGroup != null) {
                         GroupSellPanel(
                             group = selectedGroup,
+                            unitPrice = viewModel.groupPriceFor(selectedGroup),
                             inCart = state.cart.firstOrNull { it.quickGroupId == selectedGroup.id }?.quantity ?: 0.0,
                             onAdd = { qty ->
                                 viewModel.addGroupToCart(selectedGroup, qty)
@@ -568,6 +595,8 @@ fun POSScreen(
                             groupQtyInCart = groupQtyInCart,
                             popularity = state.popularityByKey,
                             onGroupClick = { groupQuantityFor = it },
+                            priceOf = { viewModel.unitPriceFor(it) },
+                            groupPriceOf = { viewModel.groupPriceFor(it) },
                             modifier = Modifier.weight(1f).fillMaxWidth().padding(12.dp)
                         )
                     }
@@ -636,7 +665,7 @@ fun POSScreen(
     quantityFor?.let { product ->
         QuantityDialog(
             title = product.name,
-            subtitle = "Q ${product.salePrice.fmtMoney(2)} c/u",
+            subtitle = viewModel.unitPriceFor(product)?.let { "Q ${it.fmtMoney(2)} c/u" } ?: "Sin precio para este revendedor",
             onDismiss = { quantityFor = null },
             onConfirm = { qty ->
                 viewModel.addProductToCart(product, qty)
@@ -649,7 +678,7 @@ fun POSScreen(
     groupQuantityFor?.let { group ->
         QuantityDialog(
             title = group.groupDisplayName,
-            subtitle = "Q ${group.groupUnitPrice.fmtMoney(2)} c/u",
+            subtitle = viewModel.groupPriceFor(group)?.let { "Q ${it.fmtMoney(2)} c/u" } ?: "Sin precio único para este revendedor",
             onDismiss = { groupQuantityFor = null },
             onConfirm = { qty ->
                 viewModel.addGroupToCart(group, qty)
@@ -657,6 +686,18 @@ fun POSScreen(
                 // Desde la ficha del grupo en "Todos" o desde "Otra cantidad" del panel.
                 val src = if (cartFlight.sources.containsKey("grp_${group.id}")) "grp_${group.id}" else "grpq_other"
                 cartFlight.launch(src, "grp_${group.id}", null, "+${qty.fmtMoney(0)}")
+            }
+        )
+    }
+
+    if (resellerPickerOpen) {
+        ResellerPickerDialog(
+            resellers = state.resellers,
+            isLoading = state.isLoadingResellers,
+            onDismiss = { resellerPickerOpen = false },
+            onSelect = { r ->
+                resellerPickerOpen = false
+                viewModel.startResellerSale(companyId, r)
             }
         )
     }
@@ -692,13 +733,14 @@ fun POSScreen(
                     lookupNit = { nit -> viewModel.lookupNit(companyId, nit) }
                 )
             } else null,
-            discountAccounts = creditState?.accounts.orEmpty()
+            // Al revendedor: su precio ya es el rebajado y se le vende de contado.
+            discountAccounts = if (resale != null) emptyList() else creditState?.accounts.orEmpty()
                 .filter { it.isEmployee && it.active && it.cashDiscountEligible },
             employeeDiscount = viewModel.employeeDiscountAmount(),
             onDiscountChange = { paymentDiscountAccount = it },
             // Una cuenta del restaurante en el carrito ya es venta cobrada: no se fía.
             creditAccounts = creditState?.accounts
-                ?.takeIf { canSellOnCredit && state.cart.none { l -> l.isRestaurant } },
+                ?.takeIf { canSellOnCredit && resale == null && state.cart.none { l -> l.isRestaurant } },
             onConfirmCredit = { charge, invoice ->
                 paymentDiscountAccount = null
                 paymentOpen = false
@@ -982,6 +1024,8 @@ private val GROUP_QUICK_QUANTITIES = listOf(1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20,
 @Composable
 private fun GroupSellPanel(
     group: POSCategory,
+    /** Precio por pan: el público, o el del revendedor. Null = el revendedor no tiene uno. */
+    unitPrice: Double?,
     inCart: Double,
     onAdd: (Double) -> Unit,
     onOtherQuantity: () -> Unit,
@@ -1002,14 +1046,15 @@ private fun GroupSellPanel(
                 Column(Modifier.weight(1f)) {
                     Text(group.groupDisplayName, color = Color.White, fontWeight = FontWeight.ExtraBold,
                          style = MaterialTheme.typography.titleLarge)
-                    Text("Q ${group.groupUnitPrice.fmtMoney(2)} c/u · ${group.productIds.size} tipos de pan",
+                    Text((unitPrice?.let { "Q ${it.fmtMoney(2)} c/u" } ?: "Sin precio para este revendedor") +
+                            " · ${group.productIds.size} tipos de pan",
                          color = Color.White, style = MaterialTheme.typography.bodySmall)
                 }
                 if (inCart > 0) {
                     Column(horizontalAlignment = Alignment.End) {
                         Text("En el carrito", color = Color.White,
                              style = MaterialTheme.typography.labelSmall)
-                        Text("${inCart.fmtMoney(0)} · Q ${(inCart * group.groupUnitPrice).fmtMoney(2)}",
+                        Text("${inCart.fmtMoney(0)} · Q ${(inCart * (unitPrice ?: 0.0)).fmtMoney(2)}",
                              color = Color.White, fontWeight = FontWeight.Bold,
                              style = MaterialTheme.typography.titleMedium)
                     }
@@ -1040,7 +1085,7 @@ private fun GroupSellPanel(
                     ) {
                         Text("$qty", fontWeight = FontWeight.ExtraBold,
                              style = MaterialTheme.typography.headlineMedium, color = color)
-                        Text("Q ${(qty * group.groupUnitPrice).fmtMoney(2)}",
+                        Text(unitPrice?.let { "Q ${(qty * it).fmtMoney(2)}" } ?: "—",
                              style = MaterialTheme.typography.labelMedium,
                              color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -1075,6 +1120,9 @@ private fun ProductGrid(
     groupQtyInCart: Map<String, Double> = emptyMap(),
     popularity: Map<String, Double> = emptyMap(),
     onGroupClick: (POSCategory) -> Unit = {},
+    /** Precio que muestra cada ficha: el público o el del revendedor. Null = sin precio. */
+    priceOf: (Product) -> Double? = { it.salePrice },
+    groupPriceOf: (POSCategory) -> Double? = { it.groupUnitPrice },
     modifier: Modifier = Modifier
 ) {
     if (products.isEmpty() && groups.isEmpty()) {
@@ -1157,6 +1205,7 @@ private fun ProductGrid(
             if (t is POSCategory) {
                 GroupTile(
                     group = t,
+                    unitPrice = groupPriceOf(t),
                     quantityInCart = groupQtyInCart[t.id] ?: 0.0,
                     onClick = { onGroupClick(t) }
                 )
@@ -1165,6 +1214,7 @@ private fun ProductGrid(
                 val line = cartByProductId[p.id]
                 ProductTile(
                     product = p,
+                    unitPrice = priceOf(p),
                     quantityInCart = line?.quantity ?: 0.0,
                     onClick = { onProductClick(p) }
                 )
@@ -1177,6 +1227,7 @@ private fun ProductGrid(
 @Composable
 private fun GroupTile(
     group: POSCategory,
+    unitPrice: Double?,
     quantityInCart: Double,
     onClick: () -> Unit
 ) {
@@ -1201,7 +1252,7 @@ private fun GroupTile(
                 verticalArrangement = Arrangement.Center
             ) {
                 Text(
-                    "Q ${group.groupUnitPrice.fmtMoney(2)}",
+                    unitPrice?.let { "Q ${it.fmtMoney(2)}" } ?: "Sin precio",
                     color = Color.White,
                     fontWeight = FontWeight.ExtraBold,
                     style = MaterialTheme.typography.headlineSmall
@@ -1239,6 +1290,7 @@ private fun GroupTile(
 @Composable
 private fun ProductTile(
     product: Product,
+    unitPrice: Double?,
     quantityInCart: Double,
     onClick: () -> Unit
 ) {
@@ -1285,8 +1337,8 @@ private fun ProductTile(
                                 else MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        "Q ${product.salePrice.fmtMoney(2)}",
-                        color = primary,
+                        unitPrice?.let { "Q ${it.fmtMoney(2)}" } ?: "Sin precio",
+                        color = if (unitPrice != null) primary else MaterialTheme.colorScheme.error,
                         fontWeight = FontWeight.ExtraBold,
                         style = MaterialTheme.typography.titleSmall
                     )

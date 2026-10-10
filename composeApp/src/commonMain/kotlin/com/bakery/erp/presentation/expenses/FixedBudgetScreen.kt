@@ -66,6 +66,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.ExpenseCategory
 import com.bakery.erp.model.FIXED_EXPENSE_CATEGORIES
+import com.bakery.erp.model.CostCenter
+import com.bakery.erp.ui.AdaptiveContainer
 import com.bakery.erp.model.FixedBudgetItem
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.presentation.branches.BranchViewModel
@@ -140,7 +142,7 @@ fun FixedBudgetListScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+        AdaptiveContainer(modifier = Modifier.fillMaxSize().padding(padding)) {
             when {
                 state.isLoading && state.itemList.isEmpty() ->
                     CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
@@ -286,6 +288,10 @@ fun FixedBudgetFormScreen(
     var selectedBranch by remember {
         mutableStateOf(if (existing != null) branches.find { it.id == existing.branchId } else null)
     }
+    // Generales o Reparto en vez de una sucursal: el contador o el sueldo del piloto se pagan
+    // cada mes y no son de ninguna tienda. Ver `CostCenter`.
+    var costCenter by remember { mutableStateOf(existing?.costCenter ?: CostCenter.BRANCH) }
+    val sharedCost = CostCenter.isShared(costCenter)
 
     var nameError by remember { mutableStateOf(false) }
     var amountError by remember { mutableStateOf(false) }
@@ -307,8 +313,11 @@ fun FixedBudgetFormScreen(
 
     fun buildItem() = FixedBudgetItem(
         id = existing?.id ?: "",
-        branchId = selectedBranch?.id ?: "",
-        branchName = selectedBranch?.name ?: "",
+        // El nombre del renglón compartido va en `branchName` para que la lista los agrupe
+        // bajo "Generales" y "Reparto" sin saber nada de centros de costo.
+        branchId = if (sharedCost) "" else selectedBranch?.id ?: "",
+        branchName = if (sharedCost) CostCenter.label(costCenter) else selectedBranch?.name ?: "",
+        costCenter = costCenter,
         name = name.trim().replaceFirstChar { it.uppercase() },
         category = selectedCategory,
         amount = amountText.replace(",", ".").toDoubleOrNull() ?: 0.0,
@@ -339,7 +348,7 @@ fun FixedBudgetFormScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+        AdaptiveContainer(modifier = Modifier.fillMaxSize().padding(padding)) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -348,28 +357,48 @@ fun FixedBudgetFormScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 // ── Sucursal ──────────────────────────────────────────────────
-                FbSectionHeader("Sucursal")
+                FbSectionHeader("¿De quién es este costo?")
 
                 ExposedDropdownMenuBox(
                     expanded = branchExpanded,
                     onExpandedChange = { branchExpanded = it }
                 ) {
                     OutlinedTextField(
-                        value = selectedBranch?.name ?: "",
+                        value = if (sharedCost) CostCenter.label(costCenter) else selectedBranch?.name ?: "",
                         onValueChange = {},
                         readOnly = true,
-                        label = { Text("Sucursal *") },
-                        placeholder = { Text("Selecciona una sucursal") },
+                        label = { Text("Sucursal, Generales o Reparto *") },
+                        placeholder = { Text("Selecciona a quién le corresponde") },
                         trailingIcon = { Icon(Icons.Default.ArrowDropDown, null) },
                         modifier = Modifier.fillMaxWidth().menuAnchor(),
                         isError = branchError,
-                        supportingText = if (branchError) ({ Text("La sucursal es requerida") }) else null
+                        supportingText = when {
+                            branchError -> ({ Text("Elegí a quién le corresponde") })
+                            sharedCost -> ({ Text(CostCenter.hint(costCenter)) })
+                            else -> null
+                        }
                     )
                     ExposedDropdownMenu(expanded = branchExpanded, onDismissRequest = { branchExpanded = false }) {
                         branches.forEach { branch ->
                             DropdownMenuItem(
                                 text = { Text(branch.name) },
-                                onClick = { selectedBranch = branch; branchError = false; branchExpanded = false }
+                                onClick = {
+                                    selectedBranch = branch
+                                    costCenter = CostCenter.BRANCH
+                                    branchError = false
+                                    branchExpanded = false
+                                }
+                            )
+                        }
+                        HorizontalDivider()
+                        CostCenter.SHARED.forEach { shared ->
+                            DropdownMenuItem(
+                                text = { Text(CostCenter.label(shared), fontWeight = FontWeight.SemiBold) },
+                                onClick = {
+                                    costCenter = shared
+                                    branchError = false
+                                    branchExpanded = false
+                                }
                             )
                         }
                         if (branches.isEmpty()) {
@@ -456,7 +485,7 @@ fun FixedBudgetFormScreen(
                     onClick = {
                         var hasError = false
                         if (name.isBlank()) { nameError = true; hasError = true }
-                        if (selectedBranch == null) { branchError = true; hasError = true }
+                        if (!sharedCost && selectedBranch == null) { branchError = true; hasError = true }
                         val amount = amountText.replace(",", ".").toDoubleOrNull()
                         if (amount == null || amount <= 0) { amountError = true; hasError = true }
                         if (hasError) return@Button

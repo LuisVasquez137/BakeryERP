@@ -112,6 +112,11 @@ data class Expense(
     val cashRegisterName: String = "",
     /** Foto del recibo o del vale. Vacío = no se adjuntó. */
     val photoUrl: String = "",
+    /**
+     * A quién le corresponde, aparte de qué caja lo pagó. Ver [CostCenter]. Vacío = la
+     * sucursal de [branchId], que es lo que significaban todos los gastos anteriores al campo.
+     */
+    val costCenter: String = CostCenter.BRANCH,
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L
 )

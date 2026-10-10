@@ -57,6 +57,8 @@ import com.bakery.erp.model.effectiveBranchName
 import com.bakery.erp.model.PurchaseKind
 import com.bakery.erp.model.branchesTouched
 import com.bakery.erp.model.PurchaseLine
+import com.bakery.erp.model.CostCenter
+import com.bakery.erp.model.withExpenseCostCenter
 import com.bakery.erp.model.PurchaseLineKind
 import com.bakery.erp.model.PurchasePayment
 import com.bakery.erp.model.PurchasePeriod
@@ -533,7 +535,9 @@ class PurchaseViewModel(
         dueDate: Long,
         taxRatePercent: Double,
         declaredTotal: Double,
-        invoicePhotoBytes: ByteArray? = null
+        invoicePhotoBytes: ByteArray? = null,
+        /** A quién le corresponde lo que la factura gasta. Ver [CostCenter]. */
+        expenseCostCenter: String = CostCenter.BRANCH
     ) {
         viewModelScope.launch {
             val original = _uiState.value.editingPurchase ?: return@launch
@@ -543,7 +547,7 @@ class PurchaseViewModel(
             // que ya lo era, el nombre guardado es el que sigue valiendo si no se tocó nada.
             val supplierLabel = supplier?.company
                 ?: _uiState.value.occasionalSupplierName.trim().ifEmpty { original.supplierName }
-            val newLines = _uiState.value.draftLines
+            val newLines = _uiState.value.draftLines.withExpenseCostCenter(expenseCostCenter)
             if (newLines.isEmpty()) {
                 _uiState.update { it.copy(error = "La compra debe llevar al menos una línea") }
                 return@launch
@@ -1678,7 +1682,9 @@ class PurchaseViewModel(
          * el dueño. Es el caso del proveedor que llega a la puerta y le pagan del cajón: la
          * factura es idéntica a cualquier otra, lo único distinto es de qué bolsa salió.
          */
-        session: CashSession? = null
+        session: CashSession? = null,
+        /** A quién le corresponde lo que la factura gasta. Ver [CostCenter]. */
+        expenseCostCenter: String = CostCenter.BRANCH
     ) {
         viewModelScope.launch {
             val branch = _uiState.value.selectedBranch ?: return@launch
@@ -1687,7 +1693,7 @@ class PurchaseViewModel(
             // Lo que no puede es no haber ninguno — la factura tiene que decir de quién es.
             val supplierLabel = supplier?.company
                 ?: _uiState.value.occasionalSupplierName.trim().ifEmpty { return@launch }
-            val lines = _uiState.value.draftLines
+            val lines = _uiState.value.draftLines.withExpenseCostCenter(expenseCostCenter)
             if (lines.isEmpty()) return@launch
             _uiState.update { it.copy(isLoading = true, error = null) }
             runCatching {

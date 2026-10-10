@@ -45,6 +45,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.isFromPurchase
+import com.bakery.erp.model.CostCenter
+import com.bakery.erp.ui.AdaptiveContainer
 import com.bakery.erp.model.Expense
 import com.bakery.erp.model.ExpensePaidFrom
 import com.bakery.erp.model.formatPeriodLabel
@@ -131,7 +133,7 @@ fun ExpenseDetailScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+        AdaptiveContainer(modifier = Modifier.fillMaxSize().padding(padding)) {
             when {
                 state.isLoading -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 expense == null -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -185,6 +187,9 @@ private fun ExpenseDetailContent(expense: Expense) {
 
         DetailSection("Información")
         DetailRow("Sucursal", expense.branchName.ifEmpty { "—" })
+        if (CostCenter.isShared(expense.costCenter)) {
+            DetailRow("Le corresponde a", CostCenter.label(expense.costCenter))
+        }
         DetailRow("Período", formatPeriodLabel(expense.period))
         DetailRow("Categoría", expense.category.label)
         DetailRow("Monto", "Q ${expense.amount.fmt(2)}")

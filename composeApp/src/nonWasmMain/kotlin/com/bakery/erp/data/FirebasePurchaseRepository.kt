@@ -4,6 +4,7 @@ import com.bakery.erp.domain.PurchaseRepository
 import com.bakery.erp.model.PURCHASE_BALANCE_EPSILON
 import com.bakery.erp.domain.report.PurchaseSummary
 import com.bakery.erp.domain.report.aggregatePurchases
+import com.bakery.erp.model.CostCenter
 import com.bakery.erp.model.Purchase
 import com.bakery.erp.model.amountSplit
 import com.bakery.erp.model.PurchaseLine
@@ -269,7 +270,8 @@ class FirebasePurchaseRepository(
         // Compra rápida: sucursal y lugar propios de la línea
         "branchId" to branchId,
         "branchName" to branchName,
-        "placeName" to placeName
+        "placeName" to placeName,
+        "costCenter" to costCenter
     )
 
     private fun PurchasePayment.toPaymentMap(): Map<String, Any?> = firestoreSafeOf(
@@ -350,7 +352,8 @@ class FirebasePurchaseRepository(
         assetEventType = runCatching { get<String?>("assetEventType") }.getOrNull() ?: "",
         branchId = runCatching { get<String?>("branchId") }.getOrNull() ?: "",
         branchName = runCatching { get<String?>("branchName") }.getOrNull() ?: "",
-        placeName = runCatching { get<String?>("placeName") }.getOrNull() ?: ""
+        placeName = runCatching { get<String?>("placeName") }.getOrNull() ?: "",
+        costCenter = CostCenter.normalize(runCatching { get<String?>("costCenter") }.getOrNull())
     )
 
     private fun DocumentSnapshot.toPayment() = PurchasePayment(

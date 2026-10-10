@@ -1,6 +1,7 @@
 ﻿package com.bakery.erp.data
 
 import com.bakery.erp.domain.FixedBudgetRepository
+import com.bakery.erp.model.CostCenter
 import com.bakery.erp.model.ExpenseCategory
 import com.bakery.erp.model.FixedBudgetItem
 import dev.gitlive.firebase.firestore.DocumentSnapshot
@@ -40,6 +41,7 @@ class FirebaseFixedBudgetRepository(
         "amount" to amount,
         "notes" to notes,
         "active" to active,
+        "costCenter" to costCenter,
         "updatedAt" to Clock.System.now().toEpochMilliseconds()
     )
 
@@ -55,6 +57,7 @@ class FirebaseFixedBudgetRepository(
         amount = get<Double?>("amount") ?: get<Long?>("amount")?.toDouble() ?: 0.0,
         notes = get<String?>("notes"),
         active = get<Boolean?>("active") ?: true,
+        costCenter = CostCenter.normalize(runCatching { get<String?>("costCenter") }.getOrNull()),
         updatedAt = runCatching { get<Long?>("updatedAt") }.getOrNull() ?: 0L
     )
 }

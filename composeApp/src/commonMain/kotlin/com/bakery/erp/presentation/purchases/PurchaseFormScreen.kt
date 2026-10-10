@@ -101,6 +101,8 @@ import androidx.compose.ui.text.font.FontStyle
 import com.bakery.erp.model.lineTotal
 import com.bakery.erp.model.PurchaseLine
 import com.bakery.erp.model.PurchaseLineKind
+import com.bakery.erp.model.CostCenter
+import com.bakery.erp.model.purchaseLineIsExpense
 import com.bakery.erp.model.PurchaseStatus
 import com.bakery.erp.model.expectedCashNow
 import com.bakery.erp.model.Supplier
@@ -109,6 +111,7 @@ import com.bakery.erp.model.largestUnit
 import com.bakery.erp.model.purchaseTotal
 import com.bakery.erp.model.taxBreakdownFromGross
 import com.bakery.erp.presentation.auth.AuthViewModel
+import com.bakery.erp.presentation.expenses.CostCenterPicker
 import com.bakery.erp.ui.AdaptiveContainer
 import com.bakery.erp.ui.ImagePickerButton
 import com.bakery.erp.ui.LoadingOverlay
@@ -169,6 +172,10 @@ fun PurchaseFormScreen(
     var addResaleFor by rememberSaveable { mutableStateOf("") }
     // ByteArray no es Parcelable: `remember`, no `rememberSaveable` (regla del proyecto).
     var invoicePhotoBytes by remember { mutableStateOf<ByteArray?>(null) }
+    // A quién le corresponde lo que esta factura gasta (servicios y suministros). Se elige una
+    // vez para todo el papel: la factura de la luz es toda de una sucursal, la del contador es
+    // toda de Generales. `null` = no se eligió todavía. Ver `CostCenter`.
+    var expenseCostCenter by rememberSaveable { mutableStateOf<String?>(null) }
 
     LaunchedEffect(companyId, sessionId) { viewModel.loadPinnedSession(companyId, sessionId) }
     val cashSession = state.pinnedSession?.takeIf { it.id == sessionId }
@@ -219,6 +226,13 @@ fun PurchaseFormScreen(
     }
 
     val isEditing = purchaseId != null
+    val hasExpenseLines = state.draftLines.any { purchaseLineIsExpense(it.lineKind) }
+    // Los servicios son los que no se sabe de quién son (la luz, el contador, la gasolina del
+    // camión): ahí se pregunta siempre que se paga de la caja general. Un suministro (cloro,
+    // bolsas) es casi siempre de la sucursal que lo recibe y no se obliga.
+    val requireCostCenter = cashSession == null &&
+        state.draftLines.any { it.lineKind == PurchaseLineKind.SERVICE }
+    val missingCostCenter = requireCostCenter && expenseCostCenter == null
     val hasSupplier = state.selectedSupplier != null || state.occasionalSupplierName.isNotBlank()
     // Vacío en alta (estable), y pasa a ser el id de la compra en cuanto la edición termina
     // de cargar — ese cambio es el que hace que las filas se re-inicialicen con sus valores.
@@ -243,6 +257,9 @@ fun PurchaseFormScreen(
         creditTouched = true
         applyTax = editing.taxRatePercent > 0.0
         declaredTotalStr = if (editing.declaredTotal > 0.0) editing.declaredTotal.fmt(2) else ""
+        // Una factura vieja sin el campo era de su sucursal: eso ya es una elección.
+        expenseCostCenter = state.draftLines
+            .firstOrNull { purchaseLineIsExpense(it.lineKind) }?.costCenter
     }
     // La factura ya está guardada, pero si subió algún costo hay una decisión de precio que
     // tomar y esta pantalla es la que la tiene enfrente. Se espera a resolverla antes de
@@ -332,7 +349,8 @@ fun PurchaseFormScreen(
                 dueDate = dueDate,
                 taxRatePercent = taxRate,
                 declaredTotal = declaredTotal,
-                invoicePhotoBytes = invoicePhotoBytes
+                invoicePhotoBytes = invoicePhotoBytes,
+                expenseCostCenter = expenseCostCenter ?: CostCenter.BRANCH
             )
             return
         }
@@ -349,7 +367,8 @@ fun PurchaseFormScreen(
                 taxRatePercent = taxRate,
                 declaredTotal = declaredTotal,
                 invoicePhotoBytes = invoicePhotoBytes,
-                session = cashSession
+                session = cashSession,
+                expenseCostCenter = expenseCostCenter ?: CostCenter.BRANCH
             )
         }
     }
@@ -752,6 +771,17 @@ fun PurchaseFormScreen(
                                             )
                                         }
 
+                                        if (hasExpenseLines) {
+                                            CostCenterPicker(
+                                                selected = expenseCostCenter
+                                                    ?: CostCenter.BRANCH.takeIf { !requireCostCenter },
+                                                branchLabel = state.selectedBranch?.name.orEmpty(),
+                                                onSelect = { expenseCostCenter = it },
+                                                label = "¿De quién es el gasto de esta factura?",
+                                                required = requireCostCenter
+                                            )
+                                        }
+
                                         if (perishableLines.isNotEmpty()) {
                                             ExpirySection(
                                                 lines = perishableLines,
@@ -879,7 +909,10 @@ fun PurchaseFormScreen(
                                         "Q ${grandTotal.fmt(2)}. No se puede pagar de la caja " +
                                         "más de lo que hay en ella."
                                 } else null
-                            },
+                            } ?: if (missingCostCenter) {
+                                "Falta decir de quién es el gasto de esta factura: de una " +
+                                    "sucursal, Generales o Reparto."
+                            } else null,
                             lineCount = state.draftLines.size,
                             breakdown = breakdown,
                             applyTax = applyTax,

@@ -23,6 +23,7 @@ import com.bakery.erp.model.FinishedProductStock
 import com.bakery.erp.model.isIngredientBacked
 import com.bakery.erp.model.POSCategory
 import com.bakery.erp.model.groupDisplayName
+import com.bakery.erp.model.PriceList
 import com.bakery.erp.model.PriceListType
 import com.bakery.erp.model.Product
 import com.bakery.erp.model.ReceiptData
@@ -50,6 +51,14 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import com.bakery.erp.model.FelCertifyResult
+import com.bakery.erp.model.ExternalCustomer
+import com.bakery.erp.model.ExternalCustomerType
+import com.bakery.erp.model.ResellerRegistrationStatus
+import com.bakery.erp.domain.ExternalCustomerRepository
+import com.bakery.erp.domain.PriceSource
+import com.bakery.erp.domain.ResolvedPrice
+import com.bakery.erp.domain.groupListPrice
+import com.bakery.erp.domain.resolveListPrices
 import com.bakery.erp.model.FelInvoiceRequest
 import com.bakery.erp.model.FelInvoiceStatus
 import com.bakery.erp.model.felReceptorProblem
@@ -151,7 +160,31 @@ data class POSUiState(
     /** Sucursales que venden: dónde puede recoger el cliente su encargo. */
     val pickupBranches: List<Branch> = emptyList(),
     /** Cuándo terminó de imprimirse el último ticket: el acuse muestra "Ticket impreso". */
-    val printedAt: Long = 0L
+    val printedAt: Long = 0L,
+    /**
+     * Venta a revendedor en curso: el carrito se cobra con SU lista de precios en vez del
+     * precio público. Null = venta de mostrador. Ver [ResellerSale].
+     */
+    val resellerSale: ResellerSale? = null,
+    /** Revendedores activos, para elegir a quién se le vende. Se cargan al abrir el selector. */
+    val resellers: List<ExternalCustomer> = emptyList(),
+    val isLoadingResellers: Boolean = false
+)
+
+/**
+ * El revendedor al que se le está vendiendo y sus precios ya resueltos para todo el catálogo.
+ *
+ * Se resuelven al elegirlo —una lectura de la lista y sus precios fijos— y no producto por
+ * producto al tocar cada ficha: la cajera tiene la fila esperando, y así cada ficha puede
+ * mostrar el precio de revendedor antes de tocarla.
+ */
+data class ResellerSale(
+    val customer: ExternalCustomer,
+    val priceListId: String,
+    val priceListName: String,
+    /** La lista elegida: el grupo de precio sin panes resuelve su precio con su regla. */
+    val list: PriceList,
+    val prices: Map<String, ResolvedPrice>
 )
 
 /**
@@ -198,7 +231,9 @@ class POSViewModel(
     /** Anticipos de clientes: recibir, aplicar al cobrar y devolver. */
     private val depositRepository: com.bakery.erp.domain.CustomerDepositRepository,
     /** Pedidos de clientes (pasteles): el anticipo ligado se registra como pago del pedido. */
-    private val customerOrderRepository: com.bakery.erp.domain.CustomerOrderRepository
+    private val customerOrderRepository: com.bakery.erp.domain.CustomerOrderRepository,
+    /** Revendedores: a quién se le vende con su lista de precios. */
+    private val externalCustomerRepository: ExternalCustomerRepository
 ) : ViewModel() {
 
     private var organizationName: String = ""
@@ -443,6 +478,16 @@ class POSViewModel(
     // ── Carrito ───────────────────────────────────────────────────────────
 
     fun addProductToCart(product: Product, quantity: Double) {
+        val resale = _uiState.value.resellerSale
+        // A un revendedor no se le cobra un pan que no tiene precio en su lista: caer al precio
+        // público le cobraría de más, y adivinar uno le cobraría lo que nadie decidió.
+        if (resale != null && resellerPriceFor(product) == null) {
+            _uiState.update {
+                it.copy(error = "${product.name} no tiene precio en la lista «${resale.priceListName}». " +
+                    "Agregáselo en Listas de precios.")
+            }
+            return
+        }
         val unitPrice = resolveProductPrice(product)
         val existing = _uiState.value.cart.find { it.productId == product.id }
         val newCart = if (existing != null) {
@@ -456,7 +501,7 @@ class POSViewModel(
                 productName = product.name,
                 quantity = quantity,
                 unitPrice = unitPrice.first,
-                priceListId = retailPriceListId,
+                priceListId = resale?.priceListId ?: retailPriceListId,
                 priceSource = unitPrice.second
             )
         }
@@ -469,6 +514,14 @@ class POSViewModel(
      */
     fun addGroupToCart(category: POSCategory, quantity: Double) {
         if (!category.sellAsGroup || quantity <= 0.0) return
+        val resale = _uiState.value.resellerSale
+        val unitPrice = groupPriceFor(category) ?: run {
+            _uiState.update {
+                it.copy(error = "Los panes de ${category.groupDisplayName} no tienen todos el mismo precio " +
+                    "en la lista «${resale?.priceListName.orEmpty()}». Cobralos uno por uno con la lupa.")
+            }
+            return
+        }
         val key = "grp_${category.id}"
         val cart = _uiState.value.cart
         val newCart = if (cart.any { it.key == key }) {
@@ -479,8 +532,8 @@ class POSViewModel(
                 productId = "",
                 productName = category.groupDisplayName,
                 quantity = quantity,
-                unitPrice = category.groupUnitPrice,
-                priceListId = retailPriceListId,
+                unitPrice = unitPrice,
+                priceListId = resale?.priceListId ?: retailPriceListId,
                 priceSource = SaleLinePriceSource.QUICK_GROUP,
                 quickGroupId = category.id
             )
@@ -543,9 +596,15 @@ class POSViewModel(
             _uiState.update { it.copy(error = "El carrito está vacío") }; return
         }
         val isCredit = paymentMethod == SalePaymentMethod.CREDIT
+        val resale = state.resellerSale
+        // Al revendedor se le vende de contado (decisión del dueño: fiarle es raro y no se
+        // ofrece). Su precio ya es el rebajado: no se le suma el descuento de colaborador.
+        if (resale != null && isCredit) {
+            _uiState.update { it.copy(error = "La venta a revendedor es de contado.") }; return
+        }
         // El descuento se recalcula acá desde la cuenta, no se confía en lo que mostró el
         // diálogo, y solo con efectivo: premia el pago al contado, no el fiado ni la tarjeta.
-        val discountAmount = if (paymentMethod == SalePaymentMethod.CASH &&
+        val discountAmount = if (resale == null && paymentMethod == SalePaymentMethod.CASH &&
             discountAccount?.isEmployee == true && discountAccount.cashDiscountEligible
         ) employeeDiscountAmount() else 0.0
         val total = cartTotal() - discountAmount
@@ -694,6 +753,9 @@ class POSViewModel(
                     creditAccountId = credit?.account?.id.orEmpty(),
                     creditAccountName = credit?.account?.name.orEmpty(),
                     creditPersonName = credit?.personName.orEmpty(),
+                    resellerId = resale?.customer?.id.orEmpty(),
+                    resellerName = resale?.customer?.name.orEmpty(),
+                    resellerPriceListName = resale?.priceListName.orEmpty(),
                     // SOLICITADA en la misma escritura que crea la venta: si la llamada que
                     // sigue se pierde, el reintento del servidor la encuentra igual.
                     invoiceStatus = if (invoiceRequest != null) FelInvoiceStatus.SOLICITADA else "",
@@ -822,6 +884,9 @@ class POSViewModel(
                         isLoading = false,
                         isCheckingOut = false,
                         cart = emptyList(),
+                        // La siguiente venta es de mostrador: quedarse en modo revendedor le
+                        // cobraría barato al cliente que sigue en la fila.
+                        resellerSale = null,
                         lastSaleSummary = LastSaleSummary(total, change, paymentMethod),
                         lastReceiptData = receipt,
                         recentCheckouts = (listOf(record) + it.recentCheckouts).take(MAX_RECENT_CHECKOUTS),
@@ -1367,7 +1432,124 @@ class POSViewModel(
 
     /** Devuelve (precio, source). `salePrice` es la fuente de verdad para retail. */
     private fun resolveProductPrice(product: Product): Pair<Double, String> {
+        resellerPriceFor(product)?.let { r ->
+            val source = if (r.source == PriceSource.PRODUCT_OVERRIDE) SaleLinePriceSource.PRODUCT_OVERRIDE
+                         else SaleLinePriceSource.LIST_FACTOR
+            return r.unitPrice to source
+        }
         return product.salePrice to SaleLinePriceSource.PRODUCT_SALE_PRICE
+    }
+
+    // ── Venta a revendedor ─────────────────────────────────────────────────
+
+    /** Precio del revendedor en curso, o null si no hay venta a revendedor o no tiene precio. */
+    private fun resellerPriceFor(product: Product): ResolvedPrice? =
+        _uiState.value.resellerSale?.prices?.get(product.id)?.takeIf { it.found && it.unitPrice > 0 }
+
+    /** Lo que la ficha muestra y lo que se cobra. Null = sin precio para este revendedor. */
+    fun unitPriceFor(product: Product): Double? =
+        if (_uiState.value.resellerSale == null) product.salePrice else resellerPriceFor(product)?.unitPrice
+
+    /** Precio por pan del grupo. Null = el revendedor no tiene un precio único para el grupo. */
+    fun groupPriceFor(category: POSCategory): Double? {
+        val resale = _uiState.value.resellerSale ?: return category.groupUnitPrice
+        return groupListPrice(category, _uiState.value.productsById, resale.prices, resale.list)
+    }
+
+    fun loadResellers(companyId: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingResellers = true) }
+            val list = runCatching { externalCustomerRepository.getCustomers(companyId) }
+                .getOrElse { emptyList() }
+                .filter {
+                    it.type == ExternalCustomerType.RESELLER && it.active &&
+                        it.registrationStatus == ResellerRegistrationStatus.ACTIVE
+                }
+                .sortedBy { it.name.lowercase() }
+            _uiState.update { it.copy(resellers = list, isLoadingResellers = false) }
+        }
+    }
+
+    /**
+     * Pasa la caja a venta a revendedor. Lo que ya estaba en el carrito se vuelve a cobrar con
+     * la lista del revendedor: la cajera muchas veces empieza a marcar y después se entera de
+     * que es revendedor, y obligarla a vaciar el carrito sería volver a marcar todo.
+     */
+    fun startResellerSale(companyId: String, customer: ExternalCustomer) {
+        if (customer.priceListId.isBlank()) {
+            _uiState.update {
+                it.copy(error = "${customer.name} no tiene lista de precios. Asignale una en Clientes → Revendedores.")
+            }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true) }
+            runCatching {
+                val list = priceListRepository.getList(companyId, customer.priceListId)
+                    ?.takeIf { it.active }
+                    ?: throw IllegalStateException(
+                        "La lista de precios de ${customer.name} no existe o está desactivada."
+                    )
+                val overrides = priceListRepository.getPricesForList(companyId, list.id)
+                ResellerSale(
+                    customer = customer,
+                    priceListId = list.id,
+                    priceListName = list.name,
+                    list = list,
+                    prices = resolveListPrices(list, overrides, _uiState.value.products)
+                )
+            }.onSuccess { resale ->
+                _uiState.update { it.copy(isLoading = false, resellerSale = resale) }
+                repriceCart()
+            }.onFailure { e ->
+                _uiState.update { it.copy(isLoading = false, error = e.message) }
+            }
+        }
+    }
+
+    /** Vuelve a venta de mostrador; lo del carrito regresa al precio público. */
+    fun endResellerSale() {
+        if (_uiState.value.resellerSale == null) return
+        _uiState.update { it.copy(resellerSale = null) }
+        repriceCart()
+    }
+
+    /**
+     * Recalcula el precio de cada renglón del carrito con el modo actual. Lo que no tiene precio
+     * para el revendedor se saca y se avisa: dejarlo al precio público le cobraría de más sin
+     * que la cajera lo note.
+     */
+    private fun repriceCart() {
+        val state = _uiState.value
+        val resale = state.resellerSale
+        val categoriesById = state.posCategories.associateBy { it.id }
+        val dropped = mutableListOf<String>()
+        val repriced = state.cart.mapNotNull { line ->
+            when {
+                line.isRestaurant -> line
+                line.isGroup -> {
+                    val price = categoriesById[line.quickGroupId]?.let { groupPriceFor(it) }
+                    if (price == null) { dropped += line.productName; null }
+                    else line.copy(unitPrice = price, priceListId = resale?.priceListId ?: retailPriceListId)
+                }
+                else -> {
+                    val product = state.productsById[line.productId]
+                    if (product == null || unitPriceFor(product) == null) { dropped += line.productName; null }
+                    else {
+                        val (price, source) = resolveProductPrice(product)
+                        line.copy(unitPrice = price, priceSource = source,
+                            priceListId = resale?.priceListId ?: retailPriceListId)
+                    }
+                }
+            }
+        }
+        _uiState.update {
+            it.copy(
+                cart = repriced,
+                error = if (dropped.isEmpty()) it.error
+                        else "Se sacaron del carrito por no tener precio de revendedor: ${dropped.joinToString()}"
+            )
+        }
     }
 
     /**

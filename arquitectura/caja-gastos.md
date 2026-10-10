@@ -350,3 +350,32 @@ vez de mostrar la fila en blanco (mismo criterio que `usableInRecipes(keepIds)`)
 **No hay categoría "restaurante"**: el restaurante o la cafetería entran como **sucursal**, así
 que sus gastos ya se separan solos y lo único que faltaba era el renglón de en qué se fueron —
 para eso está `COCINA`.
+
+### A quién le corresponde un gasto: `CostCenter` (oct 2026)
+
+Primer paso de la rentabilidad por sucursal (`arquitectura/propuesta-rentabilidad-por-sucursal.md`).
+El dinero de todas las sucursales cae en un saco común y las facturas se pagan de la caja
+general, así que `paidFrom` ("de qué caja salió") no dice quién gana y quién pierde. Cada gasto
+lleva además `costCenter`: vacío = la sucursal del documento, `GENERAL` (contador, sueldo del
+dueño, vehículo, publicidad; **no se reparte**) o `DELIVERY` (piloto y camión; se repartirá
+entre las tiendas por entregas).
+
+- **Campo aparte, no un `branchId` especial.** `branchId` sigue siendo dónde se anotó: de ahí
+  cuelgan inventario, caja y permisos. Vacío = sucursal, así los documentos viejos se leen bien
+  sin migrar (`CostCenter.normalize`).
+- **Vive en la línea** (`PurchaseLine.costCenter`) y baja al `Expense` por `expensesForPurchase`.
+  En la compra rápida es por renglón (la gasolina del camión y los trapos de la tienda van en el
+  mismo desembolso). En la factura se elige UNA vez para el papel y `withExpenseCostCenter` lo
+  estampa al guardar sobre las líneas que se gastan; las de inventario quedan vacías.
+- **Cuándo se obliga.** Desde la caja general (sin `sessionId`) es donde se mezclan las facturas
+  de todos: en la compra rápida cada renglón de gasto tiene que decirlo (el borrador arranca en
+  `null`), y en la factura solo si trae líneas SERVICE (la luz, el contador). Un suministro casi
+  siempre es de la sucursal que lo recibe y no se obliga. Desde la gaveta de una tienda se asume
+  la tienda.
+- **Reporte.** `aggregateExpensesForPeriod` agrupa con `costCenterReportKey`: Generales y Reparto
+  salen en su propio renglón del "Por sucursal" del reporte financiero en vez de cargarse a la
+  planta donde se pagaron.
+- También en `FixedBudgetItem` (con compartido, `branchId` vacío y `branchName` = "Generales" /
+  "Reparto" para que la lista agrupe sola), en `Employee` ("¿A quién se le carga su sueldo?") y en
+  el formulario de gasto manual. Selector común: `presentation/expenses/CostCenterPicker.kt`.
+  Tests: `CostCenterTest`.

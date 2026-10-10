@@ -54,6 +54,8 @@ import com.bakery.erp.model.PriceList
 import com.bakery.erp.model.Product
 import com.bakery.erp.model.ProductPrice
 import com.bakery.erp.model.PriceListType
+import com.bakery.erp.model.samePrice
+import com.bakery.erp.model.listRulePrice
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.presentation.pricing.PriceListViewModel
 import com.bakery.erp.ui.ProductImage
@@ -292,11 +294,13 @@ private fun ProductInfoSection(
         priceLists.forEach { list ->
             val isRetailDefault = list.type == PriceListType.RETAIL && list.isDefault
             val override = pricesForProduct.find { it.priceListId == list.id }?.unitPrice?.takeIf { it > 0 }
-            val autoFromFactor = list.priceFactor?.takeIf { product.salePrice > 0 }?.let { product.salePrice * it }
+            val autoFromRule = list.listRulePrice(product.salePrice)
+            val stepHit = list.priceSteps.any { samePrice(it.publicPrice, product.salePrice) }
             val (value, sourceHint) = when {
                 isRetailDefault -> product.salePrice to null
                 override != null -> override to "fijo"
-                autoFromFactor != null -> autoFromFactor to "${(list.priceFactor!! * 100).toInt()}% del retail"
+                autoFromRule != null && stepHit -> autoFromRule to "escalón de la lista"
+                autoFromRule != null -> autoFromRule to "${(list.priceFactor!! * 100).toInt()}% del retail"
                 else -> null to null
             }
             DetailRow(

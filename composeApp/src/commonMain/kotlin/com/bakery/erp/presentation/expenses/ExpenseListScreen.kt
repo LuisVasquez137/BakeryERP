@@ -59,6 +59,7 @@ import com.bakery.erp.model.ExpenseCategory
 import com.bakery.erp.model.ExpensePaidFrom
 import com.bakery.erp.model.Permission
 import com.bakery.erp.model.formatPeriodLabel
+import com.bakery.erp.model.costCenterReportName
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.presentation.branches.BranchViewModel
@@ -349,7 +350,9 @@ private fun ExpenseListCard(expense: Expense, onClick: () -> Unit) {
                     else -> ""
                 }
                 Text(
-                    text = listOf(expense.branchName, origen)
+                    // Generales y Reparto se nombran en vez de la sucursal donde se anotaron:
+                    // es lo que decide en qué renglón del resultado cae.
+                    text = listOf(costCenterReportName(expense.costCenter, expense.branchName), origen)
                         .filter { it.isNotEmpty() }
                         .joinToString(" · "),
                     style = MaterialTheme.typography.labelSmall,

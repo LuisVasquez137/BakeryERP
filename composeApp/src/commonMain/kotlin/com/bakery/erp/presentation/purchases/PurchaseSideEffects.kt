@@ -82,6 +82,9 @@ internal fun expensesForPurchase(
                 cashSessionId = purchase.cashSessionId,
                 cashRegisterName = purchase.cashRegisterName,
                 photoUrl = purchase.invoicePhotoUrl,
+                // A quién le corresponde, que no es lo mismo que la sucursal donde se anotó:
+                // la gasolina del camión se paga en la planta y es de Reparto.
+                costCenter = line.costCenter,
                 createdAt = purchase.date
             )
         }

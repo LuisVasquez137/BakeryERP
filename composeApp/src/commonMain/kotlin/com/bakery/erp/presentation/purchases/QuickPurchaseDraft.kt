@@ -1,6 +1,8 @@
 package com.bakery.erp.presentation.purchases
 
 import com.bakery.erp.model.Branch
+import com.bakery.erp.model.CostCenter
+import com.bakery.erp.model.purchaseLineIsExpense
 import com.bakery.erp.model.ExpenseCategory
 import com.bakery.erp.model.Ingredient
 import com.bakery.erp.model.Product
@@ -55,8 +57,19 @@ internal data class QuickPurchaseDraftLine(
      * categoría para todo el desembolso el reporte contesta "cuánto" pero nunca "en qué",
      * que es justamente para lo que existe el desglose.
      */
-    val expenseCategory: ExpenseCategory = ExpenseCategory.OTROS
+    val expenseCategory: ExpenseCategory = ExpenseCategory.OTROS,
+    /**
+     * A quién le corresponde el gasto (ver [CostCenter]). `null` = todavía no se eligió: desde
+     * la caja general hay que decirlo, porque ahí se anotan las facturas de todos y dejarlo caer
+     * a la sucursal de turno es como el contador terminaba cargado a la planta. Desde una caja
+     * de tienda se toma como la sucursal.
+     */
+    val costCenter: String? = null
 ) {
+    /** `true` si la fila se gasta (y por tanto tiene a quién cargarse). */
+    val isExpense: Boolean
+        get() = !touchesStock || ingredient?.usage == IngredientUsage.SUPPLY
+
     /** `true` si la fila va a mover inventario. Lo demás es gasto puro. */
     val touchesStock: Boolean get() = ingredient != null || product != null
 
@@ -99,7 +112,9 @@ internal fun PurchaseLine.toQuickDraft(
     amount = lineTotal,
     expiryDate = expiryDate,
     expenseCategory = runCatching { ExpenseCategory.valueOf(expenseCategory) }
-        .getOrElse { ExpenseCategory.OTROS }
+        .getOrElse { ExpenseCategory.OTROS },
+    // Lo guardado ya es una decisión: un gasto viejo sin el campo era de su sucursal.
+    costCenter = costCenter
 )
 
 /**
@@ -146,6 +161,7 @@ internal fun QuickPurchaseDraftLine.toPurchaseLine(): PurchaseLine {
         expenseCategory = expenseCategory.name,
         branchId = branch?.id.orEmpty(),
         branchName = branch?.name.orEmpty(),
-        placeName = placeName.trim()
+        placeName = placeName.trim(),
+        costCenter = if (purchaseLineIsExpense(kind)) costCenter ?: CostCenter.BRANCH else CostCenter.BRANCH
     )
 }

@@ -6,6 +6,7 @@ import com.bakery.erp.domain.BranchRepository
 import com.bakery.erp.domain.CustomerOrderRepository
 import com.bakery.erp.domain.ExternalCustomerRepository
 import com.bakery.erp.domain.PriceListRepository
+import com.bakery.erp.domain.resolveListPrices
 import com.bakery.erp.domain.PriceSource
 import com.bakery.erp.domain.ProductRepository
 import com.bakery.erp.domain.ResolvedPrice
@@ -109,35 +110,8 @@ class ResellerViewModel(
     ): Map<String, ResolvedPrice> {
         if (priceListId.isEmpty()) return emptyMap()
         val list = priceListRepo.getList(companyId, priceListId) ?: return emptyMap()
-        val overrides = priceListRepo.getPricesForList(companyId, priceListId)
-            .associateBy { it.productId }
-        return products.associate { p ->
-            val override = overrides[p.id]
-            val resolved = when {
-                override != null && override.unitPrice > 0 -> ResolvedPrice(
-                    unitPrice = override.unitPrice,
-                    priceListId = priceListId,
-                    priceListName = list.name,
-                    found = true,
-                    source = PriceSource.PRODUCT_OVERRIDE
-                )
-                (list.priceFactor ?: 0.0) > 0 -> ResolvedPrice(
-                    unitPrice = p.salePrice * (list.priceFactor ?: 0.0),
-                    priceListId = priceListId,
-                    priceListName = list.name,
-                    found = true,
-                    source = PriceSource.LIST_FACTOR
-                )
-                else -> ResolvedPrice(
-                    unitPrice = 0.0,
-                    priceListId = priceListId,
-                    priceListName = list.name,
-                    found = false,
-                    source = PriceSource.NONE
-                )
-            }
-            p.id to resolved
-        }
+        // La misma cascada que usa la caja al venderle: lo que ve en su pedido es lo que paga.
+        return resolveListPrices(list, priceListRepo.getPricesForList(companyId, priceListId), products)
     }
 
     /**

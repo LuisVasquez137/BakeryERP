@@ -47,7 +47,10 @@ internal fun saleReceiptData(
             "Crédito · ${sale.creditAccountName}" +
                 (if (sale.creditPersonName.isNotBlank() && sale.creditPersonName != sale.creditAccountName)
                     " (llevó ${sale.creditPersonName})" else "")
-        else SalePaymentMethod.label(sale.paymentMethod),
+        // El revendedor va junto al método de pago y no en un renglón propio del ticket: así
+        // sale igual en la impresora, en el acuse y en la reimpresión sin tocar el formato.
+        else SalePaymentMethod.label(sale.paymentMethod) +
+            (if (sale.resellerName.isNotBlank()) " · Revendedor: ${sale.resellerName}" else ""),
         tenderedAmount = sale.tenderedAmount,
         changeAmount = sale.changeAmount,
         depositFolio = sale.depositFolio,

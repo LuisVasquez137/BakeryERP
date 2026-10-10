@@ -116,6 +116,14 @@ data class Sale(
     val creditAccountName: String = "",
     val creditPersonName: String = "",
     /**
+     * Venta a un revendedor: se cobró con SU lista de precios, no al precio público. Snapshot
+     * del cliente y de la lista, igual que el crédito: el reporte tiene que poder separar lo
+     * que se vendió más barato a revendedores aunque mañana cambie su lista. Vacío = mostrador.
+     */
+    val resellerId: String = "",
+    val resellerName: String = "",
+    val resellerPriceListName: String = "",
+    /**
      * Descuento de colaborador por pagar en efectivo: a qué cuenta (colaborador) se le hizo y
      * con qué %. El monto va en [discount]. Snapshot: el % puede cambiar mañana.
      */

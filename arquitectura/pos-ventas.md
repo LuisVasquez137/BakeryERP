@@ -250,3 +250,35 @@ a una gaveta hoy pero **todavía no es venta** (si cancela, se devuelve):
   pagos con su folio. `recordPayment` convierte el anticipo escrito a mano de un pedido viejo en
   un pago "anotado a mano" antes del primer pago real (`legacyAdvanceToMigrate`), porque el
   recálculo suma pagos y lo borraría.
+
+### Venta a revendedor (oct 2026)
+
+Paso 2 de `arquitectura/propuesta-rentabilidad-por-sucursal.md`. Los revendedores compran en las
+tiendas (no en la planta), casi siempre de contado, a un precio menor que el público pero mayor
+que el de las sucursales. Antes la caja solo cobraba `salePrice`: no había forma de cobrarles bien.
+
+- **Un modo de la caja, no una pantalla aparte.** "Venta a revendedor" (menú ⋮ en teléfono,
+  "Revendedor" en tablet) elige al cliente (`ExternalCustomer` tipo RESELLER, activo y aprobado) y
+  `POSUiState.resellerSale` guarda sus precios ya resueltos para todo el catálogo. Fichas, grupo,
+  diálogo de cantidad y carrito muestran ESE precio. Un aviso naranja fijo arriba del catálogo lo
+  recuerda y tiene "Volver a mostrador".
+- **Misma cascada que el pedido del revendedor**: `domain/ListPriceResolution.kt::resolveListPrices`
+  (precio fijo del producto en la lista → porcentaje de la lista × `salePrice` → sin precio),
+  redondeado a centavos. `ResellerViewModel` la usa también: lo que ve en su pedido es lo que paga.
+- **Sin precio no se cobra.** Un producto sin precio en la lista no entra al carrito (avisa que hay
+  que agregarlo en Listas de precios): caer al precio público cobraría de más. Si el revendedor no
+  tiene lista asignada, no se entra al modo.
+- **Grupo "Pan Q0.50"**: `groupListPrice` — tiene precio solo si TODOS sus panes (los que de verdad
+  entran: `salePrice == groupUnitPrice`) cuestan lo mismo en la lista; si no, null y se cobran uno
+  por uno. Sin miembros, cae al porcentaje de la lista.
+- **Entrar con carrito lleno lo re-precia** (`repriceCart`) en vez de obligar a vaciarlo: la cajera
+  se entera tarde de que es revendedor. Lo que no tiene precio se saca y se avisa. Salir lo regresa
+  al precio público.
+- **De contado y sin descuento de colaborador**: el diálogo de cobro no ofrece crédito ni descuento
+  y `confirmSale` lo vuelve a validar. Decisión del dueño: fiar a revendedores es raro.
+- **La venta guarda** `resellerId/resellerName/resellerPriceListName` (snapshot) y cada línea su
+  `priceListId` + `priceSource` (PRODUCT_OVERRIDE / LIST_FACTOR). El ticket lo dice junto al método
+  de pago ("Efectivo · Revendedor: X"), igual en la reimpresión.
+- **Al cobrar, la caja vuelve sola a mostrador**: quedarse en modo revendedor le cobraría barato al
+  siguiente de la fila.
+- Tests: `ListPriceResolutionTest`.

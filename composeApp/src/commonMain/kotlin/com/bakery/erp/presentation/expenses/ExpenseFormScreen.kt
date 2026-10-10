@@ -50,6 +50,8 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.Branch
+import com.bakery.erp.model.CostCenter
+import com.bakery.erp.ui.AdaptiveContainer
 import com.bakery.erp.model.Expense
 import com.bakery.erp.model.ExpenseCategory
 import com.bakery.erp.presentation.auth.AuthViewModel
@@ -94,6 +96,8 @@ fun ExpenseFormScreen(
         )
     }
 
+    var costCenter by rememberSaveable { mutableStateOf(existing?.costCenter ?: CostCenter.BRANCH) }
+
     var nameError by remember { mutableStateOf(false) }
     var amountError by remember { mutableStateOf(false) }
     var branchError by remember { mutableStateOf(false) }
@@ -122,6 +126,7 @@ fun ExpenseFormScreen(
             id = existing?.id ?: "",
             branchId = branch?.id ?: "",
             branchName = branch?.name ?: "",
+            costCenter = costCenter,
             name = name.trim().replaceFirstChar { it.uppercase() },
             category = selectedCategory,
             amount = amountText.replace(",", ".").toDoubleOrNull() ?: 0.0,
@@ -153,7 +158,7 @@ fun ExpenseFormScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+        AdaptiveContainer(modifier = Modifier.fillMaxSize().padding(padding)) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -198,6 +203,12 @@ fun ExpenseFormScreen(
                         }
                     }
                 }
+
+                CostCenterPicker(
+                    selected = costCenter,
+                    branchLabel = selectedBranch?.name.orEmpty(),
+                    onSelect = { costCenter = it }
+                )
 
                 // ── Datos del gasto ───────────────────────────────────────────
                 SectionDivider()

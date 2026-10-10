@@ -63,6 +63,12 @@ import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.Permission
 import com.bakery.erp.model.PriceList
 import com.bakery.erp.model.PriceListType
+import com.bakery.erp.model.PriceStep
+import com.bakery.erp.util.fmt
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.mutableStateListOf
+import kotlin.math.roundToLong
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.ui.AdaptiveContainer
@@ -145,7 +151,10 @@ fun PriceListAdminScreen(
                     ) {
                         item {
                             Text(
-                                "Define un precio por canal. El precio del cliente final es la lista RETAIL default; el de las sucursales es la WHOLESALE default.",
+                                "Cada lista es un precio para un tipo de cliente. «Cliente final» es el precio normal del " +
+                                    "mostrador; «Mayorista», a cuánto pasa la planta el pan a las sucursales; «Especial», " +
+                                    "un cliente con precio propio, como los revendedores. La estrella ★ marca la que se usa " +
+                                    "cuando nadie eligió otra.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -258,6 +267,21 @@ private fun PriceListCard(
                                 colors = AssistChipDefaults.assistChipColors(containerColor = Color(0xFFFFE0B2))
                             )
                         }
+                        if (list.priceSteps.isNotEmpty()) {
+                            Spacer(Modifier.size(6.dp))
+                            AssistChip(
+                                onClick = {},
+                                label = {
+                                    Text(
+                                        list.priceSteps.sortedBy { it.publicPrice }.joinToString(" · ") {
+                                            "Q${it.publicPrice.fmt(2)}→Q${it.listPrice.fmt(2)}"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        maxLines = 1
+                                    )
+                                }
+                            )
+                        }
                         if (!list.active) {
                             Spacer(Modifier.size(6.dp))
                             AssistChip(onClick = {}, label = { Text("Inactiva", style = MaterialTheme.typography.labelSmall) })
@@ -305,6 +329,26 @@ private fun PriceListFormDialog(
         mutableStateOf(initial?.priceFactor?.let { (it * 100).toString() } ?: "")
     }
 
+    // Escalones como texto mientras se escriben ("1." a medias no es un número todavía).
+    val steps = remember {
+        mutableStateListOf<Pair<String, String>>().apply {
+            initial?.priceSteps.orEmpty().sortedBy { it.publicPrice }
+                .forEach { add(it.publicPrice.fmt(2) to it.listPrice.fmt(2)) }
+        }
+    }
+    val filledSteps = steps.filter { it.first.isNotBlank() || it.second.isNotBlank() }
+    val parsedSteps = filledSteps.mapNotNull { (pub, lst) ->
+        val a = pub.toDoubleOrNull()?.takeIf { it > 0 }
+        val b = lst.toDoubleOrNull()?.takeIf { it > 0 }
+        if (a != null && b != null) PriceStep(a, b) else null
+    }
+    val stepsError: String? = when {
+        parsedSteps.size != filledSteps.size -> "Cada escalón necesita los dos precios."
+        parsedSteps.groupBy { (it.publicPrice * 100).roundToLong() }.any { it.value.size > 1 } ->
+            "Hay dos escalones con el mismo precio al público."
+        else -> null
+    }
+
     val existingDefaultOtherType = existing
         .filter { it.id != initial?.id && it.type == type && it.isDefault }
         .firstOrNull()
@@ -313,7 +357,7 @@ private fun PriceListFormDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (initial == null) "Nueva lista de precios" else "Editar lista") },
         text = {
-            Column(modifier = Modifier.heightIn(max = 500.dp)) {
+            Column(modifier = Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState())) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
@@ -330,7 +374,7 @@ private fun PriceListFormDialog(
                         readOnly = true,
                         value = PriceListType.label(type),
                         onValueChange = {},
-                        label = { Text("Tipo de canal") },
+                        label = { Text("¿Para quién es esta lista?") },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = typeExpanded) },
                         modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth()
                     )
@@ -346,11 +390,32 @@ private fun PriceListFormDialog(
                         }
                     }
                 }
+                Text(
+                    when (type) {
+                        PriceListType.RETAIL -> "El precio normal del mostrador. Ya existe una; no hace falta otra."
+                        PriceListType.WHOLESALE -> "A cuánto le pasa la planta el pan a las sucursales."
+                        else -> "Un cliente con precio propio, como los revendedores. Se le asigna a cada uno."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
                 Spacer(Modifier.size(12.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = isDefault, onCheckedChange = { isDefault = it })
-                    Text("Lista default para este canal", style = MaterialTheme.typography.bodyMedium)
+                    Text("Usarla cuando nadie eligió otra (★)", style = MaterialTheme.typography.bodyMedium)
                 }
+                Text(
+                    when (type) {
+                        PriceListType.RETAIL -> "Marcada = es el precio del mostrador."
+                        PriceListType.WHOLESALE ->
+                            "Marcada = las sucursales que no tienen una lista asignada se despachan con esta."
+                        else -> "Las listas especiales se asignan a mano a cada cliente: normalmente se deja sin marcar."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 40.dp)
+                )
                 if (isDefault && existingDefaultOtherType != null) {
                     Text(
                         "Reemplazará a \"${existingDefaultOtherType.name}\" como default ${PriceListType.label(type)}.",
@@ -364,6 +429,12 @@ private fun PriceListFormDialog(
                     Checkbox(checked = active, onCheckedChange = { active = it })
                     Text("Activa", style = MaterialTheme.typography.bodyMedium)
                 }
+                Text(
+                    "Sin marcar = la lista queda guardada pero no se usa para cobrar ni despachar.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 40.dp)
+                )
 
                 // Factor de precio (cascada): solo aplica a WHOLESALE/CUSTOM.
                 if (type == PriceListType.WHOLESALE || type == PriceListType.CUSTOM) {
@@ -393,6 +464,7 @@ private fun PriceListFormDialog(
                             )
                         }
                     )
+                    PriceStepsEditor(steps = steps, error = stepsError)
                 }
 
                 Spacer(Modifier.size(12.dp))
@@ -419,13 +491,68 @@ private fun PriceListFormDialog(
                             isDefault = isDefault,
                             active = active,
                             priceFactor = factor,
+                            priceSteps = if (type == PriceListType.RETAIL) emptyList() else parsedSteps,
                             notes = notes.trim().ifEmpty { null }
                         )
                     )
                 },
-                enabled = name.isNotBlank()
+                enabled = name.isNotBlank() && (type == PriceListType.RETAIL || stepsError == null)
             ) { Text("Guardar") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } }
     )
+}
+
+/**
+ * Tabla "precio al público → precio de la lista". Es como el dueño piensa el precio del
+ * revendedor (el de Q0.50 a Q0.40, el de Q1.50 a Q1.25): con un solo porcentaje no salen los
+ * dos, y ponerle precio fijo a cada pan de Q1.50 es repetir lo mismo en muchos productos.
+ */
+@Composable
+private fun PriceStepsEditor(steps: MutableList<Pair<String, String>>, error: String?) {
+    Spacer(Modifier.size(12.dp))
+    Text("Precio por escalón", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+    Text(
+        "Todo lo que al público vale tanto, en esta lista vale tanto. Le gana al porcentaje; " +
+            "el precio fijo que le pongas a un producto le gana a los dos.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    steps.forEachIndexed { i, (pub, lst) ->
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(top = 8.dp)
+        ) {
+            OutlinedTextField(
+                value = pub,
+                onValueChange = { v -> steps[i] = v.filter { c -> c.isDigit() || c == '.' } to lst },
+                label = { Text("Al público Q") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                modifier = Modifier.weight(1f)
+            )
+            Text("→")
+            OutlinedTextField(
+                value = lst,
+                onValueChange = { v -> steps[i] = pub to v.filter { c -> c.isDigit() || c == '.' } },
+                label = { Text("En la lista Q") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(onClick = { steps.removeAt(i) }) {
+                Icon(Icons.Filled.Delete, contentDescription = "Quitar escalón", tint = MaterialTheme.colorScheme.error)
+            }
+        }
+    }
+    if (error != null) {
+        Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.padding(top = 4.dp))
+    }
+    TextButton(onClick = { steps.add("" to "") }) {
+        Icon(Icons.Filled.Add, contentDescription = null)
+        Spacer(Modifier.size(4.dp))
+        Text("Agregar escalón")
+    }
 }

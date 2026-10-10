@@ -71,6 +71,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.Branch
 import com.bakery.erp.model.CashSession
+import com.bakery.erp.model.CostCenter
 import com.bakery.erp.model.ExpenseCategory
 import com.bakery.erp.model.expectedCashNow
 import com.bakery.erp.model.isQuick
@@ -86,6 +87,7 @@ import com.bakery.erp.model.normalizeForSearch
 import com.bakery.erp.model.Supplier
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.presentation.auth.AuthViewModel
+import com.bakery.erp.presentation.expenses.CostCenterPicker
 import com.bakery.erp.ui.AdaptiveContainer
 import com.bakery.erp.ui.ImagePickerButton
 import com.bakery.erp.ui.LoadingOverlay
@@ -261,6 +263,10 @@ fun QuickPurchaseFormScreen(
     // presentaciones ni de IVA, y `saveQuickPurchase` la trataría como alta —creando una
     // compra nueva y dejando la vieja intacta, con el inventario contado dos veces.
     val wrongKind = state.editingPurchase?.let { !it.isQuick } == true
+    // Desde la caja general se anotan las facturas de todos: ahí hay que decir de quién es cada
+    // gasto. Desde la gaveta de una tienda casi siempre es de esa tienda y se asume.
+    val requireCostCenter = session == null
+    val missingCostCenter = requireCostCenter && filled.any { it.isExpense && it.costCenter == null }
 
     fun update(line: QuickPurchaseDraftLine) {
         lines = lines.map { if (it.id == line.id) line else it }
@@ -320,6 +326,13 @@ fun QuickPurchaseFormScreen(
                             color = MaterialTheme.colorScheme.error
                         )
                     }
+                    if (missingCostCenter) {
+                        Text(
+                            "Falta decir de quién es cada gasto: de una sucursal, Generales o Reparto.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                     if (overCash && cashAvailable != null) {
                         Text(
                             "En ${session?.registerName?.ifEmpty { "esta caja" } ?: "esta caja"} " +
@@ -350,7 +363,7 @@ fun QuickPurchaseFormScreen(
                             )
                         },
                         enabled = filled.isNotEmpty() && defaultBranch != null &&
-                            !state.isLoading && !overCash && !wrongKind,
+                            !state.isLoading && !overCash && !wrongKind && !missingCostCenter,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
@@ -400,6 +413,7 @@ fun QuickPurchaseFormScreen(
                         showPosition = lines.size > 1,
                         branches = branches,
                         defaultBranchName = defaultBranch?.name.orEmpty(),
+                        requireCostCenter = requireCostCenter,
                         canRemove = lines.size > 1,
                         onChange = ::update,
                         onRemove = { lines = lines.filterNot { it.id == line.id } },
@@ -686,6 +700,7 @@ private fun QuickPurchaseLineEditor(
     showPosition: Boolean,
     branches: List<Branch>,
     defaultBranchName: String,
+    requireCostCenter: Boolean,
     canRemove: Boolean,
     onChange: (QuickPurchaseDraftLine) -> Unit,
     onRemove: () -> Unit,
@@ -833,10 +848,16 @@ private fun QuickPurchaseLineEditor(
             // El tipo de gasto solo aplica a lo que se vuelve gasto. La materia prima y la
             // reventa son inventario: su costo entra al resultado cuando se venden, así que
             // pedir una categoría de gasto ahí sería preguntar algo que no se usa.
-            if (!line.touchesStock || line.ingredient?.usage == IngredientUsage.SUPPLY) {
+            if (line.isExpense) {
                 CategoryDropdown(
                     selected = line.expenseCategory,
                     onSelect = { onChange(line.copy(expenseCategory = it)) }
+                )
+                CostCenterPicker(
+                    selected = line.costCenter ?: CostCenter.BRANCH.takeIf { !requireCostCenter },
+                    branchLabel = line.branch?.name ?: defaultBranchName,
+                    onSelect = { onChange(line.copy(costCenter = it)) },
+                    required = requireCostCenter
                 )
             }
 
@@ -867,8 +888,11 @@ private fun QuickPurchaseLineEditor(
             }
 
             // ── Lo que casi nunca cambia ────────────────────────────────────
+            // Un gasto de Generales o Reparto no es de ninguna sucursal: preguntar a cuál va
+            // sería pedir un dato que el resultado no usa.
+            val sharedCost = line.isExpense && CostCenter.isShared(line.costCenter.orEmpty())
             if (showMore) {
-                if (branches.size > 1) {
+                if (branches.size > 1 && !sharedCost) {
                     BranchDropdown(
                         label = "Va para",
                         branches = branches,
@@ -888,8 +912,10 @@ private fun QuickPurchaseLineEditor(
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
                 )
-            } else if (branches.size > 1 || line.placeName.isNotEmpty()) {
+            } else if ((branches.size > 1 && !sharedCost) || line.placeName.isNotEmpty()) {
                 TextButton(onClick = { showMore = true }) { Text("Otra sucursal o lugar") }
+            } else if (sharedCost) {
+                TextButton(onClick = { showMore = true }) { Text("Dónde lo compraste") }
             }
         }
     }
