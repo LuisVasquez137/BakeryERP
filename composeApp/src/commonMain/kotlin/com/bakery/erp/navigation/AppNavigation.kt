@@ -495,10 +495,11 @@ sealed class Screen(val route: String) {
         fun route(orderId: String) = "customerOrders/detail/$orderId"
     }
     object ExternalCustomerList : Screen("externalCustomers")
-    object ExternalCustomerForm : Screen("externalCustomers/form?customerId={customerId}") {
-        fun route(customerId: String?) =
-            if (customerId.isNullOrEmpty()) "externalCustomers/form"
-            else "externalCustomers/form?customerId=$customerId"
+    object ExternalCustomerForm : Screen("externalCustomers/form?customerId={customerId}&resellerOnly={resellerOnly}") {
+        /** [resellerOnly]: desde la pantalla Revendedores, sin elegir tipo (siempre revendedor). */
+        fun route(customerId: String?, resellerOnly: Boolean = false) =
+            "externalCustomers/form?resellerOnly=$resellerOnly" +
+                if (customerId.isNullOrEmpty()) "" else "&customerId=$customerId"
     }
     object OrganizationSettings : Screen("organization/settings")
     object FelSetup : Screen("fel/setup")
@@ -2476,7 +2477,7 @@ fun AppNavigation(
                         navController.navigate(Screen.PriceListAdmin.route)
                     },
                     onNavigateToForm = { id ->
-                        navController.navigate(Screen.ExternalCustomerForm.route(id))
+                        navController.navigate(Screen.ExternalCustomerForm.route(id, resellerOnly = true))
                     },
                     authViewModel = viewModel,
                     viewModel = externalCustomerViewModel
@@ -2551,15 +2552,18 @@ fun AppNavigation(
         }
         composable(
             route = Screen.ExternalCustomerForm.route,
-            arguments = listOf(navArgument("customerId") {
-                type = NavType.StringType; nullable = true; defaultValue = null
-            })
+            arguments = listOf(
+                navArgument("customerId") { type = NavType.StringType; nullable = true; defaultValue = null },
+                navArgument("resellerOnly") { type = NavType.BoolType; defaultValue = false }
+            )
         ) { backStackEntry ->
             val customerId = backStackEntry.savedStateHandle.get<String>("customerId")
+            val resellerOnly = backStackEntry.savedStateHandle.get<Boolean>("resellerOnly") ?: false
             RequirePermission(state.user, Permission.MANAGE_EXTERNAL_CUSTOMERS,
                 onBack = { navController.popBackStack() }) {
                 ExternalCustomerFormScreen(
                     customerId = customerId,
+                    resellerOnly = resellerOnly,
                     onNavigateBack = { navController.popBackStack() },
                     authViewModel = viewModel,
                     viewModel = externalCustomerViewModel

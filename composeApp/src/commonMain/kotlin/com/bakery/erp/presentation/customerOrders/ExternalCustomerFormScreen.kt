@@ -71,6 +71,7 @@ import com.bakery.erp.ui.theme.BrandColors
 @Composable
 fun ExternalCustomerFormScreen(
     customerId: String?,
+    resellerOnly: Boolean = false,
     onNavigateBack: () -> Unit,
     authViewModel: AuthViewModel,
     viewModel: ExternalCustomerViewModel
@@ -97,7 +98,10 @@ fun ExternalCustomerFormScreen(
         state.error?.let { snackbarHostState.showSnackbar(it); viewModel.clearError() }
     }
 
-    val title = if (needsLoad) "Editar cliente" else "Nuevo cliente"
+    val title = when {
+        resellerOnly -> if (needsLoad) "Editar revendedor" else "Nuevo revendedor"
+        else -> if (needsLoad) "Editar cliente" else "Nuevo cliente"
+    }
 
     Scaffold(
         containerColor = WarmIvory,
@@ -128,6 +132,7 @@ fun ExternalCustomerFormScreen(
                     existing = state.selectedCustomer,
                     priceLists = state.priceLists,
                     branches = state.sellingBranches,
+                    resellerOnly = resellerOnly,
                     isSaving = state.isLoading,
                     onSave = { viewModel.saveCustomer(companyId, it) },
                     onDelete = { id -> viewModel.deleteCustomer(companyId, id) }
@@ -143,12 +148,13 @@ private fun FormContent(
     existing: ExternalCustomer?,
     priceLists: List<PriceList>,
     branches: List<Branch>,
+    resellerOnly: Boolean,
     isSaving: Boolean,
     onSave: (ExternalCustomer) -> Unit,
     onDelete: (id: String) -> Unit
 ) {
     var type by rememberSaveable {
-        mutableStateOf(existing?.type ?: ExternalCustomerType.RESELLER)
+        mutableStateOf(if (resellerOnly) ExternalCustomerType.RESELLER else existing?.type ?: ExternalCustomerType.RESELLER)
     }
     var name by rememberSaveable { mutableStateOf(existing?.name ?: "") }
     var businessName by rememberSaveable { mutableStateOf(existing?.businessName ?: "") }
@@ -174,8 +180,10 @@ private fun FormContent(
         modifier = Modifier.fillMaxSize().verticalScroll(scroll).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("Tipo", style = MaterialTheme.typography.labelLarge, color = PrimaryBlue)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Desde Revendedores todo es revendedor: un cliente recurrente guardado ahí desaparecería
+        // de esa lista y parecería que no se guardó.
+        if (!resellerOnly) Text("Tipo", style = MaterialTheme.typography.labelLarge, color = PrimaryBlue)
+        if (!resellerOnly) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(
                 ExternalCustomerType.RESELLER,
                 ExternalCustomerType.RETAIL_RECURRING
@@ -397,7 +405,7 @@ private fun FormContent(
             shape = RoundedCornerShape(10.dp)
         ) {
             if (isSaving) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
-            else Text(if (existing == null) "Crear cliente" else "Guardar cambios")
+            else Text(if (existing == null) (if (resellerOnly) "Crear revendedor" else "Crear cliente") else "Guardar cambios")
         }
 
         if (existing != null && existing.id.isNotEmpty()) {
