@@ -105,3 +105,16 @@ Paso 3 de `arquitectura/propuesta-rentabilidad-por-sucursal.md`. Home → "Costo
 - **Lecturas**: `getRecipesWithYields` no trae componentes → `getRecipe` solo de las recetas que producen algo o son masa de relleno; `getLines` solo de compras del periodo cuyo `itemIds` trae materia prima.
 - Esponja/prefermento no se costea aparte: son los mismos insumos de la masa.
 - Datos al 10 oct 2026: pan 54/60 con receta y 55 con peso; repostería y pastelería sin peso en crudo y con recetas "de relleno" (solo harina+agua) → carga de datos pendiente antes del paso 4.
+
+## Costo estándar (oct 2026)
+
+Paso 4 de `arquitectura/propuesta-rentabilidad-por-sucursal.md`. Home → "Costo estándar" (ver: `VIEW_FINANCIAL_REPORT`; congelar: `MANAGE_PRICE_LISTS`, también en `firestore.rules`). Cálculo puro en `domain/StandardCost.kt` (tests `StandardCostTest`), pantalla y VM en `presentation/reports/productcost/`.
+
+- **Costo de un mes = datos del mes ANTERIOR, congelado.** El dueño elige el mes (actual o siguiente), revisa y congela. Todos los despachos del mes usan el mismo número; la diferencia contra lo real queda en la planta.
+- **Gastos de planta** (`plantExpenses`): los `Expense` del mes × `plantShare` (sin tienda, con su parte de local compartido, sin Generales/Reparto). La materia prima no está aquí: entra a inventario, no a gastos.
+- **Planilla** (`plantPayroll`): por colaborador cargado a la planta, su nómina registrada del mes (bruto) o, si no hay, su salario base, **más las prestaciones al mes** que el dueño fija en la ficha (`Employee.monthlyBenefits`: bonificación, aguinaldo y bono 14 repartidos, alimentación). **Sin IGSS patronal** (decisión del dueño). Ojo: si un mes se registra nómina con bonificaciones, las prestaciones se suman igual. La nómina casi no se registra; sin el salario base el pan saldría regalado.
+- **Masa** (`plantDough`): líneas de lotes no cancelados del mes, producido (o planeado) × (peso en crudo + rellenos). Líneas sin peso se cuentan y se avisan: su masa falta y la tasa sale más alta. Menos de 50 kg en el mes = sin tasa (`MIN_DOUGH_GRAMS_FOR_RATE`).
+- **Producto** = materia prima (`MaterialCostLoader`, el mismo cálculo de "Costo por producto") + tasa de su planta × gramos de masa. Su planta = la que más masa le sacó en el mes, o la única que lo tiene asignado. Sin materia prima, sin planta o con planta sin tasa → sin costo, y se despacha con la lista.
+- **Persistencia**: `standardCostPeriods/{YYYY-MM}` (plantas como arreglos paralelos) y `standardCosts/{YYYY-MM}_{productId}` plano. Volver a congelar reescribe y borra los productos que salieron; el encabezado se escribe al final.
+- **Despacho**: `resolveWholesalePrice` mira primero `standardCosts/{mes actual}_{producto}` (`PriceSource.STANDARD_COST`); si no hay, sigue la cascada de la lista "Sucursales". Las notas ya creadas guardaron su precio y no cambian.
+- Pendiente: repostería sin peso en crudo → su planta no tiene tasa y sus productos van con lista; varianza real vs estándar es parte del reporte del paso 6.

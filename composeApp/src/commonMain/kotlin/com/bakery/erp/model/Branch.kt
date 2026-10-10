@@ -105,6 +105,12 @@ data class Branch(
     val felEstablishmentCode: String = "",
     /** El cobro sale con "Facturar" ya marcado. Facturar sigue siendo opcional por venta. */
     val invoiceByDefault: Boolean = false,
+    /**
+     * Qué parte del local (0-100) usa la tienda, en una sucursal que produce y vende. Parte los
+     * gastos anotados como [CostCenter.SITE] (renta, luz, agua): sin esto la tienda de la
+     * planta saldría sin renta y se vería mejor que las tiendas que sí pagan local.
+     */
+    val storeSharePercent: Double = 0.0,
     val active: Boolean = true,
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L

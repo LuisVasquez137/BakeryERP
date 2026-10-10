@@ -1,5 +1,9 @@
 package com.bakery.erp.presentation.expenses
 
+import com.bakery.erp.model.formatPeriodLabel
+import com.bakery.erp.ui.LoadingOverlay
+import com.bakery.erp.ui.theme.BrandColors
+import com.bakery.erp.model.splitsStore
 import com.bakery.erp.util.fmt
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -88,6 +92,7 @@ fun FixedBudgetListScreen(
     val companyId = authState.user?.orgId ?: ""
     val snackbarHostState = remember { SnackbarHostState() }
     var itemToDelete by remember { mutableStateOf<FixedBudgetItem?>(null) }
+    var confirmPost by remember { mutableStateOf(false) }
 
     LaunchedEffect(companyId) {
         if (companyId.isNotEmpty()) viewModel.loadItems(companyId)
@@ -97,6 +102,29 @@ fun FixedBudgetListScreen(
     }
     LaunchedEffect(state.isDeleted) {
         if (state.isDeleted) viewModel.clearDeleted()
+    }
+    LaunchedEffect(state.postMessage) {
+        state.postMessage?.let { snackbarHostState.showSnackbar(it); viewModel.clearPostMessage() }
+    }
+
+    if (confirmPost) {
+        val pending = state.pendingForPeriod
+        AlertDialog(
+            onDismissRequest = { confirmPost = false },
+            title = { Text("Anotar costos fijos de ${formatPeriodLabel(state.period)}") },
+            text = {
+                Text(
+                    "Se anotan ${pending.size} gastos por Q ${pending.sumOf { it.amount }.fmt(2)}, " +
+                        "cada uno a su sucursal. No se descuenta de ninguna caja.\n\n" +
+                        "Si alguno se paga con factura de proveedor (la luz, el agua), no lo dejés en " +
+                        "Costos fijos: se contaría dos veces."
+                )
+            },
+            confirmButton = {
+                Button(onClick = { confirmPost = false; viewModel.postMonth(companyId) }) { Text("Anotar") }
+            },
+            dismissButton = { TextButton(onClick = { confirmPost = false }) { Text("Cancelar") } }
+        )
     }
 
     itemToDelete?.let { item ->
@@ -161,6 +189,14 @@ fun FixedBudgetListScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
+                        item(key = "post_month") {
+                            FbPostMonthCard(
+                                periodLabel = formatPeriodLabel(state.period),
+                                pendingCount = state.pendingForPeriod.size,
+                                pendingTotal = state.pendingForPeriod.sumOf { it.amount },
+                                onPost = { confirmPost = true }
+                            )
+                        }
                         byBranch.forEach { (branchName, items) ->
                             item(key = "hdr_$branchName") {
                                 Text(
@@ -182,6 +218,44 @@ fun FixedBudgetListScreen(
                         }
                         item { Spacer(Modifier.height(80.dp)) }
                     }
+                }
+            }
+            LoadingOverlay(visible = state.isPosting, message = "Anotando costos fijos...")
+        }
+    }
+}
+
+/**
+ * Los costos fijos no son gastos hasta que se anotan en su mes: sin esto la renta de la planta
+ * no existe para el costo del pan. Un botón y no automático, porque lo variable (la luz) hay
+ * que corregirlo al monto real y alguien tiene que verlo.
+ */
+@Composable
+private fun FbPostMonthCard(periodLabel: String, pendingCount: Int, pendingTotal: Double, onPost: () -> Unit) {
+    val done = pendingCount == 0
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (done) BrandColors.SuccessSoft else BrandColors.AccentSoft
+        )
+    ) {
+        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                if (done) "Costos fijos de $periodLabel anotados" else "Costos fijos de $periodLabel sin anotar",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = if (done) BrandColors.Success else BrandColors.Primary
+            )
+            Text(
+                if (done) "Ya están en Gastos. Si alguno salió distinto (la luz), corregilo ahí."
+                else "$pendingCount por Q ${pendingTotal.fmt(2)}. Hasta que se anotan, no cuentan en el costo del pan ni en el resultado de cada sucursal.",
+                style = MaterialTheme.typography.bodySmall,
+                color = BrandColors.TextSlate
+            )
+            if (!done) {
+                Button(onClick = onPost, modifier = Modifier.fillMaxWidth()) {
+                    Text("Anotar los de $periodLabel")
                 }
             }
         }
@@ -408,6 +482,18 @@ fun FixedBudgetFormScreen(
                             )
                         }
                     }
+                }
+
+                // Planta con tienda: el sueldo de la cajera no es costo del pan.
+                if (!sharedCost && selectedBranch?.splitsStore == true) {
+                    CostCenterPicker(
+                        selected = costCenter,
+                        branchLabel = selectedBranch?.name.orEmpty(),
+                        onSelect = { costCenter = it },
+                        label = "¿De qué parte de la sucursal?",
+                        splitsStore = true,
+                        includeShared = false
+                    )
                 }
 
                 // ── Datos del costo ───────────────────────────────────────────

@@ -1,5 +1,9 @@
 package com.bakery.erp.data
 
+import kotlinx.datetime.toLocalDateTime
+import kotlinx.datetime.TimeZone
+import com.bakery.erp.model.formatPeriodLabel
+import com.bakery.erp.model.standardCostDocId
 import com.bakery.erp.domain.PriceListRepository
 import com.bakery.erp.domain.PriceSource
 import com.bakery.erp.domain.ResolvedPrice
@@ -112,6 +116,10 @@ class FirebasePriceListRepository(
         destinationBranchId: String,
         productId: String
     ): ResolvedPrice {
+        // 0) Costo estándar congelado del mes: la planta entrega a costo. Si el producto no
+        // tiene (repostería sin peso, mes sin congelar), sigue la cascada de la lista.
+        standardCostFor(companyId, productId)?.let { return it }
+
         val branchSnap = runCatching { branchDoc(companyId, destinationBranchId).get() }.getOrNull()
         val branchListId = branchSnap?.let { runCatching { it.get<String?>("defaultPriceListId") }.getOrNull() }
             .orEmpty()
@@ -179,6 +187,25 @@ class FirebasePriceListRepository(
             priceListName = chosenList.name,
             found = false,
             source = PriceSource.NONE
+        )
+    }
+
+    private suspend fun standardCostFor(companyId: String, productId: String): ResolvedPrice? {
+        val now = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault())
+        val period = "${now.year}-${now.monthNumber.toString().padStart(2, '0')}"
+        val snap = runCatching {
+            firestore.collection("companies/$companyId/standardCosts")
+                .document(standardCostDocId(period, productId)).get()
+        }.getOrNull()?.takeIf { it.exists } ?: return null
+        val cost = runCatching { snap.get<Double?>("unitCost") }.getOrNull()
+            ?: runCatching { snap.get<Long?>("unitCost")?.toDouble() }.getOrNull() ?: 0.0
+        if (cost <= 0.0) return null
+        return ResolvedPrice(
+            unitPrice = cost,
+            priceListId = "",
+            priceListName = "Costo estándar ${formatPeriodLabel(period)}",
+            found = true,
+            source = PriceSource.STANDARD_COST
         )
     }
 

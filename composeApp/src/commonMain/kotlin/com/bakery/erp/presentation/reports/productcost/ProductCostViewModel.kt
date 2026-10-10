@@ -47,36 +47,26 @@ data class ProductCostUiState(
         get() = ingredientPrices.filter { it.price == null && it.affectedProducts > 0 }
 }
 
+/** Lo que sale de [MaterialCostLoader.load]: costo por producto y precio de cada insumo. */
+data class MaterialCostData(
+    val costs: List<ProductMaterialCost>,
+    val ingredientPrices: List<IngredientPriceRow>
+)
+
 /**
- * Costo de materia prima de cada producto propio. Precio de insumos: promedio de lo comprado en
- * [PRICE_WINDOW_DAYS] días o, si no se compró, el de su presentación (ver `ingredientGramPrices`).
+ * Lee lo necesario y calcula el costo de materia prima de cada producto propio. Lo usan la
+ * pantalla "Costo por producto" y el costo estándar, para que los dos den el mismo número.
+ * Precio de insumos: promedio de lo comprado en [PRICE_WINDOW_DAYS] días o, si no se compró,
+ * el de su presentación (ver `ingredientGramPrices`).
  */
-class ProductCostViewModel(
+class MaterialCostLoader(
     private val productRepository: ProductRepository,
     private val recipeRepository: RecipeRepository,
     private val ingredientRepository: IngredientRepository,
     private val preparationRepository: PreparationRepository,
     private val purchaseRepository: PurchaseRepository
-) : ViewModel() {
-
-    private val _uiState = MutableStateFlow(ProductCostUiState())
-    val uiState: StateFlow<ProductCostUiState> = _uiState.asStateFlow()
-
-    fun ensureLoaded(companyId: String) {
-        if (_uiState.value.loadedForCompany == companyId || _uiState.value.isLoading) return
-        reload(companyId)
-    }
-
-    fun reload(companyId: String) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, error = null) }
-            runCatching { load(companyId) }
-                .onSuccess { s -> _uiState.value = s.copy(loadedForCompany = companyId) }
-                .onFailure { e -> _uiState.update { it.copy(isLoading = false, error = e.message ?: "No se pudo calcular") } }
-        }
-    }
-
-    private suspend fun load(companyId: String): ProductCostUiState = coroutineScope {
+) {
+    suspend fun load(companyId: String): MaterialCostData = coroutineScope {
         val productsD = async { productRepository.getProducts(companyId) }
         val recipesD = async { recipeRepository.getRecipesWithYields(companyId) }
         val ingredientsD = async { ingredientRepository.getIngredients(companyId) }
@@ -124,11 +114,38 @@ class ProductCostViewModel(
         val rows = ingredients.map { ing -> IngredientPriceRow(ing, prices[ing.id], missingCount[ing.name] ?: 0) }
             .sortedWith(compareBy({ it.price != null }, { -it.affectedProducts }, { it.ingredient.name.lowercase() }))
 
-        ProductCostUiState(isLoading = false, costs = costs, ingredientPrices = rows)
+        MaterialCostData(costs, rows)
     }
 
     companion object {
         const val PRICE_WINDOW_DAYS = 90L
         private const val DAY_MS = 86_400_000L
+    }
+}
+
+/** Costo de materia prima de cada producto propio (pantalla "Costo por producto"). */
+class ProductCostViewModel(
+    private val loader: MaterialCostLoader
+) : ViewModel() {
+
+    private val _uiState = MutableStateFlow(ProductCostUiState())
+    val uiState: StateFlow<ProductCostUiState> = _uiState.asStateFlow()
+
+    fun ensureLoaded(companyId: String) {
+        if (_uiState.value.loadedForCompany == companyId || _uiState.value.isLoading) return
+        reload(companyId)
+    }
+
+    fun reload(companyId: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, error = null) }
+            runCatching { loader.load(companyId) }
+                .onSuccess { d ->
+                    _uiState.value = ProductCostUiState(
+                        costs = d.costs, ingredientPrices = d.ingredientPrices, loadedForCompany = companyId
+                    )
+                }
+                .onFailure { e -> _uiState.update { it.copy(isLoading = false, error = e.message ?: "No se pudo calcular") } }
+        }
     }
 }

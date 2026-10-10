@@ -69,6 +69,8 @@ object PriceSourceTag {
      * nota: un encargo de 5 panes no puede dejar parado el reparto del día.
      */
     const val SPECIAL_ORDER    = "SPECIAL_ORDER"
+    /** Costo estándar del mes en vez de la lista "Sucursales". */
+    const val STANDARD_COST    = "STANDARD_COST"
 }
 
 object DiscrepancyType {

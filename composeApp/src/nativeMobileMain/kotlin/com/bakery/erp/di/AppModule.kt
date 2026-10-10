@@ -211,7 +211,7 @@ val appModule = module {
     single { RecipeViewModel(get(), get()) }
     single { BranchViewModel(get()) }
     single { ExpenseViewModel(get()) }
-    single { FixedBudgetViewModel(get()) }
+    single { FixedBudgetViewModel(get(), get()) }
     single { EmployeeViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { com.bakery.erp.presentation.employees.EmployeeAccessViewModel(get(), get()) }
     single { com.bakery.erp.presentation.operator.OperatorLockViewModel(get(), get()) }
@@ -234,7 +234,10 @@ val appModule = module {
     single { ProductionReportViewModel(get(), get(), get(), get()) }
     single { FinancialReportViewModel(get(), get(), get(), get(), get(), get(), get()) }
     single { BranchSupplyReportViewModel(get(), get(), get(), get()) }
-    single { com.bakery.erp.presentation.reports.productcost.ProductCostViewModel(get(), get(), get(), get(), get()) }
+    single { com.bakery.erp.presentation.reports.productcost.MaterialCostLoader(get(), get(), get(), get(), get()) }
+    single { com.bakery.erp.presentation.reports.productcost.ProductCostViewModel(get()) }
+    single<com.bakery.erp.domain.StandardCostRepository> { com.bakery.erp.data.FirebaseStandardCostRepository(get()) }
+    single { com.bakery.erp.presentation.reports.productcost.StandardCostViewModel(get(), get(), get(), get(), get(), get(), get()) }
     single { ExternalCustomerViewModel(get(), get(), get(), get()) }
     single { CustomerOrderViewModel(get(), get(), get(), get(), get(), get()) }
     single { OrganizationSettingsViewModel(get(), get()) }

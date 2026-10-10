@@ -1,5 +1,6 @@
 package com.bakery.erp.presentation.employees
 
+import com.bakery.erp.model.splitsStore
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Card
@@ -295,6 +296,7 @@ private fun EmployeeFormContent(
     var selectedBank by rememberSaveable { mutableStateOf(existing?.bank ?: "") }
     var bankAccount by rememberSaveable { mutableStateOf(existing?.bankAccount ?: "") }
     var baseSalaryStr by rememberSaveable { mutableStateOf(if ((existing?.baseSalary ?: 0.0) > 0) existing!!.baseSalary.toString() else "") }
+    var monthlyBenefitsStr by rememberSaveable { mutableStateOf(if ((existing?.monthlyBenefits ?: 0.0) > 0) existing!!.monthlyBenefits.toString() else "") }
 
     // ── Sección 6: Estado ─────────────────────────────────────────────────────
     var selectedStatus by rememberSaveable { mutableStateOf(existing?.status ?: EmployeeStatus.ACTIVE) }
@@ -488,6 +490,8 @@ private fun EmployeeFormContent(
                 bankAccount = bankAccount.trim(),
                 baseSalary = if (canSeeSalary) baseSalaryStr.toDoubleOrNull() ?: 0.0
                              else existing?.baseSalary ?: 0.0,
+                monthlyBenefits = if (canSeeSalary) monthlyBenefitsStr.toDoubleOrNull() ?: 0.0
+                                  else existing?.monthlyBenefits ?: 0.0,
                 status = selectedStatus,
                 hireDate = hireDateMillis ?: 0L,
                 endDate = endDateMillis ?: 0L,
@@ -751,6 +755,7 @@ private fun EmployeeFormContent(
                 CostCenterPicker(
                     selected = costCenter,
                     branchLabel = branch?.name.orEmpty(),
+                    splitsStore = branch?.splitsStore == true,
                     onSelect = { costCenter = it },
                     label = "¿A quién se le carga su sueldo?"
                 )
@@ -978,6 +983,16 @@ private fun EmployeeFormContent(
                         value = baseSalaryStr,
                         onValueChange = { baseSalaryStr = it },
                         label = { Text("Salario base (Q)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        prefix = { Text("Q") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                    )
+                    OutlinedTextField(
+                        value = monthlyBenefitsStr,
+                        onValueChange = { monthlyBenefitsStr = it },
+                        label = { Text("Prestaciones al mes (Q)") },
+                        supportingText = { Text("Lo que le das aparte del salario: bonificación, aguinaldo y bono 14 repartidos al mes, alimentación. Se suma a su costo.") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         prefix = { Text("Q") },

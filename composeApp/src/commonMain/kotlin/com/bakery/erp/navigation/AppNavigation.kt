@@ -482,6 +482,7 @@ sealed class Screen(val route: String) {
     object FinancialReport  : Screen("reports/financial")
     object BranchSupplyReport : Screen("reports/branch-supply")
     object ProductCostReport : Screen("reports/product-cost")
+    object StandardCostReport : Screen("reports/standard-cost")
 
     // Pedidos de clientes
     object CustomerOrderList : Screen("customerOrders")
@@ -568,6 +569,7 @@ fun AppNavigation(
     val financialReportViewModel = vms.financialReport
     val branchSupplyReportViewModel = vms.branchSupplyReport
     val productCostViewModel = vms.productCost
+    val standardCostViewModel = vms.standardCost
     val customerOrderViewModel = vms.customerOrder
     val externalCustomerViewModel = vms.externalCustomer
     val organizationSettingsViewModel = vms.organizationSettings
@@ -837,6 +839,7 @@ fun AppNavigation(
                 onNavigateToFinancialReport = { navController.navigate(Screen.FinancialReport.route) },
                 onNavigateToBranchSupplyReport = { navController.navigate(Screen.BranchSupplyReport.route) },
                 onNavigateToProductCostReport = { navController.navigate(Screen.ProductCostReport.route) },
+                onNavigateToStandardCostReport = { navController.navigate(Screen.StandardCostReport.route) },
                 onNavigateToCustomerOrders = { navController.navigate(Screen.CustomerOrderList.route) },
                 onNavigateToOrganizationSettings = { navController.navigate(Screen.OrganizationSettings.route) },
                 onNavigateToFelSetup = { navController.navigate(Screen.FelSetup.route) },
@@ -2387,6 +2390,19 @@ fun AppNavigation(
                     onOpenProduct = { id -> navController.navigate(Screen.ProductDetail.route(id)) },
                     onOpenIngredient = { id -> navController.navigate(Screen.IngredientDetail.route(id)) },
                     viewModel = productCostViewModel
+                )
+            }
+        }
+
+        composable(Screen.StandardCostReport.route) {
+            // Ver: dato financiero. Congelar pide además MANAGE_PRICE_LISTS (lo revisa la pantalla).
+            RequirePermission(state.user, Permission.VIEW_FINANCIAL_REPORT,
+                onBack = { navController.popBackStack() }) {
+                com.bakery.erp.presentation.reports.productcost.StandardCostScreen(
+                    user = state.user,
+                    onNavigateBack = { navController.popBackStack() },
+                    onOpenProduct = { id -> navController.navigate(Screen.ProductDetail.route(id)) },
+                    viewModel = standardCostViewModel
                 )
             }
         }

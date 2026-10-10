@@ -406,6 +406,7 @@ private fun ProfileTab(employee: Employee, showSalary: Boolean) {
             if (employee.bank.isNotBlank()) ProfileRow("Banco", employee.bank)
             if (employee.bankAccount.isNotBlank()) ProfileRow("Cuenta", employee.bankAccount)
             if (showSalary && employee.baseSalary > 0) ProfileRow("Salario base", "Q${employee.baseSalary.fmt(2)}")
+            if (showSalary && employee.monthlyBenefits > 0) ProfileRow("Prestaciones al mes", "Q${employee.monthlyBenefits.fmt(2)}")
         }
 
         if (employee.notes.isNotBlank()) {

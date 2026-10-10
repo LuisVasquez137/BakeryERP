@@ -30,6 +30,9 @@ import com.bakery.erp.ui.theme.BrandColors
  *   sucursal de turno es justo lo que cargaría el contador a la planta sin que nadie lo vea.
  * @param branchLabel Nombre de la sucursal para la primera opción. Se nombra en vez de decir
  *   "Sucursal" para que quien anota sepa a cuál va a quedar.
+ * @param splitsStore La sucursal produce y vende ([com.bakery.erp.model.splitsStore]): en vez
+ *   de una sola opción para ella se ofrecen su planta, su tienda y el local compartido, porque
+ *   el panadero es costo del pan y la cajera no.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -39,7 +42,10 @@ fun CostCenterPicker(
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
     label: String = "¿De quién es el gasto?",
-    required: Boolean = false
+    required: Boolean = false,
+    splitsStore: Boolean = false,
+    /** false = solo las partes de la sucursal (cuando Generales/Reparto se eligen en otro lado). */
+    includeShared: Boolean = true
 ) {
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
@@ -51,16 +57,14 @@ fun CostCenterPicker(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            (listOf(CostCenter.BRANCH) + CostCenter.SHARED).forEach { option ->
+            val own = if (splitsStore) CostCenter.SPLIT else listOf(CostCenter.BRANCH)
+            (own + if (includeShared) CostCenter.SHARED else emptyList()).forEach { option ->
                 val isSelected = selected == option
                 FilterChip(
                     selected = isSelected,
                     onClick = { onSelect(option) },
                     label = {
-                        Text(
-                            if (option == CostCenter.BRANCH) branchLabel.ifEmpty { "Sucursal" }
-                            else CostCenter.label(option)
-                        )
+                        Text(optionLabel(option, branchLabel, splitsStore))
                     },
                     leadingIcon = if (isSelected) ({
                         Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -74,11 +78,25 @@ fun CostCenterPicker(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.error
             )
-            selected != null && CostCenter.isShared(selected) -> Text(
+            selected != null && splitsStore && selected == CostCenter.BRANCH -> Text(
+                "Panaderos, gas del horno, mantenimiento de la planta: lo de producción. Entra al costo del pan.",
+                style = MaterialTheme.typography.labelSmall,
+                color = BrandColors.Primary
+            )
+            selected != null && CostCenter.hint(selected).isNotEmpty() -> Text(
                 CostCenter.hint(selected),
                 style = MaterialTheme.typography.labelSmall,
                 color = BrandColors.Primary
             )
         }
+    }
+}
+
+private fun optionLabel(option: String, branchLabel: String, splitsStore: Boolean): String {
+    val name = branchLabel.ifEmpty { "Sucursal" }
+    return when {
+        option == CostCenter.BRANCH -> if (splitsStore) "Planta $branchLabel".trim() else name
+        option == CostCenter.STORE -> "Tienda $branchLabel".trim()
+        else -> CostCenter.label(option)
     }
 }

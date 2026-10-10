@@ -54,6 +54,11 @@ data class Employee(
     val bank: String = "",
     val bankAccount: String = "",
     val baseSalary: Double = 0.0,
+    /**
+     * Prestaciones al mes que fija el dueño (bonificación, aguinaldo y bono 14 repartidos al mes,
+     * alimentación...). Entra al costo de planta junto con el salario; no lleva IGSS.
+     */
+    val monthlyBenefits: Double = 0.0,
     // Status & Dates
     val status: EmployeeStatus = EmployeeStatus.ACTIVE,
     val hireDate: Long = 0L,

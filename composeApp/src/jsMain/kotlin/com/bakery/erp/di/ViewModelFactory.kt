@@ -129,6 +129,9 @@ actual fun createAppViewModels(): AppViewModels {
     val cashRegisterRepo = FirebaseCashRegisterRepository(firestore)
     val cashSessionRepo = FirebaseCashSessionRepository(firestore)
     val productRepoJs = FirebaseProductRepositoryJs(firestore, storage)
+    val materialCostLoader = com.bakery.erp.presentation.reports.productcost.MaterialCostLoader(
+        productRepoJs, recipeRepo, ingredientRepo, preparationRepo, purchaseRepo
+    )
     val saleRepo = FirebaseSaleRepository(firestore, finishedStockRepo, cashSessionRepo, ingredientRepo)
     val breadCountRepo = FirebaseBreadCountRepository(firestore, finishedStockRepo, saleRepo, posCategoryRepo)
     val dailyCloseRepo = FirebaseDailyCashCloseRepository(firestore, cashSessionRepo)
@@ -146,7 +149,7 @@ actual fun createAppViewModels(): AppViewModels {
         recipe = RecipeViewModel(recipeRepo, JsRecipeImageUploader(storage)),
         branch = BranchViewModel(branchRepo),
         expense = ExpenseViewModel(expenseRepo),
-        fixedBudget = FixedBudgetViewModel(fixedBudgetRepo),
+        fixedBudget = FixedBudgetViewModel(fixedBudgetRepo, expenseRepo),
         user = UserViewModel(authRepo),
         purchase = PurchaseViewModel(
             purchaseRepo, ingredientRepo, supplierRepo, branchRepo, finishedStockRepo,
@@ -211,8 +214,10 @@ actual fun createAppViewModels(): AppViewModels {
             finishedStockRepo, breadCountRepo, branchRepo
         ),
         branchSupplyReport = BranchSupplyReportViewModel(productionRepo, dispatchRepo, saleRepo, branchRepo),
-        productCost = com.bakery.erp.presentation.reports.productcost.ProductCostViewModel(
-            productRepoJs, recipeRepo, ingredientRepo, preparationRepo, purchaseRepo
+        productCost = com.bakery.erp.presentation.reports.productcost.ProductCostViewModel(materialCostLoader),
+        standardCost = com.bakery.erp.presentation.reports.productcost.StandardCostViewModel(
+            materialCostLoader, branchRepo, expenseRepo, employeeRepo, payrollRepo, productionRepo,
+            com.bakery.erp.data.FirebaseStandardCostRepository(firestore)
         ),
         customerOrder = CustomerOrderViewModel(
             customerOrderRepo, externalCustomerRepo, productionRepo,

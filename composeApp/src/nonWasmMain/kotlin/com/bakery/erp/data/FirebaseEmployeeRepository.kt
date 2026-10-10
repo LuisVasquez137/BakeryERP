@@ -97,6 +97,7 @@ class FirebaseEmployeeRepository(
         "bank" to bank,
         "bankAccount" to bankAccount,
         "baseSalary" to baseSalary,
+        "monthlyBenefits" to monthlyBenefits,
         "status" to status.name,
         "hireDate" to hireDate,
         "endDate" to endDate,
@@ -152,6 +153,8 @@ class FirebaseEmployeeRepository(
             bank = get<String?>("bank") ?: "",
             bankAccount = get<String?>("bankAccount") ?: "",
             baseSalary = runCatching { get<Double?>("baseSalary") }.getOrNull() ?: 0.0,
+            monthlyBenefits = runCatching { get<Double?>("monthlyBenefits") }.getOrNull()
+                ?: runCatching { get<Long?>("monthlyBenefits")?.toDouble() }.getOrNull() ?: 0.0,
             status = status,
             hireDate = readMillis("hireDate"),
             endDate = readMillis("endDate"),

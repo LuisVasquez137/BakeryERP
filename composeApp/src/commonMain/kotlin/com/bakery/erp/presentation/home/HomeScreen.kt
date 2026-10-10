@@ -235,6 +235,7 @@ fun HomeScreen(
     onNavigateToFinancialReport: () -> Unit = {},
     onNavigateToBranchSupplyReport: () -> Unit = {},
     onNavigateToProductCostReport: () -> Unit = {},
+    onNavigateToStandardCostReport: () -> Unit = {},
     onNavigateToCustomerOrders: () -> Unit = {},
     onNavigateToOrganizationSettings: () -> Unit = {},
     onNavigateToFelSetup: () -> Unit = {},
@@ -451,6 +452,8 @@ fun HomeScreen(
                         add(Triple("Financiero", Icons.Default.PointOfSale, onNavigateToFinancialReport))
                     if (u.hasPermission(Permission.VIEW_FINANCIAL_REPORT))
                         add(Triple("Costo por producto", Icons.Default.Calculate, onNavigateToProductCostReport))
+                    if (u.hasPermission(Permission.VIEW_FINANCIAL_REPORT))
+                        add(Triple("Costo estándar", Icons.Default.Factory, onNavigateToStandardCostReport))
                     if (u.hasPermission(Permission.VIEW_BRANCH_SUPPLY_REPORT))
                         add(Triple("Pedido vs. recibido", Icons.Default.LocalShipping, onNavigateToBranchSupplyReport))
                 }

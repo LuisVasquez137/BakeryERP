@@ -301,7 +301,9 @@ mientras esos datos se juntan se construye el resto.
   cargados. Probablemente sea lo que más tiempo lleve, más que el código.
 - Ya sirve solo: muestra cuánto de cada precio se va en materia prima.
 
-### Paso 4 — Gastos fijos mensuales y costo estándar de planta
+### Paso 4 — Gastos fijos mensuales y costo estándar de planta — HECHO (código) 10 oct 2026, ver `reportes.md` "Costo estándar" y `caja-gastos.md` "Planta con tienda"; primer mes real = noviembre con datos de octubre
+- **Agregado al plan:** la tienda de cada planta se separa también en gastos y personas (Planta /
+  Tienda / Local compartido con % fijo de la tienda); si no, la cajera entraría al costo del pan.
 - Gastos que se repiten cada mes (renta, internet, planilla) se anotan solos con su destino.
 - Al cerrar el mes: gastos de cada planta ÷ kilos de masa producidos = tasa por kilo.
 - **Costo estándar** de cada producto = materia prima + tasa × peso en crudo. Se congela para

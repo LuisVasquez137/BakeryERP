@@ -1,5 +1,6 @@
 package com.bakery.erp.presentation.purchases
 
+import com.bakery.erp.model.splitsStore
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -413,6 +414,7 @@ fun QuickPurchaseFormScreen(
                         showPosition = lines.size > 1,
                         branches = branches,
                         defaultBranchName = defaultBranch?.name.orEmpty(),
+                        defaultBranchSplitsStore = defaultBranch?.splitsStore == true,
                         requireCostCenter = requireCostCenter,
                         canRemove = lines.size > 1,
                         onChange = ::update,
@@ -700,6 +702,7 @@ private fun QuickPurchaseLineEditor(
     showPosition: Boolean,
     branches: List<Branch>,
     defaultBranchName: String,
+    defaultBranchSplitsStore: Boolean,
     requireCostCenter: Boolean,
     canRemove: Boolean,
     onChange: (QuickPurchaseDraftLine) -> Unit,
@@ -856,6 +859,7 @@ private fun QuickPurchaseLineEditor(
                 CostCenterPicker(
                     selected = line.costCenter ?: CostCenter.BRANCH.takeIf { !requireCostCenter },
                     branchLabel = line.branch?.name ?: defaultBranchName,
+                    splitsStore = line.branch?.splitsStore ?: defaultBranchSplitsStore,
                     onSelect = { onChange(line.copy(costCenter = it)) },
                     required = requireCostCenter
                 )

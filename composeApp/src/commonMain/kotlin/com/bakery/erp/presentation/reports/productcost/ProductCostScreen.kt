@@ -132,7 +132,7 @@ private fun CalculatedTab(state: ProductCostUiState, onOpenProduct: (String) -> 
             Intro(
                 "Cuánto cuesta en ingredientes cada pan, con su peso en crudo y su receta. El precio de " +
                     "cada insumo es el promedio de lo comprado en los últimos " +
-                    "${ProductCostViewModel.PRICE_WINDOW_DAYS} días, o el de su presentación si no se compró. " +
+                    "${MaterialCostLoader.PRICE_WINDOW_DAYS} días, o el de su presentación si no se compró. " +
                     "Todavía no incluye planilla, luz ni gas: eso entra en el costo de planta."
             )
         }

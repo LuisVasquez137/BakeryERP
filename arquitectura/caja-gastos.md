@@ -379,3 +379,15 @@ entre las tiendas por entregas).
   "Reparto" para que la lista agrupe sola), en `Employee` ("¿A quién se le carga su sueldo?") y en
   el formulario de gasto manual. Selector común: `presentation/expenses/CostCenterPicker.kt`.
   Tests: `CostCenterTest`.
+- **Planta con tienda (oct 2026).** Cada planta tiene su mostrador, y el panadero es costo del pan
+  mientras la cajera es gasto de la tienda. En una sucursal que produce Y vende (`Branch.splitsStore`)
+  el selector ofrece "Planta X" (= `BRANCH`, vacío: lo ya anotado ahí queda como planta sin migrar),
+  "Tienda X" (`STORE`) y "Local compartido" (`SITE`: renta, luz, agua), que se parte con
+  `Branch.storeSharePercent` (lo pone el dueño en la ficha de la sucursal, "Tienda de la planta").
+  La única regla de reparto es `plantShare(costCenter, branch)`; en una tienda pura los tres son lo
+  mismo. Aplica a gastos, compras, costos fijos y colaboradores.
+- **Costos fijos → gastos del mes.** `FixedBudgetItem` era solo un presupuesto. Ahora la lista tiene
+  "Anotar los de {mes}": crea un `Expense` por renglón con id fijo `fijo_{item}_{YYYY-MM}`
+  (`toMonthlyExpense`), así un segundo toque o un segundo teléfono no duplican. No toca ninguna caja.
+  Botón y no automático: lo variable (la luz) se corrige al monto real. **Regla operativa:** lo que
+  entra por factura de proveedor NO va en Costos fijos, o se cuenta dos veces.

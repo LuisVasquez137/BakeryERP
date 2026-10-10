@@ -128,6 +128,7 @@ class FirebaseBranchRepository(
         "felProfileId" to felProfileId,
         "felCodigoEstablecimiento" to felEstablishmentCode,
         "invoiceByDefault" to invoiceByDefault,
+        "storeSharePercent" to storeSharePercent,
         "active" to active,
         "createdAt" to if (createdAt == 0L) Clock.System.now().toEpochMilliseconds() else createdAt,
         "updatedAt" to Clock.System.now().toEpochMilliseconds()
@@ -173,6 +174,9 @@ class FirebaseBranchRepository(
         felProfileId = runCatching { get<String?>("felProfileId") }.getOrNull() ?: "",
         felEstablishmentCode = runCatching { get<String?>("felCodigoEstablecimiento") }.getOrNull() ?: "",
         invoiceByDefault = runCatching { get<Boolean?>("invoiceByDefault") }.getOrNull() ?: false,
+        // Un 15 guardado desde la web llega como entero.
+        storeSharePercent = runCatching { get<Double?>("storeSharePercent") }.getOrNull()
+            ?: runCatching { get<Long?>("storeSharePercent")?.toDouble() }.getOrNull() ?: 0.0,
         active = get<Boolean?>("active") ?: true,
         createdAt = readTimestampAsMillis("createdAt"),
         updatedAt = readTimestampAsMillis("updatedAt")

@@ -86,6 +86,8 @@ data class AppViewModels(
     val branchSupplyReport: BranchSupplyReportViewModel,
     /** Costo de materia prima por producto (paso 3 de la rentabilidad por sucursal). */
     val productCost: com.bakery.erp.presentation.reports.productcost.ProductCostViewModel,
+    /** Costo estándar de planta (paso 4): calcula y congela el costo del mes. */
+    val standardCost: com.bakery.erp.presentation.reports.productcost.StandardCostViewModel,
     val customerOrder: CustomerOrderViewModel,
     val externalCustomer: ExternalCustomerViewModel,
     val organizationSettings: OrganizationSettingsViewModel,

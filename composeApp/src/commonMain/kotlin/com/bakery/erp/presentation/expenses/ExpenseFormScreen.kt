@@ -1,5 +1,6 @@
 package com.bakery.erp.presentation.expenses
 
+import com.bakery.erp.model.splitsStore
 import com.bakery.erp.util.fmt
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -207,6 +208,7 @@ fun ExpenseFormScreen(
                 CostCenterPicker(
                     selected = costCenter,
                     branchLabel = selectedBranch?.name.orEmpty(),
+                    splitsStore = selectedBranch?.splitsStore == true,
                     onSelect = { costCenter = it }
                 )
 

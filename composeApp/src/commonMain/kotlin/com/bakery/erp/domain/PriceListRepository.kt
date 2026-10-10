@@ -52,4 +52,6 @@ object PriceSource {
     const val LIST_FACTOR = "LIST_FACTOR"
     /** Sin precio resoluble; alerta al empacador. */
     const val NONE = "NONE"
+    /** Costo estándar congelado del mes: la planta entrega a costo (ver `domain/StandardCost.kt`). */
+    const val STANDARD_COST = "STANDARD_COST"
 }

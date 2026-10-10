@@ -350,12 +350,15 @@ describe('fase 4', () => {
     await assertFails(setDoc(doc(caj, 'companies/orgA/cashRegisters/r1'), { name: 'Caja 1' }));
     await assertFails(setDoc(doc(caj, 'companies/orgA/saleQuickGroups/g1'), { name: 'Pan Q0.50' }));
     await assertFails(setDoc(doc(caj, 'companies/orgA/priceLists/l1'), { name: 'X' }));
+    await assertFails(setDoc(doc(caj, 'companies/orgA/standardCosts/2026-11_p1'), { unitCost: 1 }));
+    await assertFails(setDoc(doc(caj, 'companies/orgA/standardCostPeriods/2026-11'), { period: '2026-11' }));
     await assertFails(setDoc(doc(caj, 'companies/orgA/fixedBudget/f1'), { amount: 1 }));
     await assertFails(setDoc(doc(caj, 'companies/orgA/jobPositions/j1'), { title: 'X' }));
     await assertSucceeds(getDoc(doc(caj, 'companies/orgA/cashRegisters/r1')));
     const own = as('ownerA');
     await assertSucceeds(setDoc(doc(own, 'companies/orgA/cashRegisters/r1'), { name: 'Caja 1' }));
     await assertSucceeds(setDoc(doc(own, 'companies/orgA/priceLists/l1'), { name: 'X' }));
+    await assertSucceeds(setDoc(doc(own, 'companies/orgA/standardCosts/2026-11_p1'), { unitCost: 1 }));
     await assertSucceeds(deleteDoc(doc(own, 'companies/orgA/cashRegisters/r1')));
     await env.withSecurityRulesDisabled((ctx) => setDoc(doc(ctx.firestore(), 'users/posAdmin'),
       profile({ permissions: ['MANAGE_POS_CONFIG'], branchIds: ['b1'] })));

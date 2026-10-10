@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.branches
 
+import com.bakery.erp.util.fmtMoney
+import com.bakery.erp.util.fmtTrim
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -117,6 +119,11 @@ fun BranchFormScreen(
         mutableStateOf(existing?.receivesOnlyInTrip ?: DISPATCH_TRIP_BOTH)
     }
 
+    // Parte del local que usa la tienda (solo si produce y vende). Texto para poder borrarlo.
+    var storeShareText by rememberSaveable(existing?.id) {
+        mutableStateOf(existing?.storeSharePercent?.takeIf { it > 0.0 }?.fmtTrim(1) ?: "")
+    }
+
     var nameError by remember { mutableStateOf(false) }
     var locationError by remember { mutableStateOf(false) }
 
@@ -167,6 +174,9 @@ fun BranchFormScreen(
         felProfileId = existing?.felProfileId ?: "",
         felEstablishmentCode = existing?.felEstablishmentCode ?: "",
         invoiceByDefault = existing?.invoiceByDefault ?: false,
+        storeSharePercent = if (BranchCapability.CAN_PRODUCE in capabilities && BranchCapability.CAN_SELL in capabilities)
+            storeShareText.replace(',', '.').toDoubleOrNull()?.coerceIn(0.0, 100.0) ?: 0.0
+        else existing?.storeSharePercent ?: 0.0,
         active = active
     )
 
@@ -323,6 +333,33 @@ fun BranchFormScreen(
                         else capabilities - BranchCapability.IS_WAREHOUSE
                     }
                 )
+
+                // ── Planta con tienda: qué parte del local es de la tienda ────
+                if (BranchCapability.CAN_PRODUCE in capabilities && BranchCapability.CAN_SELL in capabilities) {
+                    SectionDivider()
+                    SectionHeader("Tienda de la planta")
+                    Text(
+                        text = "La renta, la luz y el agua del local se reparten entre la planta y su " +
+                            "tienda. ¿Qué parte del local usa la tienda?",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = storeShareText,
+                        onValueChange = { v -> storeShareText = v.filter { it.isDigit() || it == '.' || it == ',' }.take(5) },
+                        label = { Text("Parte de la tienda") },
+                        placeholder = { Text("Ej: 15") },
+                        suffix = { Text("%") },
+                        supportingText = {
+                            val pct = storeShareText.replace(',', '.').toDoubleOrNull()?.coerceIn(0.0, 100.0) ?: 0.0
+                            Text("Ej: renta de Q5,000 → Q${(5000 * pct / 100).fmtMoney(0)} a la tienda y " +
+                                "Q${(5000 * (100 - pct) / 100).fmtMoney(0)} al costo del pan.")
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                    )
+                }
 
                 // ── Productos asignados (solo para plantas productoras) ───────
                 if (BranchCapability.CAN_PRODUCE in capabilities) {

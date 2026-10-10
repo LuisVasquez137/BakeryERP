@@ -204,6 +204,8 @@ service cloud.firestore {
         && !(collection in ['employees', 'felProfiles'])
         && (!(collection in ['cashRegisters', 'saleQuickGroups']) || hasPermission('MANAGE_POS_CONFIG'))
         && (collection != 'priceLists' || hasPermission('MANAGE_PRICE_LISTS'))
+        // Congelar el costo estándar cambia el valor de todos los despachos del mes.
+        && (!(collection in ['standardCosts', 'standardCostPeriods']) || hasPermission('MANAGE_PRICE_LISTS'))
         && (collection != 'fixedBudget' || hasPermission('MANAGE_FIXED_BUDGET'))
         && (collection != 'jobPositions' || hasPermission('MANAGE_EMPLOYEES'));
     }

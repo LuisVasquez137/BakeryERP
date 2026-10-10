@@ -199,6 +199,7 @@ class FirebaseDispatchRepository(
                     resolved == null             -> PriceSourceTag.SPECIAL_ORDER
                     resolved.source == PriceSource.PRODUCT_OVERRIDE -> PriceSourceTag.PRODUCT_OVERRIDE
                     resolved.source == PriceSource.LIST_FACTOR      -> PriceSourceTag.LIST_FACTOR
+                    resolved.source == PriceSource.STANDARD_COST    -> PriceSourceTag.STANDARD_COST
                     else                         -> PriceSourceTag.NONE
                 }
                 val dispatchLine = DispatchNoteLine(
@@ -543,6 +544,7 @@ class FirebaseDispatchRepository(
                         priceSource = when (resolved.source) {
                             PriceSource.PRODUCT_OVERRIDE -> PriceSourceTag.PRODUCT_OVERRIDE
                             PriceSource.LIST_FACTOR -> PriceSourceTag.LIST_FACTOR
+                            PriceSource.STANDARD_COST -> PriceSourceTag.STANDARD_COST
                             else -> PriceSourceTag.NONE
                         }
                     ).toMap()

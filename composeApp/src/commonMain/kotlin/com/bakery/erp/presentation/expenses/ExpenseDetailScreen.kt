@@ -187,7 +187,7 @@ private fun ExpenseDetailContent(expense: Expense) {
 
         DetailSection("Información")
         DetailRow("Sucursal", expense.branchName.ifEmpty { "—" })
-        if (CostCenter.isShared(expense.costCenter)) {
+        if (expense.costCenter != CostCenter.BRANCH) {
             DetailRow("Le corresponde a", CostCenter.label(expense.costCenter))
         }
         DetailRow("Período", formatPeriodLabel(expense.period))

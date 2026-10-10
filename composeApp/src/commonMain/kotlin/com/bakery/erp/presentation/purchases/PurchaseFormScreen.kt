@@ -1,5 +1,6 @@
 ﻿package com.bakery.erp.presentation.purchases
 
+import com.bakery.erp.model.splitsStore
 import com.bakery.erp.util.fmt
 import com.bakery.erp.util.fmtMoney
 import androidx.compose.foundation.layout.Arrangement
@@ -776,6 +777,7 @@ fun PurchaseFormScreen(
                                                 selected = expenseCostCenter
                                                     ?: CostCenter.BRANCH.takeIf { !requireCostCenter },
                                                 branchLabel = state.selectedBranch?.name.orEmpty(),
+                                                splitsStore = state.selectedBranch?.splitsStore == true,
                                                 onSelect = { expenseCostCenter = it },
                                                 label = "¿De quién es el gasto de esta factura?",
                                                 required = requireCostCenter
