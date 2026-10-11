@@ -69,7 +69,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.ExternalCustomer
 import com.bakery.erp.model.ExternalCustomerType
+import com.bakery.erp.model.Permission
 import com.bakery.erp.model.PriceList
+import com.bakery.erp.model.hasPermission
 import com.bakery.erp.model.ProductionShift
 import com.bakery.erp.model.ResellerDeliveryMode
 import com.bakery.erp.model.ResellerRegistrationStatus
@@ -94,6 +96,9 @@ fun ResellerApprovalScreen(
     val state by viewModel.uiState.collectAsState()
     val authState by authViewModel.uiState.collectAsState()
     val companyId = authState.user?.orgId ?: ""
+    // La lista de precios ES el precio al que se le vende: darla de alta, cambiarla o aprobar a
+    // alguien (que también la asigna) es de quien maneja precios, no de la cajera.
+    val canSetPrices = authState.user?.hasPermission(Permission.MANAGE_PRICE_LISTS) == true
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(companyId) {
@@ -147,7 +152,7 @@ fun ResellerApprovalScreen(
         },
         floatingActionButton = {
             // Para los que no tienen la app: el encargado los da de alta aquí, ya activos.
-            ExtendedFloatingActionButton(
+            if (canSetPrices) ExtendedFloatingActionButton(
                 onClick = { onNavigateToForm(null) },
                 containerColor = PrimaryBlue,
                 contentColor = Color.White,
@@ -193,6 +198,7 @@ fun ResellerApprovalScreen(
                                 reseller = reseller,
                                 state = state,
                                 isPending = reseller.registrationStatus == ResellerRegistrationStatus.PENDING_APPROVAL,
+                                canManage = canSetPrices,
                                 onCreatePriceList = onNavigateToPriceListAdmin,
                                 onEdit = { onNavigateToForm(reseller.id) },
                                 onApprove = { viewModel.approveReseller(companyId, it) },
@@ -252,6 +258,7 @@ private fun ResellerCard(
     reseller: ExternalCustomer,
     state: ExternalCustomerUiState,
     isPending: Boolean,
+    canManage: Boolean,
     onCreatePriceList: () -> Unit,
     onEdit: () -> Unit,
     onApprove: (ExternalCustomer) -> Unit,
@@ -328,7 +335,7 @@ private fun ResellerCard(
                         }
                     }
                 }
-                IconButton(onClick = onEdit) {
+                if (canManage) IconButton(onClick = onEdit) {
                     Icon(Icons.Default.Edit, contentDescription = "Editar", tint = PrimaryBlue)
                 }
             }
@@ -370,7 +377,14 @@ private fun ResellerCard(
 
                     Spacer(Modifier.size(12.dp))
 
-                    if (isPending) {
+                    if (isPending && !canManage) {
+                        Text(
+                            "Lo aprueba quien maneja las listas de precios.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MutedText
+                        )
+                        Spacer(Modifier.size(12.dp))
+                    } else if (isPending) {
                         Text(
                             "Asígnale una lista de precios",
                             style = MaterialTheme.typography.labelSmall,

@@ -137,3 +137,22 @@ Auditoría de partida: `functions/tools/inspect-users-employees.js` (solo lectur
   el texto "Esta cuenta fue desactivada", y las reglas ya le niegan los datos al instante.
 - `updateUserAccess` ya no reactiva por accidente: guardar permisos de alguien desactivado lo
   deja desactivado (solo aprobar a un pendiente lo activa).
+
+## Datos de costo y revendedores (oct 2026)
+
+Revisión al terminar la rentabilidad por sucursal (`propuesta-rentabilidad-por-sucursal.md`):
+- **Reportes de costo** (Costo por producto, Costo estándar, Costo de reparto, Por sucursal) cuelgan
+  de `VIEW_FINANCIAL_REPORT` en la ruta y en el Home. Ese permiso ahora es `isSensitive`: el
+  "Habilitar todos" del grupo Reportes ya no lo regala. Congelar el costo pide además
+  `MANAGE_PRICE_LISTS` (pantalla + regla).
+- **Valor del pan = costo** desde que hay costo estándar, así que todo lo que lo muestra pide
+  `VIEW_DISPATCH_VALUE`: se cerraron los huecos del formulario de reparto (valor de cada nota),
+  conteo de pan (lista y formulario: valor de mermas/sobrantes) y cierre del día.
+- **Prestaciones** del colaborador: mismo permiso que el salario (`VIEW_EMPLOYEE_SALARY`).
+- **Revendedores**: la lista de precios ES su precio. Alta, edición, aprobación, inactivar y borrar
+  piden `MANAGE_PRICE_LISTS` (oct 2026: 7 cuentas de tienda tenían `MANAGE_EXTERNAL_CUSTOMERS`).
+  Con solo `MANAGE_EXTERNAL_CUSTOMERS` se ven, se corrigen sus datos de contacto y se manejan los
+  clientes recurrentes. Regla `externalCustomerWriteOk()` con tests; el auto-registro del
+  revendedor por la app sigue por su propia regla.
+- **Lectura**: las reglas siguen dejando leer toda la empresa a cualquier miembro aprobado
+  (incluidos `standardCosts`, que el despacho necesita leer). El recorte de lectura es de la app.

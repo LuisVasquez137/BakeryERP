@@ -313,6 +313,30 @@ describe('fase 4', () => {
     }
   });
 
+  test('revendedores: la lista de precios es del que maneja precios', async () => {
+    await seed('companies/orgA/externalCustomers/r1', { type: 'RESELLER', name: 'Don Beto', priceListId: 'L1', registrationStatus: 'ACTIVE', active: true });
+    await seed('companies/orgA/externalCustomers/k1', { type: 'RETAIL_RECURRING', name: 'Doña Marta', priceListId: '', active: true });
+    const enc = as('encargadaA');
+    const r1 = doc(enc, 'companies/orgA/externalCustomers/r1');
+    // Corregir el teléfono de un revendedor sí; su precio, su estado o borrarlo no.
+    await assertSucceeds(setDoc(r1, { type: 'RESELLER', name: 'Don Beto', phone: '5555', priceListId: 'L1', registrationStatus: 'ACTIVE', active: true }));
+    await assertFails(setDoc(r1, { type: 'RESELLER', name: 'Don Beto', priceListId: 'L2', registrationStatus: 'ACTIVE', active: true }));
+    await assertFails(setDoc(r1, { type: 'RESELLER', name: 'Don Beto', priceListId: 'L1', registrationStatus: 'ACTIVE', active: false }));
+    await assertFails(deleteDoc(r1));
+    // Dar de alta un revendedor o convertir un cliente en revendedor, no.
+    await assertFails(setDoc(doc(enc, 'companies/orgA/externalCustomers/r2'), { type: 'RESELLER', name: 'X', priceListId: 'L1', active: true }));
+    await assertFails(setDoc(doc(enc, 'companies/orgA/externalCustomers/k1'), { type: 'RESELLER', name: 'Doña Marta', priceListId: 'L1', active: true }));
+    // Clientes recurrentes: libres.
+    await assertSucceeds(setDoc(doc(enc, 'companies/orgA/externalCustomers/k2'), { type: 'RETAIL_RECURRING', name: 'Oficina' }));
+    await assertSucceeds(deleteDoc(doc(enc, 'companies/orgA/externalCustomers/k1')));
+    // Sin el permiso de clientes, nada.
+    await assertFails(setDoc(doc(as('cajeraA'), 'companies/orgA/externalCustomers/k3'), { type: 'RETAIL_RECURRING', name: 'Y' }));
+    // El dueño, todo.
+    const own = as('ownerA');
+    await assertSucceeds(setDoc(doc(own, 'companies/orgA/externalCustomers/r3'), { type: 'RESELLER', name: 'Z', priceListId: 'L1', active: true }));
+    await assertSucceeds(deleteDoc(doc(own, 'companies/orgA/externalCustomers/r1')));
+  });
+
   test('lo que la app sí borra se sigue pudiendo borrar', async () => {
     await seed('companies/orgA/cashSessions/cs1/openingDenominations/q100', { n: 1 });
     await seed('companies/orgA/dailyCashCloses/dc1/depositDenominations/q100', { n: 1 });

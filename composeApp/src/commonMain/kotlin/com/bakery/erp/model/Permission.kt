@@ -253,7 +253,7 @@ enum class Permission {
         VIEW_OPERATIONS_REPORT -> "Puede ver el dashboard del Home con KPIs operativos en vivo y banner de alertas accionables"
         VIEW_SALES_REPORT -> "Puede consultar el reporte formal de ventas: ingresos por día, método de pago, cajero, producto y hora"
         VIEW_PRODUCTION_REPORT -> "Puede consultar el reporte formal de producción: planeado vs producido, eficiencia, mermas en tránsito y discrepancias"
-        VIEW_FINANCIAL_REPORT -> "Puede consultar el estado financiero del mes: ingresos, gastos, planilla, utilidad operativa y margen"
+        VIEW_FINANCIAL_REPORT -> "Puede consultar el estado financiero del mes, el costo de cada producto, el costo estándar, el costo de reparto y lo que gana cada sucursal"
         VIEW_INVENTORY_REPORT -> "Puede consultar el reporte de inventario: rotación, mermas valoradas y movimientos por sucursal"
         VIEW_BRANCH_SUPPLY_REPORT -> "Puede ver, para sus sucursales, cuánto pidieron, cuánto les mandó la planta en cada turno, cuánto recibieron y cuánto vendieron"
         VIEW_CUSTOMER_ORDERS -> "Puede ver el listado y detalle de pedidos de clientes (revendedores, encargos especiales, pasteles)"
@@ -321,5 +321,7 @@ enum class Permission {
      * que corresponde es que el atajo no lo incluya.
      */
     val isSensitive: Boolean get() =
-        this == VIEW_DISPATCH_VALUE || this == VIEW_SALES_VALUE || this == VIEW_EMPLOYEE_SALARY
+        this == VIEW_DISPATCH_VALUE || this == VIEW_SALES_VALUE || this == VIEW_EMPLOYEE_SALARY ||
+            // Costos de producto, costo estándar, reparto y resultado por sucursal cuelgan de él.
+            this == VIEW_FINANCIAL_REPORT
 }

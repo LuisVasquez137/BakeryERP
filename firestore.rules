@@ -207,7 +207,27 @@ service cloud.firestore {
         // Congelar el costo estándar cambia el valor de todos los despachos del mes.
         && (!(collection in ['standardCosts', 'standardCostPeriods']) || hasPermission('MANAGE_PRICE_LISTS'))
         && (collection != 'fixedBudget' || hasPermission('MANAGE_FIXED_BUDGET'))
+        && (collection != 'externalCustomers' || externalCustomerWriteOk())
         && (collection != 'jobPositions' || hasPermission('MANAGE_EMPLOYEES'));
+    }
+
+    // Clientes externos. La lista de precios de un revendedor ES el precio al que se le vende:
+    // darlo de alta, aprobarlo, cambiarle la lista, activarlo o borrarlo es de quien maneja
+    // precios. Con MANAGE_EXTERNAL_CUSTOMERS se manejan los clientes recurrentes y se corrigen
+    // los datos de contacto de un revendedor sin tocar nada de eso.
+    function externalCustomerWriteOk() {
+      return hasPermission('MANAGE_PRICE_LISTS')
+        || (hasPermission('MANAGE_EXTERNAL_CUSTOMERS') && (
+             (request.method == 'delete' && resource.data.get('type', 'RESELLER') != 'RESELLER')
+             || (request.method != 'delete'
+                 && request.resource.data.get('type', 'RESELLER') != 'RESELLER'
+                 && (resource == null || resource.data.get('type', 'RESELLER') != 'RESELLER'))
+             || (request.method == 'update'
+                 && resource.data.get('type', 'RESELLER') == 'RESELLER'
+                 && request.resource.data.get('type', 'RESELLER') == 'RESELLER'
+                 && request.resource.data.get('priceListId', '') == resource.data.get('priceListId', '')
+                 && request.resource.data.get('registrationStatus', 'ACTIVE') == resource.data.get('registrationStatus', 'ACTIVE')
+                 && request.resource.data.get('active', true) == resource.data.get('active', true))));
     }
 
     // Historial: se corrige escribiendo la diferencia, nunca borrando (CLAUDE.md). La app

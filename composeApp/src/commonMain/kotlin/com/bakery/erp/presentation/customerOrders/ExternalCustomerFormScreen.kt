@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.ExternalCustomer
 import com.bakery.erp.model.Branch
 import com.bakery.erp.model.ExternalCustomerType
+import com.bakery.erp.model.hasPermission
 import com.bakery.erp.model.ResellerDeliveryMode
 import com.bakery.erp.model.PriceList
 import com.bakery.erp.presentation.auth.AuthViewModel
@@ -81,6 +82,7 @@ fun ExternalCustomerFormScreen(
     val companyId = authState.user?.orgId ?: ""
     val snackbarHostState = remember { SnackbarHostState() }
     val needsLoad = !customerId.isNullOrEmpty()
+    val canSetPrices = authState.user?.hasPermission(com.bakery.erp.model.Permission.MANAGE_PRICE_LISTS) == true
 
     LaunchedEffect(customerId, companyId) {
         if (companyId.isNotEmpty()) {
@@ -133,6 +135,7 @@ fun ExternalCustomerFormScreen(
                     priceLists = state.priceLists,
                     branches = state.sellingBranches,
                     resellerOnly = resellerOnly,
+                    canSetPrices = canSetPrices,
                     isSaving = state.isLoading,
                     onSave = { viewModel.saveCustomer(companyId, it) },
                     onDelete = { id -> viewModel.deleteCustomer(companyId, id) }
@@ -149,6 +152,8 @@ private fun FormContent(
     priceLists: List<PriceList>,
     branches: List<Branch>,
     resellerOnly: Boolean,
+    /** Sin esto no se elige la lista de un revendedor (su precio) ni se le da de alta o se borra. */
+    canSetPrices: Boolean,
     isSaving: Boolean,
     onSave: (ExternalCustomer) -> Unit,
     onDelete: (id: String) -> Unit
@@ -172,6 +177,7 @@ private fun FormContent(
     var pickupTime by rememberSaveable { mutableStateOf(existing?.preferredPickupTime ?: "") }
     var addressReference by rememberSaveable { mutableStateOf(existing?.deliveryAddressReference ?: "") }
     val isReseller = type == ExternalCustomerType.RESELLER
+    val priceLocked = isReseller && !canSetPrices
     var showDeleteDialog by remember { mutableStateOf(false) }
 
     val scroll = rememberScrollState()
@@ -248,17 +254,20 @@ private fun FormContent(
         var listExpanded by remember { mutableStateOf(false) }
         val selectedList = priceLists.firstOrNull { it.id == priceListId }
         ExposedDropdownMenuBox(
-            expanded = listExpanded,
-            onExpandedChange = { listExpanded = !listExpanded }
+            expanded = listExpanded && !priceLocked,
+            onExpandedChange = { if (!priceLocked) listExpanded = !listExpanded }
         ) {
             OutlinedTextField(
                 value = selectedList?.name ?: if (isReseller) "" else "Default por tipo",
                 onValueChange = {},
                 readOnly = true,
                 label = { Text(if (isReseller) "Lista de precios *" else "Lista de precios") },
-                supportingText = if (isReseller) {
-                    { Text("Con estos precios se le cobra en caja. Sin lista no se le puede vender como revendedor.") }
-                } else null,
+                enabled = !priceLocked,
+                supportingText = when {
+                    priceLocked -> { { Text("Solo quien maneja las listas de precios la puede elegir o cambiar.") } }
+                    isReseller -> { { Text("Con estos precios se le cobra en caja. Sin lista no se le puede vender como revendedor.") } }
+                    else -> null
+                },
                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = listExpanded) },
                 modifier = Modifier
                     .menuAnchor(MenuAnchorType.PrimaryNotEditable, true)
@@ -408,7 +417,8 @@ private fun FormContent(
             else Text(if (existing == null) (if (resellerOnly) "Crear revendedor" else "Crear cliente") else "Guardar cambios")
         }
 
-        if (existing != null && existing.id.isNotEmpty()) {
+        if (existing != null && existing.id.isNotEmpty() &&
+            (existing.type != ExternalCustomerType.RESELLER || canSetPrices)) {
             TextButton(
                 onClick = { showDeleteDialog = true },
                 modifier = Modifier.fillMaxWidth()

@@ -57,6 +57,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.BreadCountLine
+import com.bakery.erp.model.Permission
+import com.bakery.erp.model.hasPermission
 import com.bakery.erp.model.BreadCountReason
 import com.bakery.erp.model.BreadCountStatus
 import com.bakery.erp.model.GroupAllocation
@@ -90,6 +92,8 @@ fun BreadCountFormScreen(
     val authState by authViewModel.uiState.collectAsState()
     val companyId = authState.user?.orgId.orEmpty()
     val user = authState.user
+    // El valor de la merma sale del costo del pan: solo quien puede ver valores de despacho.
+    val canSeeValue = user?.hasPermission(Permission.VIEW_DISPATCH_VALUE) == true
     val snackbar = remember { SnackbarHostState() }
     var notes by rememberSaveable { mutableStateOf("") }
     var showConfirm by remember { mutableStateOf(false) }
@@ -178,7 +182,7 @@ fun BreadCountFormScreen(
                     Spacer(Modifier.height(8.dp))
                 }
 
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                if (canSeeValue) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     KpiBox(label = "Mermas (valor)",
                         value = "Q ${totalShortage.fmtMoney(2)}",
                         color = if (totalShortage > 0) Color(0xFFB00020) else MaterialTheme.colorScheme.onSurface)
@@ -257,8 +261,9 @@ fun BreadCountFormScreen(
                     (if (allocation.totalAllocated > 0)
                         "Se registrarán como venta ${allocation.totalAllocated.fmt(0)} panes vendidos por grupo, " +
                             "repartidos según lo que falta de cada uno. " else "") +
-                    "Se aplicarán las mermas (Q ${totalShortage.fmtMoney(2)}) y " +
-                    "los sobrantes (Q ${totalSurplus.fmtMoney(2)}) al stock terminado. " +
+                    (if (canSeeValue) "Se aplicarán las mermas (Q ${totalShortage.fmtMoney(2)}) y " +
+                        "los sobrantes (Q ${totalSurplus.fmtMoney(2)}) al stock terminado. "
+                    else "Se aplicarán las mermas y los sobrantes al stock terminado. ") +
                     "Las ventas de grupo se vuelven a leer al cerrar. El conteo quedará inmutable."
                 )
             },

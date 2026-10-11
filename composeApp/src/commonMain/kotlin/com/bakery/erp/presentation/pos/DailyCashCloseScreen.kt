@@ -54,6 +54,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.bakery.erp.model.hasPermission
 import com.bakery.erp.model.CashDenominations
 import com.bakery.erp.model.DailyCashCloseStatus
 import com.bakery.erp.model.SpotCashCheck
@@ -203,9 +204,12 @@ fun DailyCashCloseScreen(
                         Column(Modifier.padding(12.dp)) {
                             Text("Conteo de pan del día",
                                 fontWeight = FontWeight.SemiBold, color = DeepSeaBlue)
-                            Text("Mermas: Q ${state.breadCount!!.totalShortageValue.fmtMoney(2)} · " +
-                                "Sobrantes: Q ${state.breadCount!!.totalSurplusValue.fmtMoney(2)}",
-                                style = MaterialTheme.typography.bodySmall)
+                            // El valor sale del costo del pan: solo con permiso de ver valores.
+                            if (user?.hasPermission(com.bakery.erp.model.Permission.VIEW_DISPATCH_VALUE) == true)
+                                Text("Mermas: Q ${state.breadCount!!.totalShortageValue.fmtMoney(2)} · " +
+                                    "Sobrantes: Q ${state.breadCount!!.totalSurplusValue.fmtMoney(2)}",
+                                    style = MaterialTheme.typography.bodySmall)
+                            else Text("Mermas y sobrantes ya aplicados al stock.", style = MaterialTheme.typography.bodySmall)
                         }
                     }
                 }

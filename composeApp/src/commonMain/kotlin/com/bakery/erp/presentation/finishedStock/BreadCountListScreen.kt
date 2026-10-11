@@ -48,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.bakery.erp.model.hasPermission
 import com.bakery.erp.model.BreadCount
 import com.bakery.erp.model.BreadCountStatus
 import com.bakery.erp.presentation.auth.AuthViewModel
@@ -73,6 +74,8 @@ fun BreadCountListScreen(
     val authState by authViewModel.uiState.collectAsState()
     val companyId = authState.user?.orgId.orEmpty()
     val user = authState.user
+    // El valor de la merma sale del costo del pan.
+    val canSeeValue = user?.hasPermission(com.bakery.erp.model.Permission.VIEW_DISPATCH_VALUE) == true
     val snackbar = remember { SnackbarHostState() }
 
     LaunchedEffect(companyId) {
@@ -157,7 +160,7 @@ fun BreadCountListScreen(
                 } else {
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(state.monthlyCounts, key = { it.id }) { count ->
-                            CountCard(count) { onNavigateToCount(count.id) }
+                            CountCard(count, canSeeValue) { onNavigateToCount(count.id) }
                         }
                     }
                 }
@@ -180,7 +183,7 @@ private fun MonthSelector(yearMonth: String, onPrev: () -> Unit, onNext: () -> U
 }
 
 @Composable
-private fun CountCard(count: BreadCount, onClick: () -> Unit) {
+private fun CountCard(count: BreadCount, canSeeValue: Boolean, onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
@@ -214,7 +217,7 @@ private fun CountCard(count: BreadCount, onClick: () -> Unit) {
                         color = MaterialTheme.colorScheme.outline)
                     Text("${count.lineCount}", fontWeight = FontWeight.SemiBold)
                 }
-                if (count.totalShortageValue > 0) {
+                if (canSeeValue && count.totalShortageValue > 0) {
                     Column(horizontalAlignment = Alignment.End) {
                         Text("Mermas (valor)", style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.outline)

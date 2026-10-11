@@ -58,6 +58,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.bakery.erp.model.hasPermission
 import com.bakery.erp.model.Branch
 import com.bakery.erp.model.BranchCapability
 import com.bakery.erp.model.DeliveryRun
@@ -388,6 +389,7 @@ fun DeliveryRunFormScreen(
                                 NoteCheckRow(
                                     note = note,
                                     checked = note.id in selectedNoteIds,
+                                    canSeeValue = user?.hasPermission(com.bakery.erp.model.Permission.VIEW_DISPATCH_VALUE) == true,
                                     tripWarning = state.candidateNoteTripWarnings[note.id],
                                     onCheckedChange = { checked ->
                                         selectedNoteIds = if (checked) selectedNoteIds + note.id
@@ -551,6 +553,8 @@ private fun NoteCheckRow(
     note: DispatchNote,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
+    // Con costo estándar el valor de la nota es lo que cuesta hacer el pan: no es para todos.
+    canSeeValue: Boolean = false,
     tripWarning: String? = null
 ) {
     Card(
@@ -570,8 +574,8 @@ private fun NoteCheckRow(
                     fontWeight = FontWeight.Medium,
                     color = DeepSeaBlue)
                 Text(
-                    "${note.lineCount} producto(s) · " +
-                        if (note.totalValueWholesale > 0) "Q${note.totalValueWholesale.fmt(2)}" else "—",
+                    "${note.lineCount} producto(s)" +
+                        if (canSeeValue && note.totalValueWholesale > 0) " · Q${note.totalValueWholesale.fmt(2)}" else "",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
