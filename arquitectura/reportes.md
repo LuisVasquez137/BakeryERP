@@ -118,3 +118,46 @@ Paso 4 de `arquitectura/propuesta-rentabilidad-por-sucursal.md`. Home → "Costo
 - **Persistencia**: `standardCostPeriods/{YYYY-MM}` (plantas como arreglos paralelos) y `standardCosts/{YYYY-MM}_{productId}` plano. Volver a congelar reescribe y borra los productos que salieron; el encabezado se escribe al final.
 - **Despacho**: `resolveWholesalePrice` mira primero `standardCosts/{mes actual}_{producto}` (`PriceSource.STANDARD_COST`); si no hay, sigue la cascada de la lista "Sucursales". Las notas ya creadas guardaron su precio y no cambian.
 - Pendiente: repostería sin peso en crudo → su planta no tiene tasa y sus productos van con lista; varianza real vs estándar es parte del reporte del paso 6.
+
+## Costo de reparto (oct 2026)
+
+Paso 5 de `propuesta-rentabilidad-por-sucursal.md`. Pantalla "Costo de reparto" (Home → reportes,
+`VIEW_FINANCIAL_REPORT`), cálculo en `domain/DeliveryCost.kt`, tests en `DeliveryCostTest`.
+- **Costo del mes** = gastos con `costCenter = DELIVERY` del periodo + sueldo/nómina + prestaciones
+  de los colaboradores marcados Reparto (`Employee.monthlyCost`, la misma regla que la planilla de
+  planta: sin IGSS).
+- **Se reparte por entregas**, no por valor: una entrega = (tienda destino, día de producción,
+  turno). Pan y repostería del mismo turno son una sola; día y noche son dos.
+- **Se cuenta desde las notas de despacho, no desde `deliveryRuns`**: en sep–oct 2026 casi todos
+  los repartos quedaron PENDING y ~25% de las notas salieron sin reparto. Cuenta la nota que ya
+  salió (IN_TRANSIT, ARRIVED, DELIVERED*). La de la planta a su propia tienda
+  (`origin == destination`) no viaja y no cuenta.
+- Mes real (no estándar): se ve el mes en curso y los dos anteriores. El reporte del paso 6 lo usa
+  como "su parte del reparto" de cada tienda.
+- Avisos en pantalla si nadie está marcado Reparto o no hay gastos de Reparto en el mes.
+
+## Resultado por sucursal (oct 2026)
+
+Paso 6 de `propuesta-rentabilidad-por-sucursal.md` (tabla de la sección 2.4). Pantalla "Por
+sucursal" (Home → reportes, `VIEW_FINANCIAL_REPORT`), cálculo puro en `domain/BranchResult.kt`
+(`branchResults`), tests en `BranchResultTest`. Mes real; se ven el mes en curso y los dos anteriores.
+- **Tienda** = ventas de caja (`aggregateSalesInRange().byBranch`, resúmenes diarios) − pan recibido
+  (`totalValueWholesale` de las notas que ya salieron) − reventa comprada − insumos comprados (solo si
+  no produce) − gastos − planilla − su parte del reparto (paso 5) = **aporte**.
+- **Planta** = lo despachado (mismas notas, por origen) − insumos comprados (líneas INGREDIENT con su
+  `effectiveBranchId`) − gastos − planilla. Con costo estándar congelado es su eficiencia.
+- **Sucursal que produce y vende** sale dos veces: "Planta X" y "Tienda X", con `plantShare` /
+  `storeShare` (= 1 − plantShare) para gastos y personas. Su pan recibido es la nota que la planta se
+  manda a sí misma (`markAsLocalDispatch`): por eso la opción A no necesitó despachos extra.
+- **Generales** no se reparten: gastos y planilla GENERAL; además "reparto sin entregas" (mes sin
+  notas que salieron) y lo de sucursales borradas, para que la suma no pierda nada.
+- **Regla de control**: `companyCheck` = ventas − inventario comprado − gastos − planilla, sin
+  sucursales. Los despachos son internos y se cancelan. Si la suma de columnas difiere > Q1, la
+  pantalla lo dice en rojo.
+- Compras: cuentan el mes en que se **recibieron** (`PENDING_RECEIPT` no), no cuando se consumieron.
+  Suministros y servicios no se leen de la compra: ya son `Expense` (no contar dos veces).
+- Notas a cliente (`destinationType = CUSTOMER`) no entran: no son de ninguna tienda.
+- Avisos: mes sin costo estándar congelado (el pan va a lista "Sucursales": tiendas y plantas no
+  son reales todavía, el total sí); tienda que recibió pan sin ventas en caja.
+- Costo: lee las líneas de cada compra del mes (una lectura por compra). Aceptable para un reporte
+  mensual; si pesa, denormalizar en el encabezado el monto de reventa/insumo por sucursal.

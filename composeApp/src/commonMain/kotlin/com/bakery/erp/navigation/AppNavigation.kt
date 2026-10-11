@@ -483,6 +483,8 @@ sealed class Screen(val route: String) {
     object BranchSupplyReport : Screen("reports/branch-supply")
     object ProductCostReport : Screen("reports/product-cost")
     object StandardCostReport : Screen("reports/standard-cost")
+    object DeliveryCostReport : Screen("reports/delivery-cost")
+    object BranchResultReport : Screen("reports/branch-result")
 
     // Pedidos de clientes
     object CustomerOrderList : Screen("customerOrders")
@@ -571,6 +573,8 @@ fun AppNavigation(
     val branchSupplyReportViewModel = vms.branchSupplyReport
     val productCostViewModel = vms.productCost
     val standardCostViewModel = vms.standardCost
+    val deliveryCostViewModel = vms.deliveryCost
+    val branchResultViewModel = vms.branchResult
     val customerOrderViewModel = vms.customerOrder
     val externalCustomerViewModel = vms.externalCustomer
     val organizationSettingsViewModel = vms.organizationSettings
@@ -841,6 +845,8 @@ fun AppNavigation(
                 onNavigateToBranchSupplyReport = { navController.navigate(Screen.BranchSupplyReport.route) },
                 onNavigateToProductCostReport = { navController.navigate(Screen.ProductCostReport.route) },
                 onNavigateToStandardCostReport = { navController.navigate(Screen.StandardCostReport.route) },
+                onNavigateToDeliveryCostReport = { navController.navigate(Screen.DeliveryCostReport.route) },
+                onNavigateToBranchResultReport = { navController.navigate(Screen.BranchResultReport.route) },
                 onNavigateToCustomerOrders = { navController.navigate(Screen.CustomerOrderList.route) },
                 onNavigateToOrganizationSettings = { navController.navigate(Screen.OrganizationSettings.route) },
                 onNavigateToFelSetup = { navController.navigate(Screen.FelSetup.route) },
@@ -2404,6 +2410,26 @@ fun AppNavigation(
                     onNavigateBack = { navController.popBackStack() },
                     onOpenProduct = { id -> navController.navigate(Screen.ProductDetail.route(id)) },
                     viewModel = standardCostViewModel
+                )
+            }
+        }
+        composable(Screen.DeliveryCostReport.route) {
+            RequirePermission(state.user, Permission.VIEW_FINANCIAL_REPORT,
+                onBack = { navController.popBackStack() }) {
+                com.bakery.erp.presentation.reports.productcost.DeliveryCostScreen(
+                    user = state.user,
+                    onNavigateBack = { navController.popBackStack() },
+                    viewModel = deliveryCostViewModel
+                )
+            }
+        }
+        composable(Screen.BranchResultReport.route) {
+            RequirePermission(state.user, Permission.VIEW_FINANCIAL_REPORT,
+                onBack = { navController.popBackStack() }) {
+                com.bakery.erp.presentation.reports.productcost.BranchResultScreen(
+                    user = state.user,
+                    onNavigateBack = { navController.popBackStack() },
+                    viewModel = branchResultViewModel
                 )
             }
         }

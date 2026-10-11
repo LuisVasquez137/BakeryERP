@@ -238,6 +238,8 @@ val appModule = module {
     single { com.bakery.erp.presentation.reports.productcost.ProductCostViewModel(get()) }
     single<com.bakery.erp.domain.StandardCostRepository> { com.bakery.erp.data.FirebaseStandardCostRepository(get()) }
     single { com.bakery.erp.presentation.reports.productcost.StandardCostViewModel(get(), get(), get(), get(), get(), get(), get()) }
+    single { com.bakery.erp.presentation.reports.productcost.DeliveryCostViewModel(get(), get(), get(), get()) }
+    single { com.bakery.erp.presentation.reports.productcost.BranchResultViewModel(get(), get(), get(), get(), get(), get(), get(), get()) }
     single { ExternalCustomerViewModel(get(), get(), get(), get()) }
     single { CustomerOrderViewModel(get(), get(), get(), get(), get(), get()) }
     single { OrganizationSettingsViewModel(get(), get()) }

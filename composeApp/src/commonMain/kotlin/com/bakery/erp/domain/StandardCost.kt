@@ -84,12 +84,7 @@ fun plantPayroll(
         val share = plantShare(emp.costCenter, branch)
         if (share <= 0.0) continue
         val records = recordsByEmployee[emp.id].orEmpty()
-        val pay = when {
-            records.isNotEmpty() -> records.sumOf { it.totalGross }
-            emp.isWorking -> emp.baseSalary
-            else -> 0.0
-        }
-        val monthly = if (pay > 0.0) pay + emp.monthlyBenefits else 0.0
+        val monthly = emp.monthlyCost(records)
         if (monthly <= 0.0) continue
         val prev = acc[branch.id] ?: PlantPayroll(0.0, 0, 0)
         acc[branch.id] = PlantPayroll(
@@ -99,6 +94,20 @@ fun plantPayroll(
         )
     }
     return acc
+}
+
+/**
+ * Lo que cuesta una persona en el mes: su nómina registrada (bruto) o, si no hay y sigue
+ * trabajando, su salario base; más las prestaciones al mes de su ficha. Sin IGSS.
+ * [records] son las nóminas de ESA persona en el mes.
+ */
+fun Employee.monthlyCost(records: List<PayrollRecord>): Double {
+    val pay = when {
+        records.isNotEmpty() -> records.sumOf { it.totalGross }
+        isWorking -> baseSalary
+        else -> 0.0
+    }
+    return if (pay > 0.0) pay + monthlyBenefits else 0.0
 }
 
 private val Employee.isWorking: Boolean

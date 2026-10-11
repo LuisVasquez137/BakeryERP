@@ -310,11 +310,11 @@ mientras esos datos se juntan se construye el resto.
   el mes siguiente.
 - Los despachos dejan de usar la lista "Sucursales" y usan el costo estándar.
 
-### Paso 5 — Reparto
+### Paso 5 — Reparto — HECHO (cálculo y pantalla) 10 oct 2026, ver `reportes.md` "Costo de reparto"
 - Sueldo del piloto + camión del mes ÷ entregas del mes → se carga a cada tienda según las
   entregas que recibió (sale de los repartos registrados).
 
-### Paso 6 — Reporte "Resultado por sucursal"
+### Paso 6 — Reporte "Resultado por sucursal" — HECHO 10 oct 2026, ver `reportes.md` "Resultado por sucursal"
 - La tabla de la sección 2.4, mes por mes: aporte de cada tienda, resultado de cada planta
   contra su costo estándar, generales y ganancia total.
 - Regla de control: la suma de las columnas = ganancia de la empresa.

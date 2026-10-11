@@ -219,6 +219,13 @@ actual fun createAppViewModels(): AppViewModels {
             materialCostLoader, branchRepo, expenseRepo, employeeRepo, payrollRepo, productionRepo,
             com.bakery.erp.data.FirebaseStandardCostRepository(firestore)
         ),
+        deliveryCost = com.bakery.erp.presentation.reports.productcost.DeliveryCostViewModel(
+            expenseRepo, employeeRepo, payrollRepo, dispatchRepo
+        ),
+        branchResult = com.bakery.erp.presentation.reports.productcost.BranchResultViewModel(
+            branchRepo, saleRepo, dispatchRepo, purchaseRepo, expenseRepo, employeeRepo, payrollRepo,
+            com.bakery.erp.data.FirebaseStandardCostRepository(firestore)
+        ),
         customerOrder = CustomerOrderViewModel(
             customerOrderRepo, externalCustomerRepo, productionRepo,
             productRepoJs, branchRepo, priceListRepo

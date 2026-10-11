@@ -88,6 +88,8 @@ data class AppViewModels(
     val productCost: com.bakery.erp.presentation.reports.productcost.ProductCostViewModel,
     /** Costo estándar de planta (paso 4): calcula y congela el costo del mes. */
     val standardCost: com.bakery.erp.presentation.reports.productcost.StandardCostViewModel,
+    val deliveryCost: com.bakery.erp.presentation.reports.productcost.DeliveryCostViewModel,
+    val branchResult: com.bakery.erp.presentation.reports.productcost.BranchResultViewModel,
     val customerOrder: CustomerOrderViewModel,
     val externalCustomer: ExternalCustomerViewModel,
     val organizationSettings: OrganizationSettingsViewModel,

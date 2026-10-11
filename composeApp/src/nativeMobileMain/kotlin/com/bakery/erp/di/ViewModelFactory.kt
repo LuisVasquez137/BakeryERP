@@ -44,6 +44,8 @@ actual fun createAppViewModels(): AppViewModels {
         branchSupplyReport = koin.get(),
         productCost = koin.get(),
         standardCost = koin.get(),
+        deliveryCost = koin.get(),
+        branchResult = koin.get(),
         customerOrder = koin.get(),
         externalCustomer = koin.get(),
         organizationSettings = koin.get(),
