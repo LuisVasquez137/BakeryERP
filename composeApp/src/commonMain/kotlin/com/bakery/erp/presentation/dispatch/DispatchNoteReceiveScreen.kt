@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -179,8 +181,12 @@ fun DispatchNoteReceiveScreen(
                 state.isDetailLoading || note == null -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                 else -> AdaptiveContainer {
                     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp)) {
-                        HeaderCard(note)
-                        Spacer(Modifier.height(12.dp))
+                        // En el paso 1 el encabezado va dentro de la lista que se desliza
+                        // (ver ArrivalChecklistSection).
+                        if (note.status != DispatchStatus.IN_TRANSIT) {
+                            HeaderCard(note)
+                            Spacer(Modifier.height(12.dp))
+                        }
 
                         // PASO 1: Acuse de llegada (IN_TRANSIT → ARRIVED) con checklist
                         if (DispatchStatus.isTerminal(note.status)) {
@@ -193,6 +199,7 @@ fun DispatchNoteReceiveScreen(
                         } else if (note.status == DispatchStatus.IN_TRANSIT) {
                             var basketsArrived by remember(note.id) { mutableStateOf("") }
                             ArrivalChecklistSection(
+                                header = { HeaderCard(note) },
                                 lines = note.lines,
                                 recipeRefByProductId = productionState.recipeRefByProductId,
                                 arrivalChecks = arrivalChecks,
@@ -463,17 +470,18 @@ private fun HeaderCard(note: com.bakery.erp.model.DispatchNote) {
  * Paso 1 de la recepción: marcar producto por producto lo que el repartidor va
  * descargando.
  *
- * Las casillas van en un [LazyColumn] con `weight(1f)` — igual que el conteo del
- * paso 2 — y no en la Column de la pantalla. Con la lista dentro de la Column
- * plana, una nota con muchos productos empujaba las últimas casillas y el botón
- * de "Reportar llegada" fuera de la pantalla, sin scroll que las alcanzara: la
- * encargada no podía terminar el acuse y el repartidor se quedaba esperando.
- *
- * El encabezado (con el contador marcadas/total) y el botón quedan fijos a
- * propósito: son justamente lo que hay que ver mientras se recorre la lista.
+ * Todo —encabezado, instrucciones, casillas, canastas y aviso— va dentro de UN
+ * [LazyColumn] con `weight(1f)`, y solo el botón queda fijo abajo. Antes las tarjetas
+ * de arriba y la de canastas estaban fijas y solo se deslizaba la lista: en el
+ * teléfono de Pacajá, con la letra del sistema grande, esas tarjetas ocupaban toda
+ * la pantalla y la lista quedaba con altura cero. La encargada no tenía ninguna
+ * casilla que marcar (0/29), el botón nunca se habilitaba y el dueño terminaba
+ * firmando la llegada por ella. Con un solo scroll cabe en cualquier pantalla y con
+ * cualquier tamaño de letra.
  */
 @Composable
 private fun ColumnScope.ArrivalChecklistSection(
+    header: @Composable () -> Unit,
     lines: List<DispatchNoteLine>,
     recipeRefByProductId: Map<String, RecipeRef>,
     arrivalChecks: Map<String, Long?>,
@@ -492,48 +500,6 @@ private fun ColumnScope.ArrivalChecklistSection(
     val basketsAnswered = basketsSent <= 0 || basketsArrived.toIntOrNull() != null
     val allChecked = total > 0 && checkedCount == total && basketsAnswered
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(1.dp)
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    "Llegó el repartidor",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = DeepSeaBlue
-                )
-                Text(
-                    "Marca cada producto a medida que lo descargas. El conteo final lo haces después.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            AssistChip(
-                onClick = {},
-                label = {
-                    Text(
-                        "$checkedCount/$total",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (allChecked) Color(0xFF2E7D32) else BrandColors.AccentDeep
-                    )
-                },
-                colors = AssistChipDefaults.assistChipColors(
-                    containerColor = if (allChecked) Color(0xFFE8F5E9) else Color(0xFFFFF3E0)
-                )
-            )
-        }
-    }
-
-    Spacer(Modifier.height(8.dp))
-
     val groupedLines = remember(lines, recipeRefByProductId) {
         groupByMasa(
             items = lines,
@@ -547,6 +513,59 @@ private fun ColumnScope.ArrivalChecklistSection(
         modifier = Modifier.weight(1f).fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
+        item(key = "note_header") {
+            Column {
+                header()
+                Spacer(Modifier.height(6.dp))
+            }
+        }
+        item(key = "arrival_intro") {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(1.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Llegó el repartidor",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = DeepSeaBlue
+                        )
+                        Text(
+                            "Marca cada producto a medida que lo descargas. El conteo final lo haces después.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    AssistChip(
+                        onClick = {},
+                        label = {
+                            Text(
+                                "$checkedCount/$total",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (allChecked) Color(0xFF2E7D32) else BrandColors.AccentDeep
+                            )
+                        },
+                        colors = AssistChipDefaults.assistChipColors(
+                            containerColor = if (allChecked) Color(0xFFE8F5E9) else Color(0xFFFFF3E0)
+                        )
+                    )
+                }
+            }
+        }
+        // Las canastas arriba de los productos: es lo primero que baja del camión.
+        if (basketsSent > 0) {
+            item(key = "baskets") {
+                BasketsArrivedCard(basketsSent, basketsArrived, onBasketsArrivedChange)
+            }
+        }
         groupedLines.forEach { group ->
             item(key = "header_${group.key}") {
                 Text(
@@ -565,13 +584,19 @@ private fun ColumnScope.ArrivalChecklistSection(
                 )
             }
         }
+        if (!allChecked) {
+            item(key = "arrival_hint") {
+                Text(
+                    "Marca todos los productos para habilitar el reporte de llegada. Si algo no descargó, no firmes hasta que esté completo.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = BrandColors.AccentDeep,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+        }
     }
 
-    if (basketsSent > 0) {
-        Spacer(Modifier.height(10.dp))
-        BasketsArrivedCard(basketsSent, basketsArrived, onBasketsArrivedChange)
-    }
-    Spacer(Modifier.height(12.dp))
+    Spacer(Modifier.height(10.dp))
     Button(
         onClick = onAcknowledge,
         modifier = Modifier.fillMaxWidth(),
@@ -585,14 +610,6 @@ private fun ColumnScope.ArrivalChecklistSection(
             Spacer(Modifier.width(8.dp))
             Text("Reportar llegada del repartidor", fontWeight = FontWeight.SemiBold)
         }
-    }
-    if (!allChecked) {
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Marca todos los productos para habilitar el reporte de llegada. Si algo no descargó, no firmes hasta que esté completo.",
-            style = MaterialTheme.typography.labelSmall,
-            color = BrandColors.AccentDeep
-        )
     }
 }
 
@@ -720,6 +737,7 @@ private fun ColumnScope.CountSection(
  * "Salieron 6 canastas. ¿Cuántas llegaron?" — sin prellenar el número, para que no se firme
  * sin contar. El botón "Llegaron las 6" es el caso normal y cuesta un toque.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun BasketsArrivedCard(sent: Int, value: String, onChange: (String) -> Unit) {
     val n = value.toIntOrNull()
@@ -736,7 +754,13 @@ private fun BasketsArrivedCard(sent: Int, value: String, onChange: (String) -> U
                 fontWeight = FontWeight.SemiBold,
                 color = DeepSeaBlue
             )
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            // FlowRow: con letra grande el campo baja a la línea siguiente en vez de
+            // quedar aplastado a tres renglones ("Otra / cantid / ad").
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                itemVerticalAlignment = Alignment.CenterVertically
+            ) {
                 FilterChip(
                     selected = n == sent,
                     onClick = { onChange(sent.toString()) },
