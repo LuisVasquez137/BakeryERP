@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.LockClock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.PointOfSale
+import androidx.compose.material.icons.filled.RemoveShoppingCart
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.CircularProgressIndicator
@@ -170,6 +171,7 @@ private fun AuditRow(e: CashAuditEvent) {
         CashAuditEventType.OPEN -> Icons.Default.LockOpen
         CashAuditEventType.CLOSE -> Icons.Default.LockClock
         CashAuditEventType.CLOSE_SCREEN -> Icons.Default.Visibility
+        CashAuditEventType.HELD_CART_DISCARDED -> Icons.Default.RemoveShoppingCart
         else -> Icons.Default.PointOfSale
     }
     Surface(
@@ -215,6 +217,8 @@ private fun AuditRow(e: CashAuditEvent) {
                     }
                     CashAuditEventType.CLOSE_SCREEN -> Text("Vio el cierre (esperado en caja)",
                         style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate)
+                    CashAuditEventType.HELD_CART_DISCARDED -> Text("Cuenta de Q ${e.expectedCash.fmtMoney(2)} sin cobrar",
+                        style = MaterialTheme.typography.bodySmall, color = BrandColors.AccentDeep, fontWeight = FontWeight.SemiBold)
                 }
                 if (e.notes.isNotBlank()) {
                     Text("Nota: ${e.notes}", style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate)

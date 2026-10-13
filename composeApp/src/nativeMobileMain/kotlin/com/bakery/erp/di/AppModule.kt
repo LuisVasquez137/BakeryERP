@@ -175,6 +175,7 @@ val appModule = module {
     single<POSCategoryRepository> { FirebasePOSCategoryRepository(get()) }
     single<com.bakery.erp.domain.PackagingItemRepository> { com.bakery.erp.data.FirebasePackagingItemRepository(get()) }
     single<com.bakery.erp.domain.PaymentRulesRepository> { com.bakery.erp.data.FirebasePaymentRulesRepository(get()) }
+    single<com.bakery.erp.domain.HeldCartRepository> { com.bakery.erp.data.FirebaseHeldCartRepository(get()) }
     single<CashRegisterRepository> { FirebaseCashRegisterRepository(get()) }
     single<CashSessionRepository> { FirebaseCashSessionRepository(get()) }
     single<SaleRepository> { FirebaseSaleRepository(get(), get(), get(), get()) }
@@ -222,9 +223,9 @@ val appModule = module {
     single { PreparationViewModel(get()) }
     single { PreparationBatchViewModel(get(), get(), get(), get()) }
     single { FixedAssetViewModel(get(), get(), get()) }
-    single { POSViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    single { POSViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single<com.bakery.erp.domain.CashAuditRepository> { com.bakery.erp.data.FirebaseCashAuditRepository(get()) }
-    single { CashSessionViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    single { CashSessionViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { SaleHistoryViewModel(get(), get(), get(), get(), get(), get()) }
     single { CashRegisterAdminViewModel(get(), get(), get()) }
     single { POSCategoryAdminViewModel(get(), get(), get()) }

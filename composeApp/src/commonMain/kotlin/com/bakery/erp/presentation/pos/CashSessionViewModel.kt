@@ -124,7 +124,9 @@ class CashSessionViewModel(
     /** Ventas del turno: el detalle de vouchers y transferencias. */
     private val saleRepository: com.bakery.erp.domain.SaleRepository,
     /** PIN de quien recibe la gaveta en un equipo compartido. */
-    private val accessRepository: com.bakery.erp.domain.EmployeeAccessRepository
+    private val accessRepository: com.bakery.erp.domain.EmployeeAccessRepository,
+    /** No se cierra un turno con cuentas en espera (ver [com.bakery.erp.model.HeldCart]). */
+    private val heldCartRepository: com.bakery.erp.domain.HeldCartRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(CashSessionUiState())
@@ -589,6 +591,16 @@ class CashSessionViewModel(
                 verifiedReceiver = verified
             }
             _uiState.update { it.copy(isLoading = true, error = null, isClosed = false, handedOverSessionId = null) }
+            // Decisión del dueño: con cuentas en espera no se cierra. Se cobran o se descartan
+            // (y el descarte queda en la bitácora); si no, pasarían escondidas al siguiente turno.
+            val held = runCatching { heldCartRepository.getForSession(companyId, sessionId) }.getOrDefault(emptyList())
+            if (held.isNotEmpty()) {
+                _uiState.update {
+                    it.copy(isLoading = false, error = "Hay ${held.size} cuenta(s) en espera en esta caja " +
+                        "(${held.joinToString { h -> h.label }}). Cobralas o descartalas en el punto de venta antes de cerrar.")
+                }
+                return@launch
+            }
             com.bakery.erp.model.closingWithdrawalProblem(countedCash, withdrawal)?.let { problem ->
                 _uiState.update { it.copy(isLoading = false, error = problem) }; return@launch
             }

@@ -37,11 +37,18 @@ object CashAuditEventType {
     /** Entró a la pantalla de cierre: ya vio cuánto debería haber, cierre o no. */
     const val CLOSE_SCREEN = "CLOSE_SCREEN"
     const val CLOSE = "CLOSE"
+    /**
+     * Descartó una cuenta en espera ([HeldCart]) sin cobrarla. Se registra porque cobrar en
+     * efectivo, dejarla en espera y descartarla metería dinero a la gaveta sin venta. El monto va
+     * en [CashAuditEvent.expectedCash] y lo que llevaba en [CashAuditEvent.notes].
+     */
+    const val HELD_CART_DISCARDED = "HELD_CART_DISCARDED"
 
     fun label(type: String) = when (type) {
         OPEN -> "Abrió caja"
         CLOSE_SCREEN -> "Entró al cierre"
         CLOSE -> "Cerró caja"
+        HELD_CART_DISCARDED -> "Descartó cuenta en espera"
         else -> type
     }
 }

@@ -23,6 +23,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PauseCircle
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Print
@@ -188,6 +189,14 @@ fun POSScreen(
     var overflowOpen by remember { mutableStateOf(false) }
     var lastCheckoutOpen by remember { mutableStateOf(false) }
     var resellerPickerOpen by remember { mutableStateOf(false) }
+    // Cuentas en espera: diálogo para nombrarla, cuál se va a descartar, y el aviso del cierre.
+    var holdDialogOpen by remember { mutableStateOf(false) }
+    var discardTarget by remember { mutableStateOf<com.bakery.erp.model.HeldCart?>(null) }
+    var closeBlockedOpen by remember { mutableStateOf(false) }
+    // No se cierra el turno con cuentas en espera (decisión del dueño).
+    fun goToClose(sessionId: String) {
+        if (state.heldCarts.isNotEmpty()) closeBlockedOpen = true else onNavigateToClose(sessionId)
+    }
     LaunchedEffect(resellerPickerOpen) {
         if (resellerPickerOpen) viewModel.loadResellers(companyId)
     }
@@ -423,7 +432,7 @@ fun POSScreen(
                                         )
                                         DropdownMenuItem(
                                             text = { Text("Cerrar caja") },
-                                            onClick = { overflowOpen = false; onNavigateToClose(sess.id) }
+                                            onClick = { overflowOpen = false; goToClose(sess.id) }
                                         )
                                     }
                                 }
@@ -486,7 +495,7 @@ fun POSScreen(
                                 IconButton(onClick = { showTransfer = true }) {
                                     Icon(Icons.Default.SwapHoriz, "Transferir efectivo a otra caja")
                                 }
-                                TextButton(onClick = { onNavigateToClose(sess.id) }) {
+                                TextButton(onClick = { goToClose(sess.id) }) {
                                     Text("Cerrar caja", color = MaterialTheme.colorScheme.onPrimary)
                                 }
                             }
@@ -513,6 +522,12 @@ fun POSScreen(
                 Row(Modifier.fillMaxSize().padding(padding)) {
                     Column(Modifier.weight(3f).fillMaxHeight()) {
                         resale?.let { ResellerSaleBanner(it, onEnd = { viewModel.endResellerSale() }) }
+                        HeldCartsBar(
+                            held = state.heldCarts,
+                            busy = state.isHoldBusy,
+                            onResume = { h -> user?.let { viewModel.resumeHeldCart(companyId, h, it) } },
+                            onDiscard = { discardTarget = it }
+                        )
                         CategoryFilterChips(
                             categories = state.posCategories,
                             selectedFilter = selectedFilter,
@@ -558,6 +573,7 @@ fun POSScreen(
                         onRemoveLine = { key -> viewModel.removeLine(key) },
                         packagingItems = state.packagingItems,
                         onAddPackaging = { viewModel.addPackagingToCart(it) },
+                        onHold = { holdDialogOpen = true },
                         onCheckout = { paymentOpen = true },
                         highlightItem = highlightItem,
                         highlightAt = highlightAt,
@@ -569,6 +585,12 @@ fun POSScreen(
             } else {
                 Column(Modifier.fillMaxSize().padding(padding)) {
                     resale?.let { ResellerSaleBanner(it, onEnd = { viewModel.endResellerSale() }) }
+                    HeldCartsBar(
+                        held = state.heldCarts,
+                        busy = state.isHoldBusy,
+                        onResume = { h -> user?.let { viewModel.resumeHeldCart(companyId, h, it) } },
+                        onDiscard = { discardTarget = it }
+                    )
                     CategoryFilterChips(
                         categories = state.posCategories,
                         selectedFilter = selectedFilter,
@@ -640,6 +662,9 @@ fun POSScreen(
                                         style = MaterialTheme.typography.titleLarge
                                     )
                                 }
+                                IconButton(onClick = { holdDialogOpen = true }) {
+                                    Icon(Icons.Default.PauseCircle, "Poner en espera", tint = Color.White)
+                                }
                                 Button(
                                     onClick = { paymentOpen = true },
                                     colors = ButtonDefaults.buttonColors(
@@ -660,6 +685,31 @@ fun POSScreen(
     }
 
     // ── Dialogs ────────────────────────────────────────────────────
+
+    if (holdDialogOpen) {
+        HoldCartDialog(
+            suggested = com.bakery.erp.model.nextHeldCartLabel(state.heldCarts),
+            count = state.heldCarts.size,
+            onDismiss = { holdDialogOpen = false },
+            onConfirm = { name ->
+                holdDialogOpen = false
+                user?.let { viewModel.holdCart(companyId, name, it) }
+            }
+        )
+    }
+    discardTarget?.let { h ->
+        DiscardHeldCartDialog(
+            held = h,
+            onDismiss = { discardTarget = null },
+            onConfirm = {
+                discardTarget = null
+                user?.let { viewModel.discardHeldCart(companyId, h, it) }
+            }
+        )
+    }
+    if (closeBlockedOpen) {
+        CloseBlockedByHeldDialog(held = state.heldCarts, onDismiss = { closeBlockedOpen = false })
+    }
 
     if (pickerSearchOpen) {
         ProductPickerDialog(
@@ -850,6 +900,7 @@ fun POSScreen(
                 onRemoveLine = { key -> viewModel.removeLine(key) },
                 packagingItems = state.packagingItems,
                 onAddPackaging = { viewModel.addPackagingToCart(it) },
+                onHold = { cartSheetOpen = false; holdDialogOpen = true },
                 onCheckout = {
                     cartSheetOpen = false
                     paymentOpen = true
@@ -1392,6 +1443,8 @@ private fun CartPanel(
     /** Empaques que se cobran (la bolsa); vacío = la empresa no cobra empaque. */
     packagingItems: List<PackagingItem> = emptyList(),
     onAddPackaging: (PackagingItem) -> Unit = {},
+    /** Guarda el carrito como cuenta en espera para atender al siguiente cliente. */
+    onHold: () -> Unit = {},
     /** Renglón al que acaba de llegar el vuelo ("productId" o "grp_<id>") y cuándo. */
     highlightItem: String? = null,
     highlightAt: Long = 0L,
@@ -1477,14 +1530,27 @@ private fun CartPanel(
                  color = MaterialTheme.colorScheme.primary)
         }
         Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        // El cliente fue por más pan: se guarda la cuenta y se atiende al siguiente.
+        OutlinedButton(
+            onClick = onHold,
+            enabled = cart.isNotEmpty(),
+            contentPadding = PaddingValues(horizontal = 12.dp),
+            modifier = Modifier.height(56.dp)
+        ) {
+            Icon(Icons.Default.PauseCircle, null, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("En espera")
+        }
         Button(
             onClick = onCheckout,
             enabled = cart.isNotEmpty() && total > 0,
-            modifier = Modifier.fillMaxWidth().height(56.dp)
+            modifier = Modifier.weight(1f).height(56.dp)
         ) {
             Text("Cobrar Q ${total.fmtMoney(2)}",
                  style = MaterialTheme.typography.titleMedium,
                  fontWeight = FontWeight.Bold)
+        }
         }
     }
 }

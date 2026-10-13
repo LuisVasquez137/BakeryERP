@@ -24,6 +24,8 @@ import com.bakery.erp.model.FinishedProductStock
 import com.bakery.erp.model.isIngredientBacked
 import com.bakery.erp.model.POSCategory
 import com.bakery.erp.model.PackagingItem
+import com.bakery.erp.model.itemsSummary
+import com.bakery.erp.model.total
 import com.bakery.erp.model.groupDisplayName
 import com.bakery.erp.model.PriceList
 import com.bakery.erp.model.PriceListType
@@ -124,6 +126,10 @@ data class POSUiState(
     val packagingItems: List<PackagingItem> = emptyList(),
     /** Reglas de tarjeta de la empresa (mínimo y recargo). Por defecto: ninguna. */
     val cardRules: com.bakery.erp.model.CardPaymentRules = com.bakery.erp.model.CardPaymentRules(),
+    /** Cuentas en espera de ESTE turno, la más vieja primero. Ver [com.bakery.erp.model.HeldCart]. */
+    val heldCarts: List<com.bakery.erp.model.HeldCart> = emptyList(),
+    /** Guardando, retomando o descartando una cuenta en espera. */
+    val isHoldBusy: Boolean = false,
     /** Total de categorías que existen en la empresa (sin filtrar por sucursal) — para diagnóstico. */
     val totalCategoriesCount: Int = 0,
     val cart: List<CartLine> = emptyList(),
@@ -256,7 +262,11 @@ class POSViewModel(
     /** Empaques que se cobran en caja (la bolsa). */
     private val packagingItemRepository: PackagingItemRepository,
     /** Mínimo y recargo del pago con tarjeta. */
-    private val paymentRulesRepository: com.bakery.erp.domain.PaymentRulesRepository
+    private val paymentRulesRepository: com.bakery.erp.domain.PaymentRulesRepository,
+    /** Cuentas en espera del turno. */
+    private val heldCartRepository: com.bakery.erp.domain.HeldCartRepository,
+    /** Bitácora de cajas: descartar una cuenta en espera queda registrado. */
+    private val cashAuditRepository: com.bakery.erp.domain.CashAuditRepository
 ) : ViewModel() {
 
     private var organizationName: String = ""
@@ -270,6 +280,7 @@ class POSViewModel(
     private var pendingObserveJob: Job? = null
     private var packagingObserveJob: Job? = null
     private var cardRulesObserveJob: Job? = null
+    private var heldObserveJob: Job? = null
     private var retailPriceListId: String = ""
     private var retailPriceFactor: Double? = null
 
@@ -320,6 +331,7 @@ class POSViewModel(
                 observePOSCategories(companyId, result.session.branchId)
                 observePackagingItems(companyId)
                 observeCardRules(companyId)
+                observeHeldCarts(companyId, result.session.id)
                 observeSession(companyId, result.session.id)
                 observePendingCollections(companyId, result.session.branchId)
                 loadPopularity(companyId, result.session.branchId)
@@ -424,6 +436,160 @@ class POSViewModel(
             paymentRulesRepository.observeCardRules(companyId)
                 .catch { emit(com.bakery.erp.model.CardPaymentRules()) }
                 .collect { rules -> _uiState.update { it.copy(cardRules = rules) } }
+        }
+    }
+
+    private fun observeHeldCarts(companyId: String, sessionId: String) {
+        heldObserveJob?.cancel()
+        heldObserveJob = viewModelScope.launch {
+            heldCartRepository.observeForSession(companyId, sessionId)
+                .catch { e -> _uiState.update { it.copy(error = e.message) } }
+                .collect { list -> _uiState.update { it.copy(heldCarts = list) } }
+        }
+    }
+
+    // ── Cuentas en espera ─────────────────────────────────────────────────
+
+    private fun heldCartFrom(
+        cart: List<CartLine>, label: String, session: com.bakery.erp.model.CashSession,
+        resale: ResellerSale?, user: User
+    ) = com.bakery.erp.model.HeldCart(
+        branchId = session.branchId,
+        registerId = session.registerId,
+        sessionId = session.id,
+        label = label,
+        lines = cart.map { l ->
+            com.bakery.erp.model.HeldCartLine(
+                key = l.key, productId = l.productId, productName = l.productName,
+                quantity = l.quantity, unitPrice = l.unitPrice, priceListId = l.priceListId,
+                priceSource = l.priceSource, quickGroupId = l.quickGroupId,
+                pendingSaleId = l.pendingSaleId, packagingItemId = l.packagingItemId
+            )
+        },
+        resellerId = resale?.customer?.id.orEmpty(),
+        resellerName = resale?.customer?.name.orEmpty(),
+        createdByName = user.displayName
+    )
+
+    /**
+     * Guarda el carrito como cuenta en espera y deja la caja libre para el siguiente cliente.
+     * [label] vacío = "Cuenta N". La venta a revendedor también se suelta: el siguiente de la fila
+     * es de mostrador.
+     */
+    fun holdCart(companyId: String, label: String, currentUser: User) {
+        val st = _uiState.value
+        val session = st.session ?: return
+        if (st.cart.isEmpty() || st.isHoldBusy) return
+        if (st.heldCarts.size >= com.bakery.erp.model.MAX_HELD_CARTS) {
+            _uiState.update {
+                it.copy(error = "Ya hay ${com.bakery.erp.model.MAX_HELD_CARTS} cuentas en espera. Cobrá o descartá alguna primero.")
+            }
+            return
+        }
+        val name = label.trim().ifEmpty { com.bakery.erp.model.nextHeldCartLabel(st.heldCarts) }
+        val held = heldCartFrom(st.cart, name, session, st.resellerSale, currentUser)
+        viewModelScope.launch {
+            _uiState.update { it.copy(isHoldBusy = true) }
+            runCatching { heldCartRepository.save(companyId, held) }
+                .onSuccess {
+                    _uiState.update {
+                        it.copy(isHoldBusy = false, cart = emptyList(), resellerSale = null,
+                            notice = "«$name» quedó en espera")
+                    }
+                }
+                .onFailure { e ->
+                    // El carrito sigue en pantalla: no se pierde nada si no se pudo guardar.
+                    _uiState.update { it.copy(isHoldBusy = false, error = "No se pudo poner en espera: ${e.message}") }
+                }
+        }
+    }
+
+    /**
+     * Retoma una cuenta en espera. Si hay otro carrito a medias, ése pasa a espera en su lugar
+     * (intercambio): nunca se borra nada por tocar una ficha.
+     */
+    fun resumeHeldCart(companyId: String, held: com.bakery.erp.model.HeldCart, currentUser: User) {
+        val st = _uiState.value
+        val session = st.session ?: return
+        if (st.isHoldBusy) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isHoldBusy = true) }
+            runCatching {
+                // Primero se guarda el carrito actual: si eso falla, nada cambió.
+                val current = _uiState.value
+                if (current.cart.isNotEmpty()) {
+                    val others = current.heldCarts.filter { it.id != held.id }
+                    heldCartRepository.save(companyId, heldCartFrom(current.cart,
+                        com.bakery.erp.model.nextHeldCartLabel(others + held), session, current.resellerSale, currentUser))
+                }
+                // Después se quita de espera la que se retoma, ANTES de ponerla en el carrito: si
+                // quedara en las dos partes, se podría cobrar dos veces.
+                heldCartRepository.delete(companyId, held.id)
+            }.onSuccess {
+                // Las cuentas del restaurante que otra caja recibió mientras tanto ya no se cobran acá.
+                val pending = _uiState.value.pendingCollections.map { it.id }.toSet()
+                val lines = held.lines.map { l ->
+                    CartLine(
+                        key = l.key, productId = l.productId, productName = l.productName,
+                        quantity = l.quantity, unitPrice = l.unitPrice, priceListId = l.priceListId,
+                        priceSource = l.priceSource.ifEmpty { SaleLinePriceSource.PRODUCT_SALE_PRICE },
+                        quickGroupId = l.quickGroupId, pendingSaleId = l.pendingSaleId,
+                        packagingItemId = l.packagingItemId
+                    )
+                }
+                val gone = lines.filter { it.isRestaurant && it.pendingSaleId !in pending }
+                _uiState.update {
+                    it.copy(
+                        isHoldBusy = false,
+                        cart = lines - gone.toSet(),
+                        resellerSale = null,
+                        error = if (gone.isNotEmpty())
+                            "Otra caja ya recibió ${gone.joinToString { g -> g.productName }}; se quitó de la cuenta."
+                        else it.error
+                    )
+                }
+                // Era venta a revendedor: se vuelve a ese modo, que además re-precia el carrito.
+                if (held.resellerId.isNotBlank()) {
+                    runCatching { externalCustomerRepository.getCustomers(companyId) }.getOrNull()
+                        ?.firstOrNull { c -> c.id == held.resellerId }
+                        ?.let { c -> startResellerSale(companyId, c) }
+                }
+            }.onFailure { e ->
+                _uiState.update { it.copy(isHoldBusy = false, error = "No se pudo retomar la cuenta: ${e.message}") }
+            }
+        }
+    }
+
+    /**
+     * Descarta una cuenta en espera (el cliente se fue). Primero queda en la bitácora —quién,
+     * cuándo, qué llevaba y por cuánto— y después se borra: el registro de control va antes.
+     */
+    fun discardHeldCart(companyId: String, held: com.bakery.erp.model.HeldCart, currentUser: User) {
+        val st = _uiState.value
+        val session = st.session ?: return
+        if (st.isHoldBusy) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isHoldBusy = true) }
+            runCatching {
+                cashAuditRepository.log(companyId, com.bakery.erp.model.CashAuditEvent(
+                    type = com.bakery.erp.model.CashAuditEventType.HELD_CART_DISCARDED,
+                    branchId = session.branchId,
+                    branchName = session.branchName,
+                    registerId = session.registerId,
+                    registerName = session.registerName,
+                    sessionId = session.id,
+                    userId = currentUser.id,
+                    userName = currentUser.displayName,
+                    employeeName = session.openedByEmployeeName,
+                    expectedCash = money(held.total),
+                    notes = "${held.label}: ${held.itemsSummary()}".take(500)
+                ))
+                heldCartRepository.delete(companyId, held.id)
+            }.onSuccess {
+                _uiState.update { it.copy(isHoldBusy = false, notice = "Se descartó «${held.label}»") }
+            }.onFailure { e ->
+                _uiState.update { it.copy(isHoldBusy = false, error = "No se pudo descartar: ${e.message}") }
+            }
         }
     }
 

@@ -376,6 +376,9 @@ describe('fase 4', () => {
     await assertFails(setDoc(doc(caj, 'companies/orgA/packagingItems/k1'), { name: 'Bolsa', salePrice: 0.25 }));
     await assertFails(setDoc(doc(caj, 'companies/orgA/paymentRules/card'), { surchargeMode: 'NEVER' }));
     await assertSucceeds(getDoc(doc(caj, 'companies/orgA/paymentRules/card')));
+    // Cuentas en espera: la cajera las guarda y las borra (retomar / descartar) sin permiso extra.
+    await assertSucceeds(setDoc(doc(caj, 'companies/orgA/heldCarts/h1'), { sessionId: 's1', label: 'Cuenta 1' }));
+    await assertSucceeds(deleteDoc(doc(caj, 'companies/orgA/heldCarts/h1')));
     await assertSucceeds(getDoc(doc(caj, 'companies/orgA/packagingItems/k1')));
     await assertFails(setDoc(doc(caj, 'companies/orgA/priceLists/l1'), { name: 'X' }));
     await assertFails(setDoc(doc(caj, 'companies/orgA/standardCosts/2026-11_p1'), { unitCost: 1 }));

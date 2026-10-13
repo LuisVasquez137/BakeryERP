@@ -388,3 +388,28 @@ Configurable al 100% por empresa (todas las sucursales): Inicio → **Pago con t
   adicional". Tests espejo en `CardPaymentRulesTest` y `nucXmlBuilder.test.js`.
 - **Reportes**: clave `srg_card`, fuera de top productos y de unidades; `cardSurchargeTotal` →
   sección "Recargo por tarjeta" del reporte de ventas.
+
+### Cuentas en espera (oct 2026)
+
+El cliente va por más pan a mitad del cobro: la cajera guarda el carrito, atiende al siguiente y
+lo retoma después. `HeldCart` en `companies/{c}/heldCarts` (renglones en arreglos paralelos),
+ligado al turno (`sessionId`). Decisiones del dueño: **de cada caja**, descartar **solo se
+registra** (no pide permiso) y **no se cierra el turno con cuentas en espera**.
+
+- **Poner en espera**: botón "En espera" junto a "Cobrar" en el carrito (en teléfono, ícono de
+  pausa en la barra azul). Nombre opcional ("Señora de rojo"); vacío = "Cuenta N"
+  (`nextHeldCartLabel`). Guarda también el modo revendedor. Máximo `MAX_HELD_CARTS` = 5.
+- **Fila "En espera"** arriba del catálogo (`HeldCartsBar`): nombre, total y minutos. Un toque
+  retoma; si hay otro carrito a medias, ése pasa a espera (**intercambio**, nunca se borra nada).
+  Orden en `resumeHeldCart`: guardar el carrito actual → borrar la que se retoma → ponerla en el
+  carrito; así nunca queda en las dos partes (se podría cobrar dos veces). Las cuentas del
+  restaurante que otra caja recibió mientras tanto se quitan al retomar. Si era revendedor, vuelve
+  a ese modo (`startResellerSale`, que re-precia).
+- **No toca inventario**: el stock se mueve al cobrar, como siempre.
+- **Descartar** (✕ en la ficha, con confirmación): primero `CashAuditEventType.HELD_CART_DISCARDED`
+  en la bitácora (monto en `expectedCash`, renglones en `notes`) y después se borra. Es el control
+  contra cobrar en efectivo, dejar la cuenta en espera y descartarla.
+- **Cierre**: el POS no navega al cierre con cuentas en espera (`CloseBlockedByHeldDialog`) y
+  `CashSessionViewModel.closeSession` lo revalida contra Firestore. El cierre automático de cajas
+  olvidadas no las toca: quedan huérfanas de un turno cerrado y ya no se ven.
+- Tests: `HeldCartTest`; reglas: la cajera las guarda y borra (colección genérica, sin cambio).

@@ -123,6 +123,7 @@ actual fun createAppViewModels(): AppViewModels {
     val finishedStockRepo = FirebaseFinishedStockRepository(firestore)
     val notificationRepo = FirebaseNotificationRepository(firestore)
     val cashAuditRepo = com.bakery.erp.data.FirebaseCashAuditRepository(firestore)
+    val heldCartRepo = com.bakery.erp.data.FirebaseHeldCartRepository(firestore)
     val dispatchRepo = FirebaseDispatchRepository(firestore, productionRepo, priceListRepo, finishedStockRepo)
     val deliveryRepo = FirebaseDeliveryRepository(firestore, dispatchRepo)
     val posCategoryRepo = FirebasePOSCategoryRepository(firestore)
@@ -192,11 +193,11 @@ actual fun createAppViewModels(): AppViewModels {
             finishedStockRepo, ingredientRepo, priceListRepo, branchRepo,
             JsReceiptPrinter(), authRepo, creditRepo, felRepo,
             com.bakery.erp.data.FirebaseCustomerDepositRepository(firestore), customerOrderRepo,
-            externalCustomerRepo, packagingItemRepo, paymentRulesRepo
+            externalCustomerRepo, packagingItemRepo, paymentRulesRepo, heldCartRepo, cashAuditRepo
         ),
         cashSession = CashSessionViewModel(
             cashSessionRepo, cashRegisterRepo, branchRepo, dailyCloseRepo, purchaseRepo,
-            cashAuditRepo, notificationRepo, employeeRepo, saleRepo, employeeAccessRepo
+            cashAuditRepo, notificationRepo, employeeRepo, saleRepo, employeeAccessRepo, heldCartRepo
         ),
         saleHistory = SaleHistoryViewModel(saleRepo, cashSessionRepo, branchRepo, felRepo, JsReceiptPrinter(), authRepo),
         cashRegisterAdmin = CashRegisterAdminViewModel(cashRegisterRepo, branchRepo, cashSessionRepo),
