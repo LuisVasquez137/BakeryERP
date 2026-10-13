@@ -46,7 +46,7 @@ const empleadoRef = (companyId, employeeId) => db().doc(`companies/${companyId}/
 
 /** Devuelve el motivo por el que el PIN no sirve, o null si sirve. */
 function motivoPinInvalido(pin) {
-  if (typeof pin !== "string" || !/^\d{4,6}$/.test(pin)) return "El PIN debe tener de 4 a 6 números.";
+  if (typeof pin !== "string" || !/^\d{4}$/.test(pin)) return "El PIN debe tener 4 números.";
   if (/^(\d)\1+$/.test(pin)) return "El PIN no puede ser un mismo número repetido.";
   const digitos = [...pin].map(Number);
   const pasos = digitos.slice(1).map((d, i) => d - digitos[i]);

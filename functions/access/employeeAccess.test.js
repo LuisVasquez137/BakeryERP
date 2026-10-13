@@ -3,9 +3,9 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { _internos: P } = require("./employeeAccess");
 
-test("PIN válido: 4 a 6 números, ni repetidos ni en serie", () => {
-  for (const ok of ["1357", "2580", "907153", "13579", "1243"]) assert.equal(P.motivoPinInvalido(ok), null, ok);
-  for (const malo of ["123", "1234567", "12a4", "", null, 1357, "1111", "000000", "1234", "4321", "345678", "987654"]) {
+test("PIN válido: 4 números, ni repetidos ni en serie", () => {
+  for (const ok of ["1357", "2580", "1243"]) assert.equal(P.motivoPinInvalido(ok), null, ok);
+  for (const malo of ["123", "13579", "907153", "1234567", "12a4", "", null, 1357, "1111", "000000", "1234", "4321", "345678", "987654"]) {
     assert.notEqual(P.motivoPinInvalido(malo), null, String(malo));
   }
 });

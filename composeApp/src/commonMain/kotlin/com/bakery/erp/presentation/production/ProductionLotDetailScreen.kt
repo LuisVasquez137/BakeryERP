@@ -45,6 +45,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.domain.BluetoothPrinterManager
 import com.bakery.erp.domain.DocumentPrinter
+import com.bakery.erp.domain.PIN_LENGTH
 import com.bakery.erp.model.CustomerLineSpec
 import com.bakery.erp.model.CustomerOrderType
 import com.bakery.erp.model.PreparationBatch
@@ -1612,7 +1613,7 @@ private fun StartShiftDialog(
                     Text("Inicia: $operatorName", fontWeight = FontWeight.SemiBold, color = BrandColors.Primary)
                     OutlinedTextField(
                         value = pin,
-                        onValueChange = { v -> pin = v.filter { it.isDigit() }.take(6) },
+                        onValueChange = { v -> pin = v.filter { it.isDigit() }.take(PIN_LENGTH) },
                         label = { Text("Tu PIN") },
                         singleLine = true,
                         enabled = !isStarting,
@@ -1634,7 +1635,7 @@ private fun StartShiftDialog(
         confirmButton = {
             Button(
                 onClick = { onStart(pin) },
-                enabled = !isStarting && (operatorName == null || pin.length >= 4),
+                enabled = !isStarting && (operatorName == null || pin.length == PIN_LENGTH),
                 modifier = Modifier.fillMaxWidth().height(48.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1565C0))
             ) {

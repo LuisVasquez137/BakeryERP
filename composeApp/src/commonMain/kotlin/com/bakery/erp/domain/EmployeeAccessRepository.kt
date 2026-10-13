@@ -32,8 +32,11 @@ data class VerifiedEmployee(
  * Reglas del PIN, iguales a las del servidor (`motivoPinInvalido`), para avisar antes de
  * llamar. El servidor vuelve a validar: esto es solo para no hacer esperar a nadie.
  */
+/** Largo único del PIN de colaborador (igual que en el servidor). */
+const val PIN_LENGTH = 4
+
 fun pinProblem(pin: String): String? {
-    if (pin.length !in 4..6 || !pin.all { it.isDigit() }) return "El PIN debe tener de 4 a 6 números."
+    if (pin.length != PIN_LENGTH || !pin.all { it.isDigit() }) return "El PIN debe tener $PIN_LENGTH números."
     if (pin.all { it == pin[0] }) return "El PIN no puede ser un mismo número repetido."
     val steps = pin.zipWithNext { a, b -> b.digitToInt() - a.digitToInt() }
     if (steps.all { it == 1 } || steps.all { it == -1 }) return "El PIN no puede ser una serie seguida (1234, 4321…)."

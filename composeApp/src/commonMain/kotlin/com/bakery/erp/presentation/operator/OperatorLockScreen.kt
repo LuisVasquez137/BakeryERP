@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -55,8 +56,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.bakery.erp.domain.PIN_LENGTH
 import com.bakery.erp.model.Employee
 import com.bakery.erp.model.OperatorSession
 import com.bakery.erp.model.User
@@ -291,62 +294,102 @@ private fun PinEntry(
         else -> "Escribe tu PIN"
     }
 
-    Column(
-        Modifier.widthIn(max = 420.dp).fillMaxWidth().padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Row(Modifier.fillMaxWidth()) {
-            TextButton(onClick = onBack, enabled = !isWorking) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("No soy yo")
-            }
-        }
-        Avatar(employee, 80)
+    val identity: @Composable (avatarDp: Int) -> Unit = { avatarDp ->
+        Avatar(employee, avatarDp)
         Spacer(Modifier.height(8.dp))
-        Text(employee.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        Text(employee.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
         Spacer(Modifier.height(4.dp))
         Text(prompt, color = BrandColors.MutedSlate, textAlign = TextAlign.Center)
         Spacer(Modifier.height(16.dp))
-
-        // Puntos: 6 casillas; las que no se usan quedan como contorno tenue.
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            repeat(6) { i ->
-                val filled = i < digits.length
-                Box(
-                    Modifier
-                        .size(16.dp)
-                        .clip(CircleShape)
-                        .background(if (filled) BrandColors.Primary else BrandColors.Ivory)
-                        .border(1.5.dp, if (i < 4 || filled) BrandColors.Primary else BrandColors.Outline, CircleShape)
-                )
-            }
-        }
+        PinDots(digits.length)
         Box(Modifier.height(44.dp).padding(top = 8.dp), contentAlignment = Alignment.Center) {
             if (error != null) {
                 Text(error, color = BrandColors.Danger, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
             }
         }
+    }
+    val notMe: @Composable () -> Unit = {
+        TextButton(onClick = onBack, enabled = !isWorking) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("No soy yo")
+        }
+    }
+    val pad: @Composable (keySize: Dp) -> Unit = { keySize ->
+        PinPad(
+            keySize = keySize,
+            digits = digits,
+            isWorking = isWorking,
+            onDigit = { onTyping(); digits += it },
+            onDelete = { digits = digits.dropLast(1) },
+            onOk = { val pin = digits; digits = ""; onSubmit(pin) }
+        )
+    }
 
-        val rows = listOf(listOf("1", "2", "3"), listOf("4", "5", "6"), listOf("7", "8", "9"), listOf("<", "0", "OK"))
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            rows.forEach { row ->
-                Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                    row.forEach { key ->
-                        when (key) {
-                            "<" -> PadKey(icon = Icons.AutoMirrored.Filled.Backspace, enabled = digits.isNotEmpty() && !isWorking) {
-                                digits = digits.dropLast(1)
-                            }
-                            "OK" -> PadKey(icon = Icons.Default.Check, enabled = digits.length >= 4 && !isWorking, primary = true) {
-                                val pin = digits
-                                digits = ""
-                                onSubmit(pin)
-                            }
-                            else -> PadKey(label = key, enabled = digits.length < 6 && !isWorking) {
-                                onTyping()
-                                digits += key
-                            }
-                        }
+    // Todo tiene que caber sin scroll: la tecla se achica según el alto que haya.
+    BoxWithConstraints(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.TopCenter) {
+        val short = maxHeight < 420.dp
+        if (maxWidth > maxHeight) {
+            // Horizontal (tablet acostada): quién es a la izquierda, teclado a la derecha.
+            val keySize = ((maxHeight - PAD_GAP * 3) / 4).coerceIn(48.dp, 76.dp)
+            Row(
+                Modifier.widthIn(max = 820.dp).fillMaxSize(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                    notMe()
+                    identity(if (short) 56 else 80)
+                }
+                pad(keySize)
+            }
+        } else {
+            // Vertical: lo de arriba ocupa ~300dp; el resto se reparte en 4 filas de teclas.
+            val keySize = ((maxHeight - 300.dp - PAD_GAP * 3) / 4).coerceIn(48.dp, 76.dp)
+            Column(Modifier.widthIn(max = 420.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Row(Modifier.fillMaxWidth()) { notMe() }
+                identity(if (keySize < 64.dp) 56 else 80)
+                pad(keySize)
+            }
+        }
+    }
+}
+
+private val PAD_GAP = 12.dp
+
+@Composable
+private fun PinDots(filledCount: Int) {
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        repeat(PIN_LENGTH) { i ->
+            Box(
+                Modifier
+                    .size(16.dp)
+                    .clip(CircleShape)
+                    .background(if (i < filledCount) BrandColors.Primary else BrandColors.Ivory)
+                    .border(1.5.dp, BrandColors.Primary, CircleShape)
+            )
+        }
+    }
+}
+
+@Composable
+private fun PinPad(
+    keySize: Dp,
+    digits: String,
+    isWorking: Boolean,
+    onDigit: (String) -> Unit,
+    onDelete: () -> Unit,
+    onOk: () -> Unit
+) {
+    val rows = listOf(listOf("1", "2", "3"), listOf("4", "5", "6"), listOf("7", "8", "9"), listOf("<", "0", "OK"))
+    Column(verticalArrangement = Arrangement.spacedBy(PAD_GAP)) {
+        rows.forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(keySize / 4)) {
+                row.forEach { key ->
+                    when (key) {
+                        "<" -> PadKey(size = keySize, icon = Icons.AutoMirrored.Filled.Backspace, enabled = digits.isNotEmpty() && !isWorking, onClick = onDelete)
+                        "OK" -> PadKey(size = keySize, icon = Icons.Default.Check, enabled = digits.length == PIN_LENGTH && !isWorking, primary = true, onClick = onOk)
+                        else -> PadKey(size = keySize, label = key, enabled = digits.length < PIN_LENGTH && !isWorking) { onDigit(key) }
                     }
                 }
             }
@@ -356,6 +399,7 @@ private fun PinEntry(
 
 @Composable
 private fun PadKey(
+    size: Dp,
     label: String? = null,
     icon: ImageVector? = null,
     enabled: Boolean,
@@ -370,7 +414,7 @@ private fun PadKey(
     val fg = if (primary && enabled) BrandColors.Ivory else BrandColors.Primary
     Box(
         modifier = Modifier
-            .size(76.dp)
+            .size(size)
             .clip(CircleShape)
             .background(bg)
             .border(1.dp, BrandColors.Primary.copy(alpha = 0.2f), CircleShape)
@@ -378,7 +422,7 @@ private fun PadKey(
         contentAlignment = Alignment.Center
     ) {
         if (label != null) {
-            Text(label, fontSize = 28.sp, fontWeight = FontWeight.SemiBold, color = fg.copy(alpha = if (enabled) 1f else 0.4f))
+            Text(label, fontSize = (size.value * 0.37f).sp, fontWeight = FontWeight.SemiBold, color = fg.copy(alpha = if (enabled) 1f else 0.4f))
         } else if (icon != null) {
             Icon(icon, null, tint = fg.copy(alpha = if (enabled || primary) 1f else 0.4f))
         }

@@ -1,5 +1,6 @@
 package com.bakery.erp.presentation.employees
 
+import com.bakery.erp.domain.PIN_LENGTH
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -202,7 +203,7 @@ internal fun SetPinDialog(
     var pin by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf("") }
     var typedByEmployee by remember { mutableStateOf(false) }
-    val digitsOnly = { s: String -> s.filter { it.isDigit() }.take(6) }
+    val digitsOnly = { s: String -> s.filter { it.isDigit() }.take(PIN_LENGTH) }
 
     AlertDialog(
         onDismissRequest = { if (!isSaving) onDismiss() },
@@ -210,7 +211,7 @@ internal fun SetPinDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    "De 4 a 6 números. No sirven repetidos (1111) ni en serie (1234).",
+                    "De 4 números. No sirven repetidos (1111) ni en serie (1234).",
                     style = MaterialTheme.typography.bodySmall,
                     color = BrandColors.MutedSlate
                 )
@@ -254,7 +255,7 @@ internal fun SetPinDialog(
             }
         },
         confirmButton = {
-            Button(onClick = { onSave(pin, confirm, typedByEmployee) }, enabled = !isSaving && pin.length >= 4) {
+            Button(onClick = { onSave(pin, confirm, typedByEmployee) }, enabled = !isSaving && pin.length == PIN_LENGTH) {
                 if (isSaving) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
                 else Text("Guardar PIN")
             }

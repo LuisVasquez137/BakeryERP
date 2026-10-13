@@ -86,8 +86,8 @@ class OperatorSessionTest {
 
     @Test
     fun `reglas del PIN iguales a las del servidor`() {
-        listOf("1357", "2580", "907153", "1243").forEach { assertNull(pinProblem(it), it) }
-        listOf("123", "1234567", "12a4", "1111", "000000", "1234", "4321", "345678").forEach {
+        listOf("1357", "2580", "1243").forEach { assertNull(pinProblem(it), it) }
+        listOf("123", "13579", "907153", "12a4", "1111", "0000", "1234", "4321").forEach {
             assertNotNull(pinProblem(it), it)
         }
     }

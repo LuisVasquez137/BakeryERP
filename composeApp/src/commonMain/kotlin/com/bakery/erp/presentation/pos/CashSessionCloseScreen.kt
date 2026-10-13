@@ -1,5 +1,6 @@
 package com.bakery.erp.presentation.pos
 
+import com.bakery.erp.domain.PIN_LENGTH
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -297,7 +298,7 @@ fun CashSessionCloseScreen(
                         )
                         OutlinedTextField(
                             value = receiverPin,
-                            onValueChange = { v -> receiverPin = v.filter { it.isDigit() }.take(6) },
+                            onValueChange = { v -> receiverPin = v.filter { it.isDigit() }.take(PIN_LENGTH) },
                             label = { Text("PIN de ${receiver.name}") },
                             singleLine = true,
                             visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
@@ -311,7 +312,7 @@ fun CashSessionCloseScreen(
             },
             confirmButton = {
                 TextButton(
-                    enabled = !needsReceiverPin || receiverPin.length >= 4,
+                    enabled = !needsReceiverPin || receiverPin.length == PIN_LENGTH,
                     onClick = {
                         showConfirm = false
                         viewModel.closeSession(

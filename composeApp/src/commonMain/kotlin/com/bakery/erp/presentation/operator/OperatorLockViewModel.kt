@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.bakery.erp.domain.EmployeeAccessRepository
 import com.bakery.erp.domain.EmployeeRepository
 import com.bakery.erp.domain.VerifiedEmployee
+import com.bakery.erp.domain.PIN_LENGTH
 import com.bakery.erp.domain.pinProblem
 import com.bakery.erp.model.Employee
 import com.bakery.erp.model.EmployeePinStatus
@@ -104,7 +105,7 @@ class OperatorLockViewModel(
     }
 
     private fun verify(companyId: String, accountId: String, employee: Employee, pin: String) {
-        if (pin.length < 4) { _uiState.update { it.copy(error = "El PIN tiene al menos 4 números.") }; return }
+        if (pin.length != PIN_LENGTH) { _uiState.update { it.copy(error = "El PIN tiene $PIN_LENGTH números.") }; return }
         viewModelScope.launch {
             _uiState.update { it.copy(isWorking = true, error = null) }
             runCatching { accessRepository.verifyPin(companyId, employee.id, pin) }
