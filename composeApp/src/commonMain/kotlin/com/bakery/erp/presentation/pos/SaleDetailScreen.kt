@@ -276,7 +276,7 @@ private fun SaleHeaderCard(sale: Sale, canSeeValue: Boolean) {
 }
 
 @Composable
-private fun SaleLineRow(line: SaleLine, canSeeValue: Boolean) {
+internal fun SaleLineRow(line: SaleLine, canSeeValue: Boolean) {
     Card(
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
@@ -287,8 +287,11 @@ private fun SaleLineRow(line: SaleLine, canSeeValue: Boolean) {
                 Text("${line.quantity.fmtMoney(0)} × Q ${line.unitPrice.fmtMoney(2)}",
                      style = MaterialTheme.typography.bodySmall,
                      color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (!line.stockDeducted) {
-                    Text("Express — pendiente de asignación al cierre",
+                // Solo el pan vendido por grupo ("Pan Q0.50") espera al conteo del cierre para
+                // saber qué panes fueron. Empaques, recargo y restaurante no llevan inventario y
+                // no tienen nada pendiente.
+                if (!line.stockDeducted && !line.quickGroupId.isNullOrEmpty()) {
+                    Text("Se descuenta del inventario en el conteo del cierre",
                          style = MaterialTheme.typography.labelSmall,
                          color = MaterialTheme.colorScheme.tertiary)
                 }

@@ -413,3 +413,31 @@ registra** (no pide permiso) y **no se cierra el turno con cuentas en espera**.
   `CashSessionViewModel.closeSession` lo revalida contra Firestore. El cierre automático de cajas
   olvidadas no las toca: quedan huérfanas de un turno cerrado y ya no se ven.
 - Tests: `HeldCartTest`; reglas: la cajera las guarda y borra (colección genérica, sin cambio).
+
+## Ventas de esta caja + historial por cobro (oct 2026)
+
+**Problema:** el cliente pide su factura después de cobrar y había que buscar la venta entre las
+de toda la sucursal (todas las cajas mezcladas), y el pan y la cuenta del restaurante pagados
+juntos salían como dos ventas separadas.
+
+- **`model/SaleOrder.kt`**: `ordersFromSales` agrupa por `checkoutId` (sin él: `sale_<id>`), pan
+  primero y restaurante después; excluye `PENDING_COLLECTION`. `uninvoicedSales` = lo que todavía
+  se puede facturar (la cuenta que ComandaYa facturó trae `EXTERNA` y queda fuera).
+  `matches(query)`: números = monto (prefijo de `35.00`, del cobro o de una de sus ventas) o
+  número de orden; letras = mesa, cajero, revendedor, receptor.
+- **Historial (`SaleHistoryListScreen`) lista cobros**, con chips de caja, búsqueda y filtro
+  Todas / Sin factura / Con factura. Con `posBranchId/posRegisterId` es "Ventas de la caja":
+  sucursal fija, "Esta caja" marcada, "Toda la sucursal" amplía. Ruta `pos/sales/{b}/{r}`,
+  permiso `OPERATE_POS` o `VIEW_SALES`. Montos por cobro visibles para quien opera la caja; los
+  totales del día siguen siendo solo de `VIEW_SALES_VALUE`.
+- **`SaleOrderDetailScreen`** (ruta `salesOrder/{key}`): el cobro sale de la lista en vivo
+  (`state.sales`), las líneas se cargan por venta. "Facturar este cobro" llama
+  `certifySales(uninvoicedIds)` = una factura para pan + restaurante (el servidor exige misma
+  sucursal; ya lo cumple porque ComandaYa entra en la sucursal de la caja). Anular/reemitir usan
+  la venta con factura: el servidor junta las demás de la factura anterior. Reimprimir arma un
+  ticket con el restaurante en un renglón, como el del cobro.
+- El VM del historial es compartido: `load()` (Home) limpia caja/filtros; `openForRegister` los
+  fija. La pantalla usa un `rememberSaveable initialized` para no resetear al volver del detalle.
+- **Encabezado de la caja**: a la vista restaurante (si hay cuentas), lupa, carrito (teléfono),
+  último cobro, anotar gasto y ⋮. Todo lo demás en el menú, igual en teléfono y tablet.
+- `SaleDetailScreen` (una venta) queda para los enlaces viejos.

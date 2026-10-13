@@ -12,6 +12,7 @@ import com.bakery.erp.model.Sale
 import com.bakery.erp.model.SaleLine
 import com.bakery.erp.model.User
 import com.bakery.erp.model.canAccessBranch
+import com.bakery.erp.model.isRestaurantSale
 import kotlin.time.Clock
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,8 +41,23 @@ data class SaleHistoryUiState(
     val isInvoiceBusy: Boolean = false,
     /** Resultado para el snackbar ("Factura anulada", "Nueva factura serie…"). */
     val notice: String? = null,
-    val isPrinting: Boolean = false
-)
+    val isPrinting: Boolean = false,
+    /** Caja de la lista de cobros. Vacío = todas las de la sucursal. */
+    val registerFilter: String = "",
+    val invoiceFilter: com.bakery.erp.model.OrderInvoiceFilter = com.bakery.erp.model.OrderInvoiceFilter.ALL,
+    /** Monto, número de orden, mesa o nombre (ver [com.bakery.erp.model.matches]). */
+    val query: String = "",
+    /**
+     * Abierta desde una caja ("Ventas de esta caja"): sucursal fija, la caja propia marcada y
+     * los montos visibles para quien cobra, que los necesita para encontrar la venta.
+     */
+    val posRegisterId: String = "",
+    /** Líneas por venta del cobro abierto en el detalle. */
+    val orderLines: Map<String, List<SaleLine>> = emptyMap(),
+    val isOrderLoading: Boolean = false
+) {
+    val posMode: Boolean get() = posRegisterId.isNotEmpty()
+}
 
 class SaleHistoryViewModel(
     private val saleRepository: SaleRepository,
@@ -64,19 +80,49 @@ class SaleHistoryViewModel(
     private var observeJob: Job? = null
 
     fun load(companyId: String, currentUser: User) {
+        // Desde el Home: todas las cajas, sin la caja propia de una sesión anterior.
+        _uiState.update {
+            it.copy(posRegisterId = "", registerFilter = "", invoiceFilter = com.bakery.erp.model.OrderInvoiceFilter.ALL, query = "")
+        }
+        loadBranches(companyId, currentUser, forcedBranchId = null)
+    }
+
+    /**
+     * "Ventas de esta caja": la sucursal de la caja, hoy, con la caja marcada. La cajera puede
+     * ampliar a toda la sucursal si el cliente pagó en otra caja.
+     */
+    fun openForRegister(companyId: String, currentUser: User, branchId: String, registerId: String) {
+        val today = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date
+        _uiState.update {
+            it.copy(
+                posRegisterId = registerId, registerFilter = registerId,
+                invoiceFilter = com.bakery.erp.model.OrderInvoiceFilter.ALL, query = "",
+                selectedBranchId = branchId, selectedDate = today
+            )
+        }
+        loadBranches(companyId, currentUser, forcedBranchId = branchId)
+    }
+
+    fun setRegisterFilter(registerId: String) { _uiState.update { it.copy(registerFilter = registerId) } }
+    fun setInvoiceFilter(f: com.bakery.erp.model.OrderInvoiceFilter) { _uiState.update { it.copy(invoiceFilter = f) } }
+    fun setQuery(q: String) { _uiState.update { it.copy(query = q) } }
+
+    private fun loadBranches(companyId: String, currentUser: User, forcedBranchId: String?) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             runCatching {
                 branchRepository.getBranches(companyId)
                     .filter { it.active }
-                    .filter { currentUser.canAccessBranch(it.id) }
+                    .filter { it.id == forcedBranchId || currentUser.canAccessBranch(it.id) }
                     .filter { BranchCapability.CAN_SELL in it.capabilities }
                     .sortedBy { it.name }
             }.onSuccess { branches ->
                 val now = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date
                 val current = _uiState.value.selectedBranchId
-                val nextSelected = if (current.isNotEmpty() && branches.any { it.id == current }) current
-                                   else branches.firstOrNull()?.id.orEmpty()
+                // La caja manda: su sucursal aunque el usuario no la tenga en su lista general.
+                val nextSelected = forcedBranchId
+                    ?: if (current.isNotEmpty() && branches.any { it.id == current }) current
+                       else branches.firstOrNull()?.id.orEmpty()
                 _uiState.update {
                     it.copy(
                         isLoading = false,
@@ -140,6 +186,80 @@ class SaleHistoryViewModel(
                 }
             }.onFailure { err ->
                 _uiState.update { it.copy(isDetailLoading = false, error = err.message) }
+            }
+        }
+    }
+
+    /** Líneas de cada venta del cobro, para el detalle (el cobro en sí sale de la lista en vivo). */
+    fun loadOrderLines(companyId: String, saleIds: List<String>) {
+        if (saleIds.isEmpty()) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isOrderLoading = true, error = null) }
+            runCatching { saleIds.associateWith { id -> saleRepository.getSaleLines(companyId, id) } }
+                .onSuccess { map -> _uiState.update { it.copy(isOrderLoading = false, orderLines = map) } }
+                .onFailure { e -> _uiState.update { it.copy(isOrderLoading = false, error = e.message) } }
+        }
+    }
+
+    /**
+     * Factura el cobro completo en UNA factura —el pan y la cuenta del restaurante juntos—, igual
+     * que al cobrar. Solo entran las ventas sin factura: lo que ComandaYa ya facturó queda fuera.
+     */
+    fun invoiceOrder(companyId: String, order: com.bakery.erp.model.SaleOrder, to: com.bakery.erp.model.FelInvoiceRequest) {
+        if (_uiState.value.isInvoiceBusy) return
+        val ids = order.uninvoicedSales.map { it.id }
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isInvoiceBusy = true, error = null) }
+            runCatching { felRepository.certifySales(companyId, ids, to, reissue = false) }
+                .onSuccess { r -> _uiState.update { it.copy(isInvoiceBusy = false, notice = reissueNotice(r)) } }
+                .onFailure { e -> _uiState.update { it.copy(isInvoiceBusy = false, error = readable(e, "No se pudo facturar.")) } }
+        }
+    }
+
+    /** Reimprime el cobro completo en un solo ticket, con la factura y el QR si la tiene. */
+    fun printOrder(companyId: String, order: com.bakery.erp.model.SaleOrder) {
+        if (_uiState.value.isPrinting) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isPrinting = true, error = null) }
+            runCatching {
+                val lines = _uiState.value.orderLines
+                val primary = order.primary
+                val branch = _uiState.value.branches.firstOrNull { it.id == primary.branchId }
+                val org = organizationName ?: authRepository.getOrganization(companyId)
+                    .map { it.name }.getOrDefault("").also { organizationName = it }
+                // La cuenta del restaurante va en un renglón, como en el ticket del cobro.
+                val receiptLines = order.sales.flatMap { s ->
+                    if (s.isRestaurantSale)
+                        listOf(com.bakery.erp.model.ReceiptLine(com.bakery.erp.model.restaurantSaleLabel(s), 1.0, s.total, s.total))
+                    else receiptLinesOf(lines[s.id].orEmpty(), invoiced = s.invoiceStatus.isNotBlank())
+                }
+                val combined = primary.copy(
+                    subtotal = order.sales.sumOf { it.subtotal },
+                    discount = order.sales.sumOf { it.discount },
+                    total = order.total,
+                    paymentMethod = order.paymentMethod,
+                    paymentBreakdown = if (order.paymentParts.size > 1) order.paymentParts else primary.paymentBreakdown
+                )
+                val base = saleReceiptData(
+                    sale = combined,
+                    lines = receiptLines,
+                    branchName = branch?.name ?: primary.branchName,
+                    branchLocation = branch?.location.orEmpty(),
+                    organizationName = org
+                )
+                val invoicedSale = order.invoicedSale
+                val invoice = if (invoicedSale?.invoiceStatus == com.bakery.erp.model.FelInvoiceStatus.CERTIFICADO)
+                    felRepository.getInvoice(companyId, invoicedSale.dteId)
+                        ?.takeIf { it.status == com.bakery.erp.model.FelInvoiceStatus.CERTIFICADO }
+                else null
+                val data = if (invoice == null) base
+                else base.copy(invoice = com.bakery.erp.model.receiptInvoiceFrom(invoice, formatReceiptTimestamp(invoice.certifiedAt)))
+                receiptPrinter.print(data).getOrThrow()
+            }.onSuccess {
+                _uiState.update { it.copy(isPrinting = false) }
+            }.onFailure { e ->
+                _uiState.update { it.copy(isPrinting = false, error = e.message ?: "No se pudo imprimir.") }
             }
         }
     }

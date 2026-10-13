@@ -118,6 +118,7 @@ import com.bakery.erp.presentation.pos.POSHomeScreen
 import com.bakery.erp.presentation.pos.POSScreen
 import com.bakery.erp.presentation.pos.SaleDetailScreen
 import com.bakery.erp.presentation.pos.SaleHistoryListScreen
+import com.bakery.erp.presentation.pos.SaleOrderDetailScreen
 import com.bakery.erp.presentation.pos.SpotCashCheckListScreen
 import com.bakery.erp.presentation.pos.SpotCashCheckScreen
 import com.bakery.erp.presentation.pos.admin.CashRegisterAdminScreen
@@ -419,6 +420,14 @@ sealed class Screen(val route: String) {
     object SaleHistoryList : Screen("sales")
     object SaleDetail : Screen("sales/{saleId}") {
         fun route(saleId: String) = "sales/$saleId"
+    }
+    /** Un cobro completo (pan + restaurante pagados juntos). */
+    object SaleOrderDetail : Screen("salesOrder/{orderKey}") {
+        fun route(orderKey: String) = "salesOrder/$orderKey"
+    }
+    /** "Ventas de esta caja", desde el punto de venta. */
+    object RegisterSales : Screen("pos/sales/{branchId}/{registerId}") {
+        fun route(branchId: String, registerId: String) = "pos/sales/$branchId/$registerId"
     }
     object POSCategoryAdminList : Screen("admin/posCategories")
     object PackagingAdmin : Screen("admin/packaging")
@@ -1312,6 +1321,7 @@ fun AppNavigation(
                     onNavigateToClose = { sid -> navController.navigate(Screen.CashSessionClose.route(sid)) },
                     onNavigateToCashExpense = { sid -> navController.navigate(Screen.CashExpenseForm.route(sid)) },
                     onNavigateToSessionDetail = { sid -> navController.navigate(Screen.CashSessionDetail.route(sid)) },
+                    onNavigateToRegisterSales = { b, r -> navController.navigate(Screen.RegisterSales.route(b, r)) },
                     authViewModel = viewModel,
                     viewModel = posViewModel,
                     cashSessionViewModel = cashSessionViewModel,
@@ -1371,9 +1381,46 @@ fun AppNavigation(
             RequirePermission(state.user, Permission.VIEW_SALES, onBack = { navController.popBackStack() }) {
                 SaleHistoryListScreen(
                     onNavigateBack = { navController.popBackStack() },
-                    onNavigateToDetail = { id -> navController.navigate(Screen.SaleDetail.route(id)) },
+                    onNavigateToDetail = { key -> navController.navigate(Screen.SaleOrderDetail.route(key)) },
                     authViewModel = viewModel,
                     viewModel = saleHistoryViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.RegisterSales.route,
+            arguments = listOf(
+                navArgument("branchId") { type = NavType.StringType },
+                navArgument("registerId") { type = NavType.StringType }
+            )
+        ) { backStackEntry ->
+            val branchId = backStackEntry.stringArg("branchId") ?: return@composable
+            val registerId = backStackEntry.stringArg("registerId") ?: return@composable
+            // Quien cobra encuentra la venta que el cliente viene a facturar sin el permiso del
+            // historial general.
+            RequirePermission(state.user, Permission.OPERATE_POS, Permission.VIEW_SALES, onBack = { navController.popBackStack() }) {
+                SaleHistoryListScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToDetail = { key -> navController.navigate(Screen.SaleOrderDetail.route(key)) },
+                    authViewModel = viewModel,
+                    viewModel = saleHistoryViewModel,
+                    posBranchId = branchId,
+                    posRegisterId = registerId
+                )
+            }
+        }
+        composable(
+            route = Screen.SaleOrderDetail.route,
+            arguments = listOf(navArgument("orderKey") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val orderKey = backStackEntry.stringArg("orderKey") ?: return@composable
+            RequirePermission(state.user, Permission.OPERATE_POS, Permission.VIEW_SALES, onBack = { navController.popBackStack() }) {
+                SaleOrderDetailScreen(
+                    orderKey = orderKey,
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = saleHistoryViewModel,
+                    bluetoothPrinterManager = bluetoothPrinterManager
                 )
             }
         }

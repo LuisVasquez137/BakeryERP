@@ -20,6 +20,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
@@ -90,6 +92,11 @@ fun POSScreen(
      * ni de deshacerlo sin cerrar la caja.
      */
     onNavigateToSessionDetail: (sessionId: String) -> Unit = {},
+    /**
+     * "Ventas de esta caja": encontrar el cobro que el cliente vuelve a reclamar (casi siempre
+     * para facturarlo) sin buscarlo entre las ventas de toda la sucursal.
+     */
+    onNavigateToRegisterSales: (branchId: String, registerId: String) -> Unit = { _, _ -> },
     authViewModel: AuthViewModel,
     viewModel: POSViewModel,
     cashSessionViewModel: CashSessionViewModel,
@@ -369,134 +376,79 @@ fun POSScreen(
                                 }
                             }
                         }
+                        // A la vista solo lo de cada rato (lupa, último cobro, gasto); el resto en
+                        // el menú, igual en teléfono y en tablet para encontrarlo siempre en el
+                        // mismo lugar. Revendedor no se pierde: su franja sale sobre el catálogo.
                         state.session?.let { sess ->
-                            if (compact) {
-                                IconButton(onClick = {
-                                    viewModel.loadRecentCheckouts(companyId)
-                                    lastCheckoutOpen = true
-                                }) {
-                                    Icon(Icons.Default.History, "Último cobro")
+                            IconButton(onClick = {
+                                viewModel.loadRecentCheckouts(companyId)
+                                lastCheckoutOpen = true
+                            }) {
+                                Icon(Icons.Default.History, "Último cobro")
+                            }
+                            IconButton(onClick = { onNavigateToCashExpense(sess.id) }) {
+                                Icon(Icons.Default.Receipt, "Anotar un gasto de esta caja")
+                            }
+                            Box {
+                                IconButton(onClick = { overflowOpen = true }) {
+                                    Icon(Icons.Default.MoreVert, "Más opciones")
                                 }
-                                Box {
-                                    IconButton(onClick = { overflowOpen = true }) {
-                                        Icon(Icons.Default.MoreVert, "Más opciones")
-                                    }
-                                    DropdownMenu(
-                                        expanded = overflowOpen,
-                                        onDismissRequest = { overflowOpen = false }
-                                    ) {
-                                        DropdownMenuItem(
-                                            text = { Text(if (resale != null) "Volver a mostrador" else "Venta a revendedor") },
-                                            onClick = { overflowOpen = false; toggleResellerSale() },
-                                            leadingIcon = { Icon(Icons.Default.Storefront, null) }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text("Anotar gasto") },
-                                            onClick = { overflowOpen = false; onNavigateToCashExpense(sess.id) },
-                                            leadingIcon = { Icon(Icons.Default.Receipt, null) }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text("Anotar ingreso") },
-                                            onClick = { overflowOpen = false; showIncome = true },
-                                            leadingIcon = { Icon(Icons.Default.Receipt, null) }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text("Anticipo de cliente") },
-                                            onClick = { overflowOpen = false; depositReceiveOpen = true },
-                                            leadingIcon = { Icon(Icons.Default.People, null) }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text("Anticipos pendientes") },
-                                            onClick = { overflowOpen = false; depositsListOpen = true },
-                                            leadingIcon = { Icon(Icons.Default.People, null) }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text("Movimientos de la caja") },
-                                            onClick = { overflowOpen = false; onNavigateToSessionDetail(sess.id) },
-                                            leadingIcon = { Icon(Icons.Default.Receipt, null) }
-                                        )
-                                        if (usesCredit && canCollectCredit) DropdownMenuItem(
-                                            text = { Text("Cobrar crédito") },
-                                            onClick = { overflowOpen = false; creditCollectOpen = true },
-                                            leadingIcon = { Icon(Icons.Default.People, null) }
-                                        )
-                                        if (usesCredit && canGiveAdvance) DropdownMenuItem(
-                                            text = { Text("Adelanto a colaborador") },
-                                            onClick = { overflowOpen = false; advanceOpen = true },
-                                            leadingIcon = { Icon(Icons.Default.People, null) }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text("Transferir efectivo") },
-                                            onClick = { overflowOpen = false; showTransfer = true },
-                                            leadingIcon = { Icon(Icons.Default.SwapHoriz, null) }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text("Cerrar caja") },
-                                            onClick = { overflowOpen = false; goToClose(sess.id) }
-                                        )
-                                    }
-                                }
-                            } else {
-                                IconButton(onClick = {
-                                    viewModel.loadRecentCheckouts(companyId)
-                                    lastCheckoutOpen = true
-                                }) {
-                                    Icon(Icons.Default.History, "Último cobro")
-                                }
-                                TextButton(onClick = { toggleResellerSale() }) {
-                                    Text(
-                                        if (resale != null) "Mostrador" else "Revendedor",
-                                        color = MaterialTheme.colorScheme.onPrimary
+                                DropdownMenu(
+                                    expanded = overflowOpen,
+                                    onDismissRequest = { overflowOpen = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("Ventas de esta caja") },
+                                        onClick = { overflowOpen = false; onNavigateToRegisterSales(sess.branchId, sess.registerId) },
+                                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.ReceiptLong, null) }
                                     )
-                                }
-                                IconButton(onClick = { onNavigateToCashExpense(sess.id) }) {
-                                    Icon(Icons.Default.Receipt, "Anotar un gasto de esta caja")
-                                }
-                                TextButton(onClick = { showIncome = true }) {
-                                    Text("Ingreso", color = MaterialTheme.colorScheme.onPrimary)
-                                }
-                                var depositMenu by remember { mutableStateOf(false) }
-                                Box {
-                                    TextButton(onClick = { depositMenu = true }) {
-                                        Text("Anticipos", color = MaterialTheme.colorScheme.onPrimary)
-                                    }
-                                    DropdownMenu(expanded = depositMenu, onDismissRequest = { depositMenu = false }) {
-                                        DropdownMenuItem(
-                                            text = { Text("Recibir anticipo") },
-                                            onClick = { depositMenu = false; depositReceiveOpen = true }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text("Anticipos pendientes") },
-                                            onClick = { depositMenu = false; depositsListOpen = true }
-                                        )
-                                    }
-                                }
-                                TextButton(onClick = { onNavigateToSessionDetail(sess.id) }) {
-                                    Text("Movimientos", color = MaterialTheme.colorScheme.onPrimary)
-                                }
-                                if (usesCredit && (canCollectCredit || canGiveAdvance)) {
-                                    var creditMenu by remember { mutableStateOf(false) }
-                                    Box {
-                                        TextButton(onClick = { creditMenu = true }) {
-                                            Text("Créditos", color = MaterialTheme.colorScheme.onPrimary)
-                                        }
-                                        DropdownMenu(expanded = creditMenu, onDismissRequest = { creditMenu = false }) {
-                                            if (canCollectCredit) DropdownMenuItem(
-                                                text = { Text("Cobrar crédito") },
-                                                onClick = { creditMenu = false; creditCollectOpen = true }
-                                            )
-                                            if (canGiveAdvance) DropdownMenuItem(
-                                                text = { Text("Adelanto a colaborador") },
-                                                onClick = { creditMenu = false; advanceOpen = true }
-                                            )
-                                        }
-                                    }
-                                }
-                                IconButton(onClick = { showTransfer = true }) {
-                                    Icon(Icons.Default.SwapHoriz, "Transferir efectivo a otra caja")
-                                }
-                                TextButton(onClick = { goToClose(sess.id) }) {
-                                    Text("Cerrar caja", color = MaterialTheme.colorScheme.onPrimary)
+                                    HorizontalDivider()
+                                    DropdownMenuItem(
+                                        text = { Text(if (resale != null) "Volver a mostrador" else "Venta a revendedor") },
+                                        onClick = { overflowOpen = false; toggleResellerSale() },
+                                        leadingIcon = { Icon(Icons.Default.Storefront, null) }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Anotar ingreso") },
+                                        onClick = { overflowOpen = false; showIncome = true },
+                                        leadingIcon = { Icon(Icons.Default.Receipt, null) }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Recibir anticipo") },
+                                        onClick = { overflowOpen = false; depositReceiveOpen = true },
+                                        leadingIcon = { Icon(Icons.Default.People, null) }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Anticipos pendientes") },
+                                        onClick = { overflowOpen = false; depositsListOpen = true },
+                                        leadingIcon = { Icon(Icons.Default.People, null) }
+                                    )
+                                    if (usesCredit && canCollectCredit) DropdownMenuItem(
+                                        text = { Text("Cobrar crédito") },
+                                        onClick = { overflowOpen = false; creditCollectOpen = true },
+                                        leadingIcon = { Icon(Icons.Default.People, null) }
+                                    )
+                                    if (usesCredit && canGiveAdvance) DropdownMenuItem(
+                                        text = { Text("Adelanto a colaborador") },
+                                        onClick = { overflowOpen = false; advanceOpen = true },
+                                        leadingIcon = { Icon(Icons.Default.People, null) }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Movimientos de la caja") },
+                                        onClick = { overflowOpen = false; onNavigateToSessionDetail(sess.id) },
+                                        leadingIcon = { Icon(Icons.Default.Receipt, null) }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Transferir efectivo") },
+                                        onClick = { overflowOpen = false; showTransfer = true },
+                                        leadingIcon = { Icon(Icons.Default.SwapHoriz, null) }
+                                    )
+                                    HorizontalDivider()
+                                    DropdownMenuItem(
+                                        text = { Text("Cerrar caja") },
+                                        onClick = { overflowOpen = false; goToClose(sess.id) },
+                                        leadingIcon = { Icon(Icons.Default.Lock, null) }
+                                    )
                                 }
                             }
                         }
