@@ -226,6 +226,53 @@ function prorateDiscount(lines, totalDiscount) {
   return lines.map((l, i) => ({ ...l, discount: r2((Number(l.discount) || 0) + floors[i] / 100) }));
 }
 
+/**
+ * Reparte el recargo por pago con tarjeta entre los renglones para que NO aparezca descrito en
+ * la factura (decisión del dueño) y aun así sume exacto lo cobrado.
+ *
+ * Cada renglón sube un número entero de centavos POR UNIDAD (buildItems redondea el precio al
+ * centavo). Lo que sobra va a un renglón de una unidad; si no hay, al renglón más grande se le
+ * separa una unidad en su propio renglón. Sin cantidades enteras, queda "Cargo adicional".
+ *
+ * La MISMA regla está en la app (`model/CardPaymentRules.kt::absorbSurcharge`), que la usa para el
+ * ticket de una venta facturada: los dos tienen que decir lo mismo.
+ */
+function absorberRecargo(lines, recargo) {
+  const s = Math.round((Number(recargo) || 0) * 100);
+  if (s <= 0) return lines.map((l) => ({ ...l }));
+  const qty = lines.map((l) => {
+    const q = Number(l.qty) || 0;
+    return q >= 1 && Number.isInteger(q) ? q : 0;
+  });
+  const price = lines.map((l) => Math.round((Number(l.unitPrice) || 0) * 100));
+  const gross = lines.map((_, i) => (qty[i] > 0 && price[i] > 0 ? qty[i] * price[i] : 0));
+  const sum = gross.reduce((a, b) => a + b, 0);
+  if (sum <= 0) {
+    return [...lines.map((l) => ({ ...l })), { description: "Cargo adicional", qty: 1, unitPrice: s / 100, discount: 0 }];
+  }
+  const perUnit = lines.map((_, i) => (gross[i] > 0 ? Math.floor(Math.floor((s * gross[i]) / sum) / qty[i]) : 0));
+  let rest = s - lines.reduce((a, _, i) => a + qty[i] * perUnit[i], 0);
+  const adjustable = lines.map((_, i) => i).filter((i) => gross[i] > 0)
+    .sort((a, b) => gross[b] - gross[a] || a - b);
+  let split = null;
+  if (rest > 0) {
+    const single = adjustable.find((i) => qty[i] === 1);
+    if (single !== undefined) { perUnit[single] += rest; rest = 0; } else split = { i: adjustable[0], extra: rest };
+  }
+  const out = [];
+  lines.forEach((l, i) => {
+    if (gross[i] <= 0) { out.push({ ...l }); return; }
+    const p = (price[i] + perUnit[i]) / 100;
+    if (split && split.i === i) {
+      out.push({ ...l, qty: qty[i] - 1, unitPrice: p });
+      out.push({ ...l, qty: 1, unitPrice: (price[i] + perUnit[i] + split.extra) / 100, discount: 0 });
+    } else {
+      out.push({ ...l, unitPrice: p });
+    }
+  });
+  return out;
+}
+
 // ── Emisor / receptor ───────────────────────────────────────────────────────
 
 function buildContacto(correo) {
@@ -358,6 +405,7 @@ module.exports = {
   buildFacturaNuc,
   buildItems,
   prorateDiscount,
+  absorberRecargo,
   referenciaInterna,
   frasesLegibles,
   numeroALetras,

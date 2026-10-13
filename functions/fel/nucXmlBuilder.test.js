@@ -2,7 +2,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
-  buildFacturaNuc, buildItems, prorateDiscount, referenciaInterna, numeroALetras, idReceptorParaXml,
+  buildFacturaNuc, buildItems, prorateDiscount, absorberRecargo, referenciaInterna, numeroALetras, idReceptorParaXml,
 } = require("./nucXmlBuilder");
 
 const emisor = {
@@ -106,4 +106,31 @@ test("receptor y montos en letras", () => {
   assert.equal(idReceptorParaXml(""), "CF");
   assert.equal(numeroALetras(197.5), "CIENTO NOVENTA Y SIETE QUETZALES CON 50/100");
   assert.equal(numeroALetras(0.5), "CERO QUETZALES CON 50/100");
+});
+
+// ── Recargo por tarjeta repartido (debe coincidir con CardPaymentRulesTest de la app) ──
+const totalDe = (ls) => Math.round(ls.reduce((a, l) => a + l.qty * Math.round(l.unitPrice * 100), 0));
+
+test("el recargo se reparte en centavos por unidad y la factura suma lo cobrado", () => {
+  const ls = absorberRecargo([
+    { description: "Champurrada", qty: 10, unitPrice: 1 },
+    { description: "Pastel", qty: 1, unitPrice: 20 },
+  ], 1.5);
+  assert.equal(totalDe(ls), 3150);
+  assert.deepEqual(ls.map((l) => [l.description, l.qty, l.unitPrice]), [
+    ["Champurrada", 10, 1.05], ["Pastel", 1, 21],
+  ]);
+  assert.ok(!ls.some((l) => /recargo/i.test(l.description)));
+});
+
+test("sin renglón de una unidad se separa una unidad del más grande", () => {
+  const ls = absorberRecargo([{ description: "Pan", qty: 3, unitPrice: 1 }], 0.1);
+  assert.equal(totalDe(ls), 310);
+  assert.deepEqual(ls.map((l) => [l.qty, l.unitPrice]), [[2, 1.03], [1, 1.04]]);
+});
+
+test("sin cantidades enteras queda como cargo adicional", () => {
+  const ls = absorberRecargo([{ description: "Pan por libra", qty: 1.5, unitPrice: 8 }], 0.6);
+  assert.equal(ls.length, 2);
+  assert.equal(ls[1].description, "Cargo adicional");
 });

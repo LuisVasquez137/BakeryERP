@@ -208,7 +208,7 @@ class SaleHistoryViewModel(
                     .map { it.name }.getOrDefault("").also { organizationName = it }
                 val base = saleReceiptData(
                     sale = sale,
-                    lines = receiptLinesOf(_uiState.value.selectedSaleLines),
+                    lines = receiptLinesOf(_uiState.value.selectedSaleLines, invoiced = sale.invoiceStatus.isNotBlank()),
                     branchName = branch?.name ?: sale.branchName,
                     branchLocation = branch?.location.orEmpty(),
                     organizationName = org

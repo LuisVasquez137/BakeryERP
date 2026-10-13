@@ -99,6 +99,12 @@ data class Sale(
     val packagingUnits: Double = 0.0,
     val packagingAmount: Double = 0.0,
     /**
+     * Recargo por pago con tarjeta cobrado en esta venta (también va como renglón) y la regla
+     * que se aplicó, como copia: si mañana cambia la regla, la venta sigue diciendo qué se cobró.
+     */
+    val cardSurcharge: Double = 0.0,
+    val cardSurchargeRule: String = "",
+    /**
      * Un cobro en caja puede pagar varias ventas de una vez: el pan del mostrador más la
      * cuenta del restaurante que el cliente trajo. Todas llevan el mismo [checkoutId] y los
      * mismos datos del pago —[checkoutTotal], [tenderedAmount], [changeAmount] y los

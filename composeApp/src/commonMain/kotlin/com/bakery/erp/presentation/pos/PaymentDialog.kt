@@ -36,6 +36,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.bakery.erp.model.SalePaymentMethod
+import com.bakery.erp.model.minimumProblem
+import com.bakery.erp.model.surchargeFor
+import com.bakery.erp.model.surchargeDescription
 import com.bakery.erp.ui.theme.BrandColors
 import com.bakery.erp.util.fmt
 import com.bakery.erp.util.fmtMoney
@@ -90,7 +93,9 @@ fun PaymentDialog(
      * elegido se avisa por [onDepositChange] (igual que el descuento) y reduce lo que se cobra.
      */
     deposits: List<com.bakery.erp.model.CustomerDeposit>? = null,
-    onDepositChange: (com.bakery.erp.model.CustomerDeposit?) -> Unit = {}
+    onDepositChange: (com.bakery.erp.model.CustomerDeposit?) -> Unit = {},
+    /** Mínimo y recargo de la tarjeta (de la empresa). Por defecto, ninguno. */
+    cardRules: com.bakery.erp.model.CardPaymentRules = com.bakery.erp.model.CardPaymentRules()
 ) {
     val invoiceForm = remember { InvoiceFormState(invoiceOptions?.defaultOn == true) }
     var discountAccount by remember { mutableStateOf<com.bakery.erp.model.CreditAccount?>(null) }
@@ -128,15 +133,27 @@ fun PaymentDialog(
     val cashTarget = if (splitActive) (com.bakery.erp.model.splitPaymentParts(total, splitAmounts)[SalePaymentMethod.CASH] ?: 0.0)
                      else total
     val needsCash = isCash && cashTarget > 0.004
+    // Lo que pasa por la terminal: el total con Tarjeta, o lo tecleado en un pago dividido.
+    val cardBase = when {
+        coveredByDeposit -> 0.0
+        splitActive -> splitAmounts[SalePaymentMethod.CARD] ?: 0.0
+        method == SalePaymentMethod.CARD -> total
+        else -> 0.0
+    }
+    val cardMinimumProblem = cardRules.minimumProblem(cardBase)
+    // La cajera no lo puede quitar: se suma solo (decisión del dueño).
+    val cardSurcharge = if (cardMinimumProblem == null) cardRules.surchargeFor(cardBase) else 0.0
+    val chargeTotal = total + cardSurcharge
     val change = if (needsCash) (tendered - cashTarget).coerceAtLeast(0.0) else 0.0
     val isCashShort = needsCash && tenderedText.isNotEmpty() && tendered < cashTarget - 0.004
 
     val methods = SalePaymentMethod.all + listOfNotNull(SalePaymentMethod.CREDIT.takeIf { creditAccounts != null })
     // Lo facturable (pan + restaurante no facturado en ComandaYa), con el descuento de colaborador.
-    val invoicedTotal = ((invoiceOptions?.invoiceableTotal ?: 0.0) - discountAmount).coerceAtLeast(0.0)
+    // El recargo va en la venta de pan, que siempre es facturable: cuenta para el tope de CF.
+    val invoicedTotal = ((invoiceOptions?.invoiceableTotal ?: 0.0) - discountAmount).coerceAtLeast(0.0) + cardSurcharge
     val invoice = if (invoiceOptions != null) invoiceForm.request() else null
     val invoiceReady = invoiceOptions == null || invoiceForm.problem(invoicedTotal) == null
-    val canConfirm = invoiceReady && (coveredByDeposit || when {
+    val canConfirm = invoiceReady && cardMinimumProblem == null && (coveredByDeposit || when {
         splitActive -> splitProblem == null && (cashTarget <= 0.004 || tendered >= cashTarget - 0.004)
         else -> null
     } ?: when (method) {
@@ -169,16 +186,17 @@ fun PaymentDialog(
         ) {
             Column {
                 Text("Total a cobrar", color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.labelLarge)
-                AnimatedContent(targetState = total, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "total") { t ->
+                AnimatedContent(targetState = chargeTotal, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "total") { t ->
                     Text("Q ${t.fmtMoney(2)}", color = Color.White, fontWeight = FontWeight.ExtraBold,
                         style = MaterialTheme.typography.displaySmall)
                 }
                 // Lo que ya bajó el total, a la vista: de dónde sale el número de arriba.
-                if (depositApplied > 0.004 || discountAmount > 0) {
+                if (depositApplied > 0.004 || discountAmount > 0 || cardSurcharge > 0.004) {
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         HeaderChip("Venta Q ${baseTotal.fmtMoney(2)}")
                         if (discountAmount > 0) HeaderChip("Colaborador −Q ${discountAmount.fmtMoney(2)}")
                         if (depositApplied > 0.004) HeaderChip("Anticipo ${deposit?.folio.orEmpty()} −Q ${depositApplied.fmtMoney(2)}")
+                        if (cardSurcharge > 0.004) HeaderChip("Recargo tarjeta +Q ${cardSurcharge.fmtMoney(2)}")
                     }
                 }
             }
@@ -244,6 +262,13 @@ fun PaymentDialog(
                     if (splitProblem != null && (cardText.isNotEmpty() || transferText.isNotEmpty())) {
                         Text(splitProblem, color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (cardMinimumProblem != null) {
+                        Text(cardMinimumProblem, color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall)
+                    } else if (cardSurcharge > 0.004) {
+                        InfoNote("Pasá Q ${(cardBase + cardSurcharge).fmtMoney(2)} en la terminal " +
+                            "(incluye recargo de Q ${cardSurcharge.fmtMoney(2)}).")
                     }
                     // Con efectivo, lo que falta ya va en la etiqueta de "Le dieron".
                     if (!needsCash) SplitCashRow(cashTarget)
@@ -312,9 +337,21 @@ fun PaymentDialog(
                 }
             }
             else -> {
-                InfoNote(
-                    if (method == SalePaymentMethod.CARD) "Pasá la tarjeta y confirmá cuando el voucher salga aprobado."
-                    else "Confirmá que la transferencia ya se acreditó antes de cobrar."
+                if (method == SalePaymentMethod.CARD && cardMinimumProblem != null) {
+                    Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.errorContainer,
+                        modifier = Modifier.fillMaxWidth()) {
+                        Text("$cardMinimumProblem: cobrá en efectivo o dividí la cuenta.",
+                            modifier = Modifier.padding(14.dp), color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                    }
+                } else InfoNote(
+                    when {
+                        method == SalePaymentMethod.CARD && cardSurcharge > 0.004 ->
+                            "Pasá Q ${chargeTotal.fmtMoney(2)} en la terminal (incluye recargo de " +
+                                "Q ${cardSurcharge.fmtMoney(2)}: ${cardRules.surchargeDescription()})."
+                        method == SalePaymentMethod.CARD -> "Pasá la tarjeta y confirmá cuando el voucher salga aprobado."
+                        else -> "Confirmá que la transferencia ya se acreditó antes de cobrar."
+                    }
                 )
                 if (canSplit) {
                     TextButton(onClick = { startSplit() }) {
@@ -371,8 +408,8 @@ fun PaymentDialog(
                 when {
                     coveredByDeposit -> "Entregar (pagado con anticipo)"
                     isCredit -> "Cargar Q ${total.fmtMoney(2)} a la cuenta"
-                    splitActive -> "Cobrar Q ${total.fmtMoney(2)} dividido"
-                    else -> "Cobrar Q ${total.fmtMoney(2)}"
+                    splitActive -> "Cobrar Q ${chargeTotal.fmtMoney(2)} dividido"
+                    else -> "Cobrar Q ${chargeTotal.fmtMoney(2)}"
                 },
                 style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold
             )

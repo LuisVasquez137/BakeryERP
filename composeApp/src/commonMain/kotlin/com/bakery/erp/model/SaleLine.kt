@@ -42,7 +42,12 @@ data class SaleLine(
     /** Unidades base del insumo que consumió UNA pieza vendida. 0 = uno a uno. */
     val ingredientUnitsPerSale: Double = 0.0,
     /** Empaque cobrado (bolsa, caja). Sin producto y sin inventario. Ver [PackagingItem]. */
-    val packagingItemId: String? = null
+    val packagingItemId: String? = null,
+    /**
+     * Recargo por pagar con tarjeta ([CardPaymentRules]). Va en el ticket, pero NO descrito en
+     * la factura: el servidor lo reparte entre los productos (`absorberRecargo`).
+     */
+    val cardSurcharge: Boolean = false
 )
 
 /** `true` si la línea cobra un empaque (la bolsa) y no pan. */
@@ -68,6 +73,8 @@ object SaleLinePriceSource {
     const val QUICK_GROUP        = "QUICK_GROUP"
     /** Empaque cobrado ([PackagingItem.salePrice]): mismo precio en toda sucursal y cliente. */
     const val PACKAGING          = "PACKAGING"
+    /** Recargo por pago con tarjeta, calculado con [CardPaymentRules]. */
+    const val CARD_SURCHARGE     = "CARD_SURCHARGE"
 }
 
 /** Clave con la que una línea de grupo entra al desglose por producto de los reportes. */

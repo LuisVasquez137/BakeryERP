@@ -30,6 +30,7 @@ import com.bakery.erp.model.salesDailyId
 import com.bakery.erp.model.groupSaleKey
 import com.bakery.erp.model.isPackaging
 import com.bakery.erp.model.packagingSaleKey
+import com.bakery.erp.model.CARD_SURCHARGE_SALE_KEY
 import com.bakery.erp.model.StockMovement
 import com.bakery.erp.model.ingredientUnitsConsumed
 import com.bakery.erp.model.isIngredientBacked
@@ -437,6 +438,8 @@ class FirebaseSaleRepository(
                 !line.quickGroupId.isNullOrEmpty() ->
                     line.copy(productId = groupSaleKey(line.quickGroupId))
                 line.isPackaging -> line.copy(productId = packagingSaleKey(line.packagingItemId!!))
+                // El recargo por tarjeta, aparte: no es pan vendido.
+                line.cardSurcharge -> line.copy(productId = CARD_SURCHARGE_SALE_KEY)
                 else -> null
             }
         }
@@ -456,7 +459,7 @@ class FirebaseSaleRepository(
             cashierId = sale.cashierEmployeeId.ifEmpty { sale.cashierId.ifEmpty { sale.externalUserId } },
             cashierName = sale.cashierName.ifEmpty { sale.externalUserName },
             channel = sale.salesChannel,
-            units = lines.filterNot { it.isPackaging }.sumOf { it.quantity },
+            units = lines.filterNot { it.isPackaging || it.cardSurcharge }.sumOf { it.quantity },
             productName = withProduct.associate { it.productId!! to it.productName },
             productQty = withProduct.groupBy { it.productId!! }
                 .mapValues { (_, ls) -> ls.sumOf { it.quantity } },
@@ -525,6 +528,8 @@ class FirebaseSaleRepository(
         "groupUnits" to groupUnits,
         "packagingUnits" to packagingUnits,
         "packagingAmount" to packagingAmount,
+        "cardSurcharge" to cardSurcharge,
+        "cardSurchargeRule" to cardSurchargeRule,
         "checkoutId" to checkoutId,
         "checkoutTotal" to checkoutTotal,
         "billValues" to billValues,
@@ -592,6 +597,9 @@ class FirebaseSaleRepository(
             ?: runCatching { get<Long?>("packagingUnits")?.toDouble() }.getOrNull() ?: 0.0,
         packagingAmount = runCatching { get<Double?>("packagingAmount") }.getOrNull()
             ?: runCatching { get<Long?>("packagingAmount")?.toDouble() }.getOrNull() ?: 0.0,
+        cardSurcharge = runCatching { get<Double?>("cardSurcharge") }.getOrNull()
+            ?: runCatching { get<Long?>("cardSurcharge")?.toDouble() }.getOrNull() ?: 0.0,
+        cardSurchargeRule = runCatching { get<String?>("cardSurchargeRule") }.getOrNull() ?: "",
         checkoutId = get<String?>("checkoutId") ?: "",
         checkoutTotal = get<Double?>("checkoutTotal") ?: 0.0,
         billValues = runCatching { get<List<Double>?>("billValues") }.getOrNull() ?: emptyList(),
@@ -640,7 +648,8 @@ class FirebaseSaleRepository(
         "linkedIngredientId" to linkedIngredientId,
         "linkedIngredientName" to linkedIngredientName,
         "ingredientUnitsPerSale" to ingredientUnitsPerSale,
-        "packagingItemId" to packagingItemId
+        "packagingItemId" to packagingItemId,
+        "cardSurcharge" to cardSurcharge
     )
 
     private fun DocumentSnapshot.toLine() = SaleLine(
@@ -660,7 +669,8 @@ class FirebaseSaleRepository(
         linkedIngredientId = runCatching { get<String?>("linkedIngredientId") }.getOrNull() ?: "",
         linkedIngredientName = runCatching { get<String?>("linkedIngredientName") }.getOrNull() ?: "",
         ingredientUnitsPerSale = runCatching { get<Double?>("ingredientUnitsPerSale") }.getOrNull() ?: 0.0,
-        packagingItemId = runCatching { get<String?>("packagingItemId") }.getOrNull()
+        packagingItemId = runCatching { get<String?>("packagingItemId") }.getOrNull(),
+        cardSurcharge = runCatching { get<Boolean?>("cardSurcharge") }.getOrNull() ?: false
     )
 
     private fun SalesDaily.toMap(): Map<String, Any?> = firestoreSafeOf(

@@ -735,6 +735,7 @@ fun POSScreen(
             },
             deposits = state.openDeposits,
             onDepositChange = { paymentDeposit = it },
+            cardRules = state.cardRules,
             invoiceOptions = if (viewModel.canInvoice()) {
                 val billable = viewModel.invoiceableRestaurantIds()
                 val restaurant = state.cart.filter { l -> l.isRestaurant }

@@ -185,6 +185,12 @@ fun SalesReportScreen(
                     }
                     // Solo si se cobró empaque en el período: la panadería que no cobra la
                     // bolsa no ve una sección vacía.
+                    if (s.cardSurchargeTotal > 0.004 && showValue) item {
+                        ReportSection(title = "Recargo por tarjeta") {
+                            Text("Q ${s.cardSurchargeTotal.fmtMoney(2)} cobrados de recargo en el período",
+                                style = MaterialTheme.typography.bodyMedium, color = ReportSlate)
+                        }
+                    }
                     if (s.packagingSales.isNotEmpty()) item {
                         ReportSection(title = "Empaques cobrados") {
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {

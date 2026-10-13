@@ -2,6 +2,7 @@ package com.bakery.erp.domain.report
 
 import com.bakery.erp.model.SalesDaily
 import com.bakery.erp.model.isPackagingSaleKey
+import com.bakery.erp.model.CARD_SURCHARGE_SALE_KEY
 
 /**
  * Arma el [SalesSummary] que consumen el Home y los reportes a partir de los resúmenes
@@ -86,7 +87,7 @@ fun salesSummaryFromDaily(dailies: List<SalesDaily>): SalesSummary {
             revenue = revenue
         )
     }.sortedByDescending { it.revenue }.partition { isPackagingSaleKey(it.productId) }
-    val topProducts = productStats.take(20)
+    val topProducts = productStats.filter { it.productId != CARD_SURCHARGE_SALE_KEY }.take(20)
 
     val hourHistogram = mutableMapOf<Int, Double>()
     dailies.forEach { d ->
@@ -118,7 +119,8 @@ fun salesSummaryFromDaily(dailies: List<SalesDaily>): SalesSummary {
         byCashier = byCashier,
         byBranch = byBranch,
         topProducts = topProducts,
-        unitsByProduct = productQty.filterKeys { !isPackagingSaleKey(it) },
+        unitsByProduct = productQty.filterKeys { !isPackagingSaleKey(it) && it != CARD_SURCHARGE_SALE_KEY },
+        cardSurchargeTotal = productRevenue[CARD_SURCHARGE_SALE_KEY] ?: 0.0,
         packagingSales = packagingStats,
         hourHistogram = hourHistogram,
         byDay = byDay

@@ -24,6 +24,8 @@ data class SalesSummary(
      * mezclada en el ranking se comería un lugar del top.
      */
     val packagingSales: List<ProductSalesStat> = emptyList(),
+    /** Recargos por pago con tarjeta cobrados en el período (no es venta de producto). */
+    val cardSurchargeTotal: Double = 0.0,
     val hourHistogram: Map<Int, Double> = emptyMap(),
     val byDay: List<DailySalesPoint> = emptyList()
 )

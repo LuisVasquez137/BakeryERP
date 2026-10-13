@@ -357,3 +357,34 @@ poder hacerlo desde el cobro.
   en cada método. Esto también corrige las cuentas partidas de ComandaYa, que antes iban enteras a
   un método; el histórico se repara con `rebuildDailyRollups`. Efecto colateral aceptado: una venta
   con anticipo + saldo ahora muestra la parte "Anticipo" en "por método".
+
+### Pago con tarjeta: mínimo y recargo (oct 2026)
+
+Configurable al 100% por empresa (todas las sucursales): Inicio → **Pago con tarjeta**
+(`CardRulesScreen`, permiso `MANAGE_POS_CONFIG`, también en la regla de Firestore). Documento
+`companies/{c}/paymentRules/card` (`CardPaymentRules`); sin documento = sin mínimo ni recargo.
+
+- **Mínimo con tarjeta** (`minimumAmount`, 0 = sin mínimo) y **recargo** `NEVER` / `ALWAYS` /
+  `BELOW` (solo si es MENOS de `surchargeThreshold`), en `PERCENT` o `FIXED`. La pantalla muestra
+  ejemplos ("Venta de Q 30.00 → Q 31.50 (+Q 1.50)") con la regla tal como está escrita.
+- **Se compara contra lo que pasa por la terminal**: con Tarjeta, el total (después del
+  anticipo); en un pago dividido, solo lo tecleado en Tarjeta. La comisión del banco es sobre eso,
+  y dividir la cuenta no esquiva el recargo. Solo tarjeta: la transferencia no paga comisión.
+- **La cajera no lo puede quitar** (decisión del dueño): `PaymentDialog` lo suma solo y lo
+  muestra en el encabezado ("Recargo tarjeta +Q 1.50") y en el aviso ("Pasá Q 31.50 en la
+  terminal"). Debajo del mínimo no deja confirmar ("Tarjeta desde Q 20.00: cobrá en efectivo o
+  dividí la cuenta"). `confirmSale` recalcula todo con la regla vigente (observada en vivo).
+- **En la venta**: renglón `SaleLine.cardSurcharge = true` (`CARD_SURCHARGE_LINE_NAME`) en la
+  venta de pan; si el cobro era solo de cuentas del restaurante, la venta de pan nace con ese único
+  renglón. Encabezado `cardSurcharge` + `cardSurchargeRule` (copia de la regla aplicada). La parte
+  de tarjeta del desglose lleva el recargo encima.
+- **Ticket sí, factura no** (decisión del dueño): sin factura, el ticket lleva el renglón
+  "Recargo por pago con tarjeta". Con factura, el recargo NO se describe: se reparte entre los
+  productos de la misma venta (`absorberRecargo` en `functions/fel/nucXmlBuilder.js`, y la misma
+  regla en `model/CardPaymentRules.kt::absorbSurcharge` para el ticket facturado y su
+  reimpresión). La factura tiene que sumar lo cobrado: cada renglón sube centavos enteros POR
+  UNIDAD (el servidor redondea el precio unitario al centavo); el sobrante va a un renglón de una
+  unidad o se separa una unidad del renglón más grande; sin cantidades enteras queda "Cargo
+  adicional". Tests espejo en `CardPaymentRulesTest` y `nucXmlBuilder.test.js`.
+- **Reportes**: clave `srg_card`, fuera de top productos y de unidades; `cardSurchargeTotal` →
+  sección "Recargo por tarjeta" del reporte de ventas.

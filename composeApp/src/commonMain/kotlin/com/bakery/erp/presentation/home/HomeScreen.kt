@@ -128,6 +128,7 @@ private val ALL_SECTIONS = listOf(
         ModuleItem("Cajas",  "Configurar cajas POS",       Icons.Default.Calculate),
         ModuleItem("Categorías POS",       "Agrupar productos para venta", Icons.Default.Category),
         ModuleItem("Empaques",             "Bolsa y cajas que se cobran", Icons.Default.LocalMall),
+        ModuleItem("Pago con tarjeta",     "Mínimo y recargo",           Icons.Default.CreditCard),
     ))
 )
 
@@ -179,6 +180,7 @@ private fun hasModuleAccess(title: String, user: User) = with(user) {
         "Cajas" -> hasPermission(Permission.MANAGE_POS_CONFIG)
         "Categorías POS"    -> hasPermission(Permission.MANAGE_POS_CONFIG)
         "Empaques"          -> hasPermission(Permission.MANAGE_POS_CONFIG)
+        "Pago con tarjeta"  -> hasPermission(Permission.MANAGE_POS_CONFIG)
         "Cierre del día"    -> hasPermission(Permission.MANAGE_DAILY_CASH_CLOSE)
         "Cuadre sorpresa"   -> hasPermission(Permission.SPOT_CHECK_CASH)
         "Conteo de pan"     -> hasPermission(Permission.COUNT_FINISHED_STOCK) ||
@@ -229,6 +231,7 @@ fun HomeScreen(
     onNavigateToCashRegisterAdmin: () -> Unit = {},
     onNavigateToQuickGroupAdmin: () -> Unit = {},
     onNavigateToPackagingAdmin: () -> Unit = {},
+    onNavigateToCardRules: () -> Unit = {},
     onNavigateToCredit: () -> Unit = {},
     onNavigateToBreadCount: () -> Unit = {},
     onNavigateToDailyCashClose: () -> Unit = {},
@@ -323,6 +326,7 @@ fun HomeScreen(
             "Cajas"     -> onNavigateToCashRegisterAdmin()
             "Categorías POS"          -> onNavigateToQuickGroupAdmin()
             "Empaques"                -> onNavigateToPackagingAdmin()
+            "Pago con tarjeta"        -> onNavigateToCardRules()
             "Conteo de pan"           -> onNavigateToBreadCount()
             "Cierre del día"          -> onNavigateToDailyCashClose()
             "Cuadre sorpresa"         -> onNavigateToSpotCashCheck()

@@ -35,7 +35,7 @@ const { clienteParaPerfil, guardarCredenciales, URLS } = require("./felCredencia
 const { DigifactClient, serieYNumero } = require("./digifactClient");
 const { reportarDte, reportarPendientes, debeReportarse, INGEST_KEY } = require("./comandayaDteReport");
 const {
-  buildFacturaNuc, prorateDiscount, referenciaInterna, fechaEmisionParaAnular, idReceptorParaXml, nowGuatemalaISO,
+  buildFacturaNuc, prorateDiscount, absorberRecargo, referenciaInterna, fechaEmisionParaAnular, idReceptorParaXml, nowGuatemalaISO,
 } = require("./nucXmlBuilder");
 
 const REGION = "us-central1";
@@ -92,12 +92,22 @@ function dteIdPara(companyId, saleIds, version = 0) {
 /** Líneas facturables de una venta, con su descuento repartido por línea. */
 async function lineasDeVenta(companyId, sale) {
   const snap = await db().collection(`companies/${companyId}/sales/${sale.id}/lines`).get();
-  const lines = snap.docs.map((d) => d.data()).map((l) => ({
+  const todas = snap.docs.map((d) => d.data());
+  // El recargo por tarjeta no va descrito en la factura: se reparte entre los productos de la
+  // MISMA venta. Si la venta solo trae el recargo (el cobro fue de cuentas del restaurante), se
+  // devuelve marcado y certificarVentas lo reparte entre todas las líneas del DTE.
+  const recargo = todas.filter((l) => l.cardSurcharge === true)
+    .reduce((a, l) => a + (Number(l.subtotal) || (Number(l.quantity) || 0) * (Number(l.unitPrice) || 0)), 0);
+  const productos = todas.filter((l) => l.cardSurcharge !== true).map((l) => ({
     description: l.productName || l.quickGroupName || "Producto",
     qty: Number(l.quantity) || 0,
     unitPrice: Number(l.unitPrice) || 0,
     discount: Number(l.discount) || 0,
   }));
+  const lines = recargo > 0.004
+    ? (productos.length ? absorberRecargo(productos, recargo)
+      : [{ description: "Recargo", qty: 1, unitPrice: recargo, discount: 0, recargoPendiente: true }])
+    : productos;
   // El descuento que la venta guarda en el encabezado (colaborador, promoción de
   // ComandaYa) se reparte entre sus líneas: la SAT lo pide por item, no global.
   const yaPorLinea = lines.reduce((a, l) => a + l.discount, 0);
@@ -245,8 +255,12 @@ async function certificarVentas({ companyId, saleIds, receptor: receptorPedido, 
   try {
     const { profileId, emisor, branchName } = await resolverEmisor(firestore, companyId, branchId);
 
-    const lines = [];
-    for (const v of ventas) lines.push(...await lineasDeVenta(companyId, v));
+    const todas = [];
+    for (const v of ventas) todas.push(...await lineasDeVenta(companyId, v));
+    // Recargo de una venta que no traía productos: se reparte entre las del resto del cobro.
+    const pendiente = todas.filter((l) => l.recargoPendiente).reduce((a, l) => a + l.unitPrice, 0);
+    const resto = todas.filter((l) => !l.recargoPendiente);
+    const lines = pendiente > 0.004 ? absorberRecargo(resto, pendiente) : resto;
 
     const ref = referenciaInterna(companyId, ids, version);
     const numeros = ventas.map((v) => v.externalOrderNumber).filter(Boolean);

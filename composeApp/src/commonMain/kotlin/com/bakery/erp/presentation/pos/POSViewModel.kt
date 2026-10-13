@@ -34,6 +34,9 @@ import com.bakery.erp.model.Sale
 import com.bakery.erp.model.SaleLine
 import com.bakery.erp.model.SaleLinePriceSource
 import com.bakery.erp.model.SalePaymentMethod
+import com.bakery.erp.model.minimumProblem
+import com.bakery.erp.model.surchargeFor
+import com.bakery.erp.model.surchargeDescription
 import com.bakery.erp.model.User
 import com.bakery.erp.util.fmtMoney
 import com.bakery.erp.util.fmtTrim
@@ -87,7 +90,9 @@ data class CartLine(
      */
     val pendingSaleId: String = "",
     /** Empaque cobrado (la bolsa): sin producto ni inventario. Ver [PackagingItem]. */
-    val packagingItemId: String = ""
+    val packagingItemId: String = "",
+    /** Recargo por tarjeta. Nunca está en el carrito visible: se agrega al cobrar. */
+    val cardSurcharge: Boolean = false
 ) {
     val subtotal: Double get() = quantity * unitPrice
     val isGroup: Boolean get() = quickGroupId.isNotEmpty()
@@ -117,6 +122,8 @@ data class POSUiState(
      * bolsa: entonces el POS no muestra los botones.
      */
     val packagingItems: List<PackagingItem> = emptyList(),
+    /** Reglas de tarjeta de la empresa (mínimo y recargo). Por defecto: ninguna. */
+    val cardRules: com.bakery.erp.model.CardPaymentRules = com.bakery.erp.model.CardPaymentRules(),
     /** Total de categorías que existen en la empresa (sin filtrar por sucursal) — para diagnóstico. */
     val totalCategoriesCount: Int = 0,
     val cart: List<CartLine> = emptyList(),
@@ -247,7 +254,9 @@ class POSViewModel(
     /** Revendedores: a quién se le vende con su lista de precios. */
     private val externalCustomerRepository: ExternalCustomerRepository,
     /** Empaques que se cobran en caja (la bolsa). */
-    private val packagingItemRepository: PackagingItemRepository
+    private val packagingItemRepository: PackagingItemRepository,
+    /** Mínimo y recargo del pago con tarjeta. */
+    private val paymentRulesRepository: com.bakery.erp.domain.PaymentRulesRepository
 ) : ViewModel() {
 
     private var organizationName: String = ""
@@ -260,6 +269,7 @@ class POSViewModel(
     private var sessionObserveJob: Job? = null
     private var pendingObserveJob: Job? = null
     private var packagingObserveJob: Job? = null
+    private var cardRulesObserveJob: Job? = null
     private var retailPriceListId: String = ""
     private var retailPriceFactor: Double? = null
 
@@ -309,6 +319,7 @@ class POSViewModel(
                 loadIngredientStock(companyId, result.session.branchId, result.products)
                 observePOSCategories(companyId, result.session.branchId)
                 observePackagingItems(companyId)
+                observeCardRules(companyId)
                 observeSession(companyId, result.session.id)
                 observePendingCollections(companyId, result.session.branchId)
                 loadPopularity(companyId, result.session.branchId)
@@ -400,6 +411,19 @@ class POSViewModel(
             packagingItemRepository.observeActive(companyId)
                 .catch { emit(emptyList()) }
                 .collect { items -> _uiState.update { it.copy(packagingItems = items) } }
+        }
+    }
+
+    /**
+     * En vivo, como los empaques. Si no se puede leer, la caja cobra sin mínimo ni recargo:
+     * una regla de negocio opcional no puede impedir cobrar.
+     */
+    private fun observeCardRules(companyId: String) {
+        cardRulesObserveJob?.cancel()
+        cardRulesObserveJob = viewModelScope.launch {
+            paymentRulesRepository.observeCardRules(companyId)
+                .catch { emit(com.bakery.erp.model.CardPaymentRules()) }
+                .collect { rules -> _uiState.update { it.copy(cardRules = rules) } }
         }
     }
 
@@ -704,6 +728,23 @@ class POSViewModel(
             splitParts.size == 1 -> splitParts.keys.first()
             else -> paymentMethod
         }
+        // Lo que pasa por la terminal decide el mínimo y el recargo (en un dividido, solo esa
+        // parte). Se recalcula acá con la regla vigente; no se confía en lo que mostró el diálogo.
+        val cardBase = when {
+            coveredByDeposit -> 0.0
+            isMixed -> splitParts[SalePaymentMethod.CARD] ?: 0.0
+            chargeMethod == SalePaymentMethod.CARD -> due
+            else -> 0.0
+        }
+        state.cardRules.minimumProblem(cardBase)?.let { problem ->
+            _uiState.update { it.copy(error = problem) }; return
+        }
+        val surcharge = state.cardRules.surchargeFor(cardBase)
+        // Lo que de verdad se cobra: la tarjeta lleva encima su recargo.
+        val chargedTotal = money(total + surcharge)
+        val chargedParts = if (surcharge > 0.004 && isMixed)
+            splitParts + (SalePaymentMethod.CARD to money((splitParts[SalePaymentMethod.CARD] ?: 0.0) + surcharge))
+        else splitParts
         // Todo pagado con anticipo: la venta no tiene otro método que mostrar.
         val saleMethod = if (coveredByDeposit) SalePaymentMethod.CUSTOMER_DEPOSIT else chargeMethod
         // Lo que se paga en billetes: todo si es efectivo, el resto si es dividido.
@@ -715,7 +756,7 @@ class POSViewModel(
         }
         val takesCash = cashDue > 0.004
         // En un pago dividido, "le dieron" y el vuelto son de la parte en efectivo.
-        val effectiveTendered = if (takesCash) tenderedAmount else if (isMixed) 0.0 else due
+        val effectiveTendered = if (takesCash) tenderedAmount else if (isMixed) 0.0 else money(due + surcharge)
         if (takesCash && tenderedAmount < cashDue - 0.004) {
             val msg = if (isMixed) "El efectivo recibido no alcanza para Q ${cashDue.fmtMoney(2)}"
                       else "Monto recibido menor al total"
@@ -724,7 +765,18 @@ class POSViewModel(
         val change = if (takesCash) (tenderedAmount - cashDue).coerceAtLeast(0.0) else 0.0
         val cashBills = if (takesCash) bills.filterValues { it > 0 } else emptyMap()
 
-        val snapshotCart = state.cart
+        // El recargo va como renglón de la venta de pan: en el ticket se ve; en la factura el
+        // servidor lo reparte entre los productos. Si el cobro es solo de cuentas del
+        // restaurante, la venta de pan nace con este único renglón.
+        val snapshotCart = state.cart + listOfNotNull(if (surcharge > 0.004) CartLine(
+            key = "srg_card",
+            productId = "",
+            productName = com.bakery.erp.model.CARD_SURCHARGE_LINE_NAME,
+            quantity = 1.0,
+            unitPrice = surcharge,
+            priceSource = SaleLinePriceSource.CARD_SURCHARGE,
+            cardSurcharge = true
+        ) else null)
         val bakeryCart = snapshotCart.filter { it.isBakery }
         val restaurantCart = snapshotCart.filter { it.isRestaurant }
         val bakeryTotal = bakeryCart.sumOf { it.subtotal }
@@ -750,7 +802,7 @@ class POSViewModel(
         // Pago dividido: la parte de cada venta por método. Primero las cuentas del restaurante
         // (en el mismo orden que el anticipo), después el pan; cada una por lo que cobra hoy.
         val partsPlan: Map<String, Map<String, Double>> = if (isMixed) com.bakery.erp.model.allocatePaymentParts(
-            splitParts,
+            chargedParts,
             restaurantCart.map { it.pendingSaleId to money(it.subtotal - (depositPlan[it.pendingSaleId] ?: 0.0)) } +
                 listOfNotNull(if (bakeryCart.isNotEmpty())
                     BAKERY_SALE_KEY to money(bakeryTotal - discountAmount - (depositPlan[BAKERY_SALE_KEY] ?: 0.0)) else null)
@@ -758,7 +810,7 @@ class POSViewModel(
         val payment = CheckoutPayment(
             checkoutId = newCheckoutId(),
             method = saleMethod,
-            checkoutTotal = total,
+            checkoutTotal = chargedTotal,
             tenderedAmount = effectiveTendered,
             changeAmount = change,
             billValues = cashBills.keys.map { it.toDouble() },
@@ -852,7 +904,9 @@ class POSViewModel(
                     packagingUnits = bakeryCart.filter { it.isPackaging }.sumOf { it.quantity },
                     packagingAmount = money(bakeryCart.filter { it.isPackaging }.sumOf { it.subtotal }),
                     checkoutId = payment.checkoutId,
-                    checkoutTotal = total,
+                    checkoutTotal = chargedTotal,
+                    cardSurcharge = surcharge,
+                    cardSurchargeRule = if (surcharge > 0.004) state.cardRules.surchargeDescription() else "",
                     billValues = payment.billValues,
                     billCounts = payment.billCounts,
                     creditAccountId = credit?.account?.id.orEmpty(),
@@ -880,6 +934,18 @@ class POSViewModel(
                     )
                 )
                 val lines = bakeryCart.map { line ->
+                    if (line.cardSurcharge) {
+                        return@map SaleLine(
+                            productId = null,
+                            productName = line.productName,
+                            quantity = 1.0,
+                            unitPrice = line.unitPrice,
+                            subtotal = line.subtotal,
+                            priceSource = line.priceSource,
+                            stockDeducted = false,
+                            cardSurcharge = true
+                        )
+                    }
                     if (line.isPackaging) {
                         return@map SaleLine(
                             productId = null,
@@ -974,22 +1040,22 @@ class POSViewModel(
                     }
                 }
                 // El ticket y el acuse muestran el COBRO completo, no solo la venta de pan.
-                val checkoutSale = sale.copy(subtotal = total + discountAmount, discount = discountAmount,
-                    total = total, tenderedAmount = effectiveTendered, changeAmount = change,
+                val checkoutSale = sale.copy(subtotal = chargedTotal + discountAmount, discount = discountAmount,
+                    total = chargedTotal, tenderedAmount = effectiveTendered, changeAmount = change,
                     paymentMethod = saleMethod,
                     // El ticket dice cómo se pagó TODO el cobro, no solo la parte del pan.
-                    paymentBreakdown = if (isMixed) splitParts else sale.paymentBreakdown,
+                    paymentBreakdown = if (isMixed) chargedParts else sale.paymentBreakdown,
                     depositFolio = depositToApply?.folio.orEmpty().takeIf { depositApplied > 0.004 }.orEmpty(),
                     depositAmount = depositApplied)
-                val receipt = buildReceiptData(checkoutSale, snapshotCart, branch)
+                val receipt = buildReceiptData(checkoutSale, snapshotCart, branch, invoiced = invoiceRequest != null)
                 val record = CheckoutRecord(
                     checkoutId = payment.checkoutId,
                     at = Clock.System.now().toEpochMilliseconds(),
                     method = chargeMethod,
-                    total = total,
+                    total = chargedTotal,
                     tendered = effectiveTendered,
                     change = change,
-                    parts = if (isMixed) splitParts else emptyMap(),
+                    parts = if (isMixed) chargedParts else emptyMap(),
                     bills = cashBills.entries.sortedByDescending { it.key }
                         .map { it.key.toDouble() to it.value },
                     items = snapshotCart.map { l ->
@@ -1010,7 +1076,7 @@ class POSViewModel(
                         // La siguiente venta es de mostrador: quedarse en modo revendedor le
                         // cobraría barato al cliente que sigue en la fila.
                         resellerSale = null,
-                        lastSaleSummary = LastSaleSummary(total, change, chargeMethod),
+                        lastSaleSummary = LastSaleSummary(chargedTotal, change, chargeMethod),
                         lastReceiptData = receipt,
                         recentCheckouts = (listOf(record) + it.recentCheckouts).take(MAX_RECENT_CHECKOUTS),
                         invoiceProgress = if (invoiced) InvoiceProgress(invoiceSaleIds.first(), FelInvoiceStatus.SOLICITADA) else null
@@ -1541,10 +1607,15 @@ class POSViewModel(
     fun clearLastSaleSummary() { _uiState.update { it.copy(lastSaleSummary = null) } }
     fun clearError() { _uiState.update { it.copy(error = null) } }
 
-    private fun buildReceiptData(sale: Sale, lines: List<CartLine>, branch: Branch): ReceiptData =
+    private fun buildReceiptData(sale: Sale, lines: List<CartLine>, branch: Branch, invoiced: Boolean = false): ReceiptData =
         saleReceiptData(
             sale = sale,
-            lines = lines.map { l -> ReceiptLine(l.productName, l.quantity, l.unitPrice, l.subtotal) },
+            lines = receiptLinesWithSurcharge(
+                lines.filterNot { it.cardSurcharge }.map { l -> ReceiptLine(l.productName, l.quantity, l.unitPrice, l.subtotal) },
+                restaurant = lines.filterNot { it.cardSurcharge }.map { it.isRestaurant },
+                surcharge = lines.filter { it.cardSurcharge }.sumOf { it.subtotal },
+                invoiced = invoiced
+            ),
             branchName = branch.name,
             branchLocation = branch.location,
             organizationName = organizationName

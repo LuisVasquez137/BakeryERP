@@ -77,6 +77,8 @@ data class AppViewModels(
     val posCategoryAdmin: POSCategoryAdminViewModel,
     /** Empaques que se cobran en caja (la bolsa). */
     val packagingAdmin: com.bakery.erp.presentation.pos.admin.PackagingAdminViewModel,
+    /** Mínimo y recargo del pago con tarjeta. */
+    val cardRules: com.bakery.erp.presentation.pos.admin.CardRulesViewModel,
     val credit: com.bakery.erp.presentation.credit.CreditViewModel,
     val breadCount: BreadCountViewModel,
     val dailyCashClose: DailyCashCloseViewModel,

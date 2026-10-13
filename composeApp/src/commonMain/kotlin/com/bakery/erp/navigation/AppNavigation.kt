@@ -422,6 +422,7 @@ sealed class Screen(val route: String) {
     }
     object POSCategoryAdminList : Screen("admin/posCategories")
     object PackagingAdmin : Screen("admin/packaging")
+    object CardRules : Screen("admin/cardRules")
     // Créditos
     object CreditAccountList : Screen("credit/accounts")
     object CreditAgingReport : Screen("credit/aging")
@@ -564,6 +565,7 @@ fun AppNavigation(
     val cashRegisterAdminViewModel = vms.cashRegisterAdmin
     val posCategoryAdminViewModel = vms.posCategoryAdmin
     val packagingAdminViewModel = vms.packagingAdmin
+    val cardRulesViewModel = vms.cardRules
     val creditViewModel = vms.credit
     val breadCountViewModel = vms.breadCount
     val dailyCashCloseViewModel = vms.dailyCashClose
@@ -839,6 +841,7 @@ fun AppNavigation(
                 onNavigateToCashRegisterAdmin = { navController.navigate(Screen.CashRegisterAdminList.route) },
                 onNavigateToQuickGroupAdmin = { navController.navigate(Screen.POSCategoryAdminList.route) },
                 onNavigateToPackagingAdmin = { navController.navigate(Screen.PackagingAdmin.route) },
+                onNavigateToCardRules = { navController.navigate(Screen.CardRules.route) },
                 onNavigateToCredit = { navController.navigate(Screen.CreditAccountList.route) },
                 onNavigateToBreadCount = { navController.navigate(Screen.BreadCountList.route) },
                 onNavigateToDailyCashClose = { navController.navigate(Screen.DailyCashCloseList.route) },
@@ -1449,6 +1452,17 @@ fun AppNavigation(
                     onNavigateBack = { navController.popBackStack() },
                     authViewModel = viewModel,
                     viewModel = packagingAdminViewModel
+                )
+            }
+        }
+
+        // ── Admin POS: mínimo y recargo de tarjeta ───────────────────────────
+        composable(Screen.CardRules.route) {
+            RequirePermission(state.user, Permission.MANAGE_POS_CONFIG, onBack = { navController.popBackStack() }) {
+                com.bakery.erp.presentation.pos.admin.CardRulesScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = cardRulesViewModel
                 )
             }
         }

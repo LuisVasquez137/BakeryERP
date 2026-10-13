@@ -6,6 +6,8 @@ import com.bakery.erp.model.Sale
 import com.bakery.erp.model.SaleLine
 import com.bakery.erp.model.SalePaymentMethod
 import com.bakery.erp.model.effectivePaymentBreakdown
+import com.bakery.erp.model.CARD_SURCHARGE_LINE_NAME
+import com.bakery.erp.model.absorbSurcharge
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlin.time.Clock
@@ -62,14 +64,42 @@ internal fun saleReceiptData(
     )
 }
 
-/** Líneas guardadas de una venta → líneas del ticket. */
-internal fun receiptLinesOf(lines: List<SaleLine>): List<ReceiptLine> = lines.map { l ->
-    ReceiptLine(
-        name = l.productName.ifBlank { l.quickGroupName.orEmpty() },
-        quantity = l.quantity,
-        unitPrice = l.unitPrice,
-        subtotal = l.subtotal
+/**
+ * Líneas guardadas de una venta → líneas del ticket. Si la venta se facturó, el recargo por
+ * tarjeta no va descrito: se reparte entre los productos igual que en la factura.
+ */
+internal fun receiptLinesOf(lines: List<SaleLine>, invoiced: Boolean = false): List<ReceiptLine> =
+    receiptLinesWithSurcharge(
+        lines.filterNot { it.cardSurcharge }.map { l ->
+            ReceiptLine(
+                name = l.productName.ifBlank { l.quickGroupName.orEmpty() },
+                quantity = l.quantity,
+                unitPrice = l.unitPrice,
+                subtotal = l.subtotal
+            )
+        },
+        restaurant = lines.filterNot { it.cardSurcharge }.map { false },
+        surcharge = lines.filter { it.cardSurcharge }.sumOf { it.subtotal },
+        invoiced = invoiced
     )
+
+/**
+ * El recargo por tarjeta en el ticket. Sin factura va como su propio renglón — el cliente ve por
+ * qué pagó más. Con factura se reparte entre los productos del pan (como hace el servidor con la
+ * factura, `absorberRecargo`), así el ticket y la factura dicen lo mismo; si el cobro no traía
+ * pan, entre todo. [restaurant] dice, por renglón, si es una cuenta del restaurante.
+ */
+internal fun receiptLinesWithSurcharge(
+    lines: List<ReceiptLine>,
+    restaurant: List<Boolean>,
+    surcharge: Double,
+    invoiced: Boolean
+): List<ReceiptLine> {
+    if (surcharge <= 0.004) return lines
+    if (!invoiced) return lines + ReceiptLine(CARD_SURCHARGE_LINE_NAME, 1.0, surcharge, surcharge)
+    val bakery = lines.filterIndexed { i, _ -> restaurant.getOrNull(i) != true }
+    if (bakery.isEmpty()) return absorbSurcharge(lines, surcharge)
+    return lines.filterIndexed { i, _ -> restaurant.getOrNull(i) == true } + absorbSurcharge(bakery, surcharge)
 }
 
 /** "25/09/2026 14:35" en la hora del dispositivo. */

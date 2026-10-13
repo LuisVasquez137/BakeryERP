@@ -127,6 +127,7 @@ actual fun createAppViewModels(): AppViewModels {
     val deliveryRepo = FirebaseDeliveryRepository(firestore, dispatchRepo)
     val posCategoryRepo = FirebasePOSCategoryRepository(firestore)
     val packagingItemRepo = com.bakery.erp.data.FirebasePackagingItemRepository(firestore)
+    val paymentRulesRepo = com.bakery.erp.data.FirebasePaymentRulesRepository(firestore)
     val cashRegisterRepo = FirebaseCashRegisterRepository(firestore)
     val cashSessionRepo = FirebaseCashSessionRepository(firestore)
     val productRepoJs = FirebaseProductRepositoryJs(firestore, storage)
@@ -191,7 +192,7 @@ actual fun createAppViewModels(): AppViewModels {
             finishedStockRepo, ingredientRepo, priceListRepo, branchRepo,
             JsReceiptPrinter(), authRepo, creditRepo, felRepo,
             com.bakery.erp.data.FirebaseCustomerDepositRepository(firestore), customerOrderRepo,
-            externalCustomerRepo, packagingItemRepo
+            externalCustomerRepo, packagingItemRepo, paymentRulesRepo
         ),
         cashSession = CashSessionViewModel(
             cashSessionRepo, cashRegisterRepo, branchRepo, dailyCloseRepo, purchaseRepo,
@@ -201,6 +202,7 @@ actual fun createAppViewModels(): AppViewModels {
         cashRegisterAdmin = CashRegisterAdminViewModel(cashRegisterRepo, branchRepo, cashSessionRepo),
         posCategoryAdmin = POSCategoryAdminViewModel(posCategoryRepo, productRepoJs, branchRepo),
         packagingAdmin = com.bakery.erp.presentation.pos.admin.PackagingAdminViewModel(packagingItemRepo),
+        cardRules = com.bakery.erp.presentation.pos.admin.CardRulesViewModel(paymentRulesRepo),
         credit = com.bakery.erp.presentation.credit.CreditViewModel(creditRepo, employeeRepo),
         breadCount = BreadCountViewModel(breadCountRepo, branchRepo),
         dailyCashClose = DailyCashCloseViewModel(dailyCloseRepo, branchRepo, breadCountRepo, spotCheckRepo),
