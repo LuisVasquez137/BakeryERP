@@ -16,6 +16,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.runtime.remember
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -99,10 +105,28 @@ fun InvoiceSection(state: InvoiceFormState, options: InvoiceOptions, invoicedTot
     val cleaned = cleanNit(state.nit)
     val nitOk = isValidGuatemalaNit(cleaned)
     val scope = rememberCoroutineScope()
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    val nitFocus = remember { FocusRequester() }
+    // Teclado numérico por defecto: casi ningún NIT lleva la K. "ABC" lo cambia al de letras.
+    var nitLetters by remember { mutableStateOf(false) }
+    var keyboardSwitches by remember { mutableStateOf(0) }
+    // Android no cambia el tipo de teclado de un campo que ya tiene el foco: se suelta el foco
+    // y se vuelve a tomar para que abra el teclado nuevo.
+    LaunchedEffect(keyboardSwitches) {
+        if (keyboardSwitches == 0) return@LaunchedEffect
+        focusManager.clearFocus()
+        kotlinx.coroutines.delay(60)
+        runCatching { nitFocus.requestFocus() }
+        keyboard?.show()
+    }
     // La SAT se consulta cuando la cajera lo pide, no a cada tecla: buscar a medio escribir
     // gastaba consultas y cambiaba el nombre mientras todavía se tecleaba.
     fun lookup() {
         if (!nitOk || state.looking) return
+        // Al buscar se esconde el teclado para ver el resultado; vuelve si tocan el campo.
+        keyboard?.hide()
+        focusManager.clearFocus()
         scope.launch {
             state.looking = true
             state.lookupNote = null
@@ -172,14 +196,19 @@ fun InvoiceSection(state: InvoiceFormState, options: InvoiceOptions, invoicedTot
                                 supportingText = if (cleaned.length >= 2 && !nitOk) {
                                     { Text("El dígito verificador no cuadra") }
                                 } else null,
-                                // Ascii: teclado con la fila de números y las letras (para la K).
+                                trailingIcon = {
+                                    TextButton(
+                                        onClick = { nitLetters = !nitLetters; keyboardSwitches++ },
+                                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp)
+                                    ) { Text(if (nitLetters) "123" else "ABC", fontWeight = FontWeight.SemiBold) }
+                                },
                                 keyboardOptions = KeyboardOptions(
-                                    keyboardType = KeyboardType.Ascii,
+                                    keyboardType = if (nitLetters) KeyboardType.Ascii else KeyboardType.Number,
                                     capitalization = KeyboardCapitalization.Characters,
                                     imeAction = ImeAction.Search
                                 ),
                                 keyboardActions = KeyboardActions(onSearch = { lookup() }),
-                                modifier = Modifier.widthIn(max = 220.dp).weight(1f, fill = false)
+                                modifier = Modifier.widthIn(max = 240.dp).weight(1f, fill = false).focusRequester(nitFocus)
                             )
                             Button(
                                 onClick = { lookup() },
