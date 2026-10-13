@@ -8,6 +8,7 @@ import com.bakery.erp.domain.CashSessionRepository
 import com.bakery.erp.domain.FinishedStockRepository
 import com.bakery.erp.domain.IngredientRepository
 import com.bakery.erp.domain.POSCategoryRepository
+import com.bakery.erp.domain.PackagingItemRepository
 import com.bakery.erp.domain.PriceListRepository
 import com.bakery.erp.domain.ProductRepository
 import com.bakery.erp.domain.ReceiptPrinter
@@ -22,6 +23,7 @@ import com.bakery.erp.model.checkoutsFromSales
 import com.bakery.erp.model.FinishedProductStock
 import com.bakery.erp.model.isIngredientBacked
 import com.bakery.erp.model.POSCategory
+import com.bakery.erp.model.PackagingItem
 import com.bakery.erp.model.groupDisplayName
 import com.bakery.erp.model.PriceList
 import com.bakery.erp.model.PriceListType
@@ -83,11 +85,16 @@ data class CartLine(
      * Cuenta del restaurante (ComandaYa) que el cliente paga junto con su pan. No es una
      * línea de venta nueva: al cobrar, esa venta ya existente se da por recibida en esta caja.
      */
-    val pendingSaleId: String = ""
+    val pendingSaleId: String = "",
+    /** Empaque cobrado (la bolsa): sin producto ni inventario. Ver [PackagingItem]. */
+    val packagingItemId: String = ""
 ) {
     val subtotal: Double get() = quantity * unitPrice
     val isGroup: Boolean get() = quickGroupId.isNotEmpty()
     val isRestaurant: Boolean get() = pendingSaleId.isNotEmpty()
+    val isPackaging: Boolean get() = packagingItemId.isNotEmpty()
+    /** Tiene un producto con existencia contra la cual avisar sobreventa. */
+    val hasProductStock: Boolean get() = !isGroup && !isRestaurant && !isPackaging
     /** Descuenta o mueve algo del mostrador (no es una cuenta del restaurante). */
     val isBakery: Boolean get() = !isRestaurant
 }
@@ -105,6 +112,11 @@ data class POSUiState(
      */
     val ingredientStockByIngredientId: Map<String, Double> = emptyMap(),
     val posCategories: List<POSCategory> = emptyList(),
+    /**
+     * Empaques que se cobran (bolsa, caja), activos. Vacío en la panadería que no cobra la
+     * bolsa: entonces el POS no muestra los botones.
+     */
+    val packagingItems: List<PackagingItem> = emptyList(),
     /** Total de categorías que existen en la empresa (sin filtrar por sucursal) — para diagnóstico. */
     val totalCategoriesCount: Int = 0,
     val cart: List<CartLine> = emptyList(),
@@ -233,7 +245,9 @@ class POSViewModel(
     /** Pedidos de clientes (pasteles): el anticipo ligado se registra como pago del pedido. */
     private val customerOrderRepository: com.bakery.erp.domain.CustomerOrderRepository,
     /** Revendedores: a quién se le vende con su lista de precios. */
-    private val externalCustomerRepository: ExternalCustomerRepository
+    private val externalCustomerRepository: ExternalCustomerRepository,
+    /** Empaques que se cobran en caja (la bolsa). */
+    private val packagingItemRepository: PackagingItemRepository
 ) : ViewModel() {
 
     private var organizationName: String = ""
@@ -245,6 +259,7 @@ class POSViewModel(
     private var categoriesObserveJob: Job? = null
     private var sessionObserveJob: Job? = null
     private var pendingObserveJob: Job? = null
+    private var packagingObserveJob: Job? = null
     private var retailPriceListId: String = ""
     private var retailPriceFactor: Double? = null
 
@@ -293,6 +308,7 @@ class POSViewModel(
                 observeStocks(companyId, result.session.branchId)
                 loadIngredientStock(companyId, result.session.branchId, result.products)
                 observePOSCategories(companyId, result.session.branchId)
+                observePackagingItems(companyId)
                 observeSession(companyId, result.session.id)
                 observePendingCollections(companyId, result.session.branchId)
                 loadPopularity(companyId, result.session.branchId)
@@ -370,6 +386,20 @@ class POSViewModel(
             posCategoryRepository.observeActiveForBranch(companyId, branchId)
                 .catch { e -> _uiState.update { it.copy(error = e.message) } }
                 .collect { categories -> _uiState.update { it.copy(posCategories = categories) } }
+        }
+    }
+
+    /**
+     * En vivo: si el dueño cambia el precio de la bolsa, las cajas abiertas cobran el nuevo sin
+     * recargar. Lo que ya está en un carrito conserva el precio con que entró. Si falla, no hay
+     * botones de empaque y se sigue cobrando: nunca puede impedir una venta.
+     */
+    private fun observePackagingItems(companyId: String) {
+        packagingObserveJob?.cancel()
+        packagingObserveJob = viewModelScope.launch {
+            packagingItemRepository.observeActive(companyId)
+                .catch { emit(emptyList()) }
+                .collect { items -> _uiState.update { it.copy(packagingItems = items) } }
         }
     }
 
@@ -541,6 +571,30 @@ class POSViewModel(
         _uiState.update { it.copy(cart = newCart) }
     }
 
+    /**
+     * Suma un empaque (la bolsa) al carrito: cada toque, uno más sobre la misma línea. Mismo
+     * precio para todos — al revendedor también: la bolsa no está en su lista de precios.
+     */
+    fun addPackagingToCart(item: PackagingItem) {
+        if (item.salePrice <= 0.0) return
+        val key = "pkg_${item.id}"
+        val cart = _uiState.value.cart
+        val newCart = if (cart.any { it.key == key }) {
+            cart.map { if (it.key == key) it.copy(quantity = it.quantity + 1) else it }
+        } else {
+            cart + CartLine(
+                key = key,
+                productId = "",
+                productName = item.name,
+                quantity = 1.0,
+                unitPrice = item.salePrice,
+                priceSource = SaleLinePriceSource.PACKAGING,
+                packagingItemId = item.id
+            )
+        }
+        _uiState.update { it.copy(cart = newCart) }
+    }
+
     fun updateLineQuantity(key: String, newQuantity: Double) {
         if (newQuantity <= 0) {
             removeLine(key); return
@@ -583,7 +637,12 @@ class POSViewModel(
         /** A quién facturar, o null si el cliente no pidió factura. */
         invoice: FelInvoiceRequest? = null,
         /** Anticipo del cliente que paga parte (o todo) de este cobro. */
-        deposit: com.bakery.erp.model.CustomerDeposit? = null
+        deposit: com.bakery.erp.model.CustomerDeposit? = null,
+        /**
+         * Pago dividido: lo que va con tarjeta / transferencia (método → monto). El efectivo es
+         * el resto y [tenderedAmount] es lo que dieron de ESA parte. Vacío = un solo método.
+         */
+        split: Map<String, Double> = emptyMap()
     ) {
         val state = _uiState.value
         val session = state.session ?: run {
@@ -596,6 +655,10 @@ class POSViewModel(
             _uiState.update { it.copy(error = "El carrito está vacío") }; return
         }
         val isCredit = paymentMethod == SalePaymentMethod.CREDIT
+        // Sin fiado combinado: el cargo a la cuenta y la venta tendrían que partirse.
+        val splitTyped = if (isCredit) emptyMap() else split
+            .filterKeys { it in com.bakery.erp.model.SPLIT_NON_CASH_METHODS }
+            .filterValues { it > 0.004 }
         val resale = state.resellerSale
         // Al revendedor se le vende de contado (decisión del dueño: fiarle es raro y no se
         // ofrece). Su precio ya es el rebajado: no se le suma el descuento de colaborador.
@@ -604,7 +667,8 @@ class POSViewModel(
         }
         // El descuento se recalcula acá desde la cuenta, no se confía en lo que mostró el
         // diálogo, y solo con efectivo: premia el pago al contado, no el fiado ni la tarjeta.
-        val discountAmount = if (resale == null && paymentMethod == SalePaymentMethod.CASH &&
+        // Un pago dividido no lo lleva: premia pagar TODO de contado.
+        val discountAmount = if (resale == null && paymentMethod == SalePaymentMethod.CASH && splitTyped.isEmpty() &&
             discountAccount?.isEmployee == true && discountAccount.cashDiscountEligible
         ) employeeDiscountAmount() else 0.0
         val total = cartTotal() - discountAmount
@@ -626,14 +690,39 @@ class POSViewModel(
         val depositApplied = depositToApply?.let { money(minOf(it.remaining, total)) } ?: 0.0
         val due = money(total - depositApplied)
         val coveredByDeposit = depositApplied > 0.004 && due <= 0.004
-        // Todo pagado con anticipo: la venta no tiene otro método que mostrar.
-        val saleMethod = if (coveredByDeposit) SalePaymentMethod.CUSTOMER_DEPOSIT else paymentMethod
-        val effectiveTendered = if (paymentMethod == SalePaymentMethod.CASH && !coveredByDeposit) tenderedAmount else due
-        if (effectiveTendered < due - 0.004) {
-            _uiState.update { it.copy(error = "Monto recibido menor al total") }; return
+        // Pago dividido: se revalida contra el total recién calculado, no contra lo que vio el
+        // diálogo. Si una sola parte cubre todo (tarjeta por el total), es un cobro normal.
+        val splitParts: Map<String, Double> = if (splitTyped.isNotEmpty() && !coveredByDeposit) {
+            com.bakery.erp.model.splitPaymentProblem(due, splitTyped)?.let { problem ->
+                _uiState.update { it.copy(error = problem) }; return
+            }
+            com.bakery.erp.model.splitPaymentParts(due, splitTyped)
+        } else emptyMap()
+        val isMixed = splitParts.size > 1
+        val chargeMethod = when {
+            isMixed -> SalePaymentMethod.MIXED
+            splitParts.size == 1 -> splitParts.keys.first()
+            else -> paymentMethod
         }
-        val change = if (paymentMethod == SalePaymentMethod.CASH) (effectiveTendered - due).coerceAtLeast(0.0) else 0.0
-        val cashBills = if (paymentMethod == SalePaymentMethod.CASH) bills.filterValues { it > 0 } else emptyMap()
+        // Todo pagado con anticipo: la venta no tiene otro método que mostrar.
+        val saleMethod = if (coveredByDeposit) SalePaymentMethod.CUSTOMER_DEPOSIT else chargeMethod
+        // Lo que se paga en billetes: todo si es efectivo, el resto si es dividido.
+        val cashDue = when {
+            coveredByDeposit -> 0.0
+            isMixed -> splitParts[SalePaymentMethod.CASH] ?: 0.0
+            chargeMethod == SalePaymentMethod.CASH -> due
+            else -> 0.0
+        }
+        val takesCash = cashDue > 0.004
+        // En un pago dividido, "le dieron" y el vuelto son de la parte en efectivo.
+        val effectiveTendered = if (takesCash) tenderedAmount else if (isMixed) 0.0 else due
+        if (takesCash && tenderedAmount < cashDue - 0.004) {
+            val msg = if (isMixed) "El efectivo recibido no alcanza para Q ${cashDue.fmtMoney(2)}"
+                      else "Monto recibido menor al total"
+            _uiState.update { it.copy(error = msg) }; return
+        }
+        val change = if (takesCash) (tenderedAmount - cashDue).coerceAtLeast(0.0) else 0.0
+        val cashBills = if (takesCash) bills.filterValues { it > 0 } else emptyMap()
 
         val snapshotCart = state.cart
         val bakeryCart = snapshotCart.filter { it.isBakery }
@@ -658,6 +747,14 @@ class POSViewModel(
             restaurantCart.map { it.pendingSaleId to it.subtotal } +
                 listOfNotNull(if (bakeryCart.isNotEmpty()) BAKERY_SALE_KEY to money(bakeryTotal - discountAmount) else null)
         )
+        // Pago dividido: la parte de cada venta por método. Primero las cuentas del restaurante
+        // (en el mismo orden que el anticipo), después el pan; cada una por lo que cobra hoy.
+        val partsPlan: Map<String, Map<String, Double>> = if (isMixed) com.bakery.erp.model.allocatePaymentParts(
+            splitParts,
+            restaurantCart.map { it.pendingSaleId to money(it.subtotal - (depositPlan[it.pendingSaleId] ?: 0.0)) } +
+                listOfNotNull(if (bakeryCart.isNotEmpty())
+                    BAKERY_SALE_KEY to money(bakeryTotal - discountAmount - (depositPlan[BAKERY_SALE_KEY] ?: 0.0)) else null)
+        ) else emptyMap()
         val payment = CheckoutPayment(
             checkoutId = newCheckoutId(),
             method = saleMethod,
@@ -715,7 +812,11 @@ class POSViewModel(
                             depositId = depositToApply?.id.orEmpty(),
                             depositFolio = depositToApply?.folio.orEmpty(),
                             depositAmount = depositHere
-                        )
+                        ).let { p ->
+                            val mine = partsPlan[line.pendingSaleId].orEmpty()
+                            if (!isMixed) p
+                            else p.copy(method = com.bakery.erp.model.headerMethodFor(mine, saleMethod), parts = mine)
+                        }
                     ).also { depositUsed += depositHere }
                 }
                 // Las ventas que van en la factura de este cobro: las que quedaron SOLICITADA.
@@ -725,6 +826,8 @@ class POSViewModel(
                 if (bakeryCart.isEmpty()) return@runCatching collected.first() to collectedToInvoice
 
                 val bakeryDeposit = depositPlan[BAKERY_SALE_KEY] ?: 0.0
+                val bakeryParts = partsPlan[BAKERY_SALE_KEY].orEmpty()
+                val bakeryMethod = if (isMixed) com.bakery.erp.model.headerMethodFor(bakeryParts, saleMethod) else saleMethod
                 val sale = Sale(
                     branchId = branch.id,
                     branchName = branch.name,
@@ -739,13 +842,15 @@ class POSViewModel(
                     total = bakeryTotal - discountAmount,
                     discountAccountId = if (discountAmount > 0) discountAccount?.id.orEmpty() else "",
                     discountLabel = if (discountAmount > 0) "Descuento colaborador: ${discountAccount?.name.orEmpty()}" else "",
-                    paymentMethod = saleMethod,
+                    paymentMethod = bakeryMethod,
                     tenderedAmount = effectiveTendered,
                     changeAmount = change,
                     // Unidades por grupo en el encabezado: el conteo de cierre las reparte
                     // leyendo solo encabezados, sin abrir las líneas de cada ticket.
                     groupIds = bakeryCart.filter { it.isGroup }.map { it.quickGroupId },
                     groupUnits = bakeryCart.filter { it.isGroup }.map { it.quantity },
+                    packagingUnits = bakeryCart.filter { it.isPackaging }.sumOf { it.quantity },
+                    packagingAmount = money(bakeryCart.filter { it.isPackaging }.sumOf { it.subtotal }),
                     checkoutId = payment.checkoutId,
                     checkoutTotal = total,
                     billValues = payment.billValues,
@@ -767,11 +872,26 @@ class POSViewModel(
                     depositAmount = bakeryDeposit,
                     linkedCustomerOrderId = depositToApply?.customerOrderId?.takeIf { bakeryDeposit > 0.004 }.orEmpty(),
                     // Con anticipo, la caja solo suma el saldo (ver createSale).
-                    paymentBreakdown = com.bakery.erp.model.paymentBreakdownWithDeposit(
+                    paymentBreakdown = if (isMixed) buildMap {
+                        if (bakeryDeposit > 0.004) put(SalePaymentMethod.CUSTOMER_DEPOSIT, bakeryDeposit)
+                        putAll(bakeryParts)
+                    } else com.bakery.erp.model.paymentBreakdownWithDeposit(
                         money(bakeryTotal - discountAmount), bakeryDeposit, saleMethod
                     )
                 )
                 val lines = bakeryCart.map { line ->
+                    if (line.isPackaging) {
+                        return@map SaleLine(
+                            productId = null,
+                            productName = line.productName,
+                            quantity = line.quantity,
+                            unitPrice = line.unitPrice,
+                            subtotal = line.subtotal,
+                            priceSource = line.priceSource,
+                            stockDeducted = false,
+                            packagingItemId = line.packagingItemId
+                        )
+                    }
                     if (line.isGroup) {
                         return@map SaleLine(
                             productId = null,
@@ -857,16 +977,19 @@ class POSViewModel(
                 val checkoutSale = sale.copy(subtotal = total + discountAmount, discount = discountAmount,
                     total = total, tenderedAmount = effectiveTendered, changeAmount = change,
                     paymentMethod = saleMethod,
+                    // El ticket dice cómo se pagó TODO el cobro, no solo la parte del pan.
+                    paymentBreakdown = if (isMixed) splitParts else sale.paymentBreakdown,
                     depositFolio = depositToApply?.folio.orEmpty().takeIf { depositApplied > 0.004 }.orEmpty(),
                     depositAmount = depositApplied)
                 val receipt = buildReceiptData(checkoutSale, snapshotCart, branch)
                 val record = CheckoutRecord(
                     checkoutId = payment.checkoutId,
                     at = Clock.System.now().toEpochMilliseconds(),
-                    method = paymentMethod,
+                    method = chargeMethod,
                     total = total,
                     tendered = effectiveTendered,
                     change = change,
+                    parts = if (isMixed) splitParts else emptyMap(),
                     bills = cashBills.entries.sortedByDescending { it.key }
                         .map { it.key.toDouble() to it.value },
                     items = snapshotCart.map { l ->
@@ -887,7 +1010,7 @@ class POSViewModel(
                         // La siguiente venta es de mostrador: quedarse en modo revendedor le
                         // cobraría barato al cliente que sigue en la fila.
                         resellerSale = null,
-                        lastSaleSummary = LastSaleSummary(total, change, paymentMethod),
+                        lastSaleSummary = LastSaleSummary(total, change, chargeMethod),
                         lastReceiptData = receipt,
                         recentCheckouts = (listOf(record) + it.recentCheckouts).take(MAX_RECENT_CHECKOUTS),
                         invoiceProgress = if (invoiced) InvoiceProgress(invoiceSaleIds.first(), FelInvoiceStatus.SOLICITADA) else null
@@ -1526,7 +1649,8 @@ class POSViewModel(
         val dropped = mutableListOf<String>()
         val repriced = state.cart.mapNotNull { line ->
             when {
-                line.isRestaurant -> line
+                // La bolsa vale lo mismo para todos: no está en ninguna lista de precios.
+                line.isRestaurant || line.isPackaging -> line
                 line.isGroup -> {
                     val price = categoriesById[line.quickGroupId]?.let { groupPriceFor(it) }
                     if (price == null) { dropped += line.productName; null }
@@ -1578,7 +1702,7 @@ class POSViewModel(
     fun oversoldLines(): List<CartLine> =
         // El grupo de precio no tiene un producto contra el cual comparar: su inventario lo
         // reparte el conteo de cierre.
-        _uiState.value.cart.filter { !it.isGroup && !it.isRestaurant && it.quantity > stockOf(it.productId) }
+        _uiState.value.cart.filter { it.hasProductStock && it.quantity > stockOf(it.productId) }
 }
 
 /** Ventana de ventas que ordena la pestaña "Todos" del POS. */

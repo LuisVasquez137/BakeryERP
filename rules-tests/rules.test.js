@@ -373,6 +373,8 @@ describe('fase 4', () => {
     const caj = as('cajeraA');
     await assertFails(setDoc(doc(caj, 'companies/orgA/cashRegisters/r1'), { name: 'Caja 1' }));
     await assertFails(setDoc(doc(caj, 'companies/orgA/saleQuickGroups/g1'), { name: 'Pan Q0.50' }));
+    await assertFails(setDoc(doc(caj, 'companies/orgA/packagingItems/k1'), { name: 'Bolsa', salePrice: 0.25 }));
+    await assertSucceeds(getDoc(doc(caj, 'companies/orgA/packagingItems/k1')));
     await assertFails(setDoc(doc(caj, 'companies/orgA/priceLists/l1'), { name: 'X' }));
     await assertFails(setDoc(doc(caj, 'companies/orgA/standardCosts/2026-11_p1'), { unitCost: 1 }));
     await assertFails(setDoc(doc(caj, 'companies/orgA/standardCostPeriods/2026-11'), { period: '2026-11' }));
@@ -387,6 +389,7 @@ describe('fase 4', () => {
     await env.withSecurityRulesDisabled((ctx) => setDoc(doc(ctx.firestore(), 'users/posAdmin'),
       profile({ permissions: ['MANAGE_POS_CONFIG'], branchIds: ['b1'] })));
     await assertSucceeds(setDoc(doc(as('posAdmin'), 'companies/orgA/saleQuickGroups/g1'), { name: 'Pan Q0.50' }));
+    await assertSucceeds(setDoc(doc(as('posAdmin'), 'companies/orgA/packagingItems/k1'), { name: 'Bolsa', salePrice: 0.25 }));
   });
 
   test('perfiles de facturación: solo la función', async () => {

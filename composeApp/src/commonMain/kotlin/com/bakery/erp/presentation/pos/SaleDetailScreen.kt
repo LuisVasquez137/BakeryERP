@@ -17,6 +17,7 @@ import com.bakery.erp.model.Permission
 import com.bakery.erp.model.Sale
 import com.bakery.erp.model.SaleLine
 import com.bakery.erp.model.SalePaymentMethod
+import com.bakery.erp.model.effectivePaymentBreakdown
 import com.bakery.erp.ui.theme.BrandColors
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.presentation.auth.AuthViewModel
@@ -221,7 +222,10 @@ private fun SaleHeaderCard(sale: Sale, canSeeValue: Boolean) {
             Text("Cajero: ${sale.cashierName}",
                  style = MaterialTheme.typography.bodySmall,
                  color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("Método: ${SalePaymentMethod.label(sale.paymentMethod)}",
+            Text("Método: ${SalePaymentMethod.label(sale.paymentMethod)}" +
+                    // Pago dividido: cuánto entró por cada método.
+                    if (sale.paymentMethod == SalePaymentMethod.MIXED)
+                        " · " + com.bakery.erp.model.paymentPartsLabel(sale.effectivePaymentBreakdown) else "",
                  style = MaterialTheme.typography.bodySmall)
             if (sale.resellerName.isNotBlank()) {
                 Text("Revendedor: ${sale.resellerName}" +
@@ -255,9 +259,12 @@ private fun SaleHeaderCard(sale: Sale, canSeeValue: Boolean) {
                     Text("Total", fontWeight = FontWeight.SemiBold)
                     Text("Q ${sale.total.fmtMoney(2)}", fontWeight = FontWeight.Bold)
                 }
-                if (sale.paymentMethod == SalePaymentMethod.CASH) {
+                // En un pago dividido, lo recibido y el vuelto son de la parte en efectivo.
+                if (sale.paymentMethod == SalePaymentMethod.CASH ||
+                    (sale.paymentMethod == SalePaymentMethod.MIXED && sale.tenderedAmount > 0.004)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Recibido"); Text("Q ${sale.tenderedAmount.fmtMoney(2)}")
+                        Text(if (sale.paymentMethod == SalePaymentMethod.MIXED) "Efectivo recibido" else "Recibido")
+                        Text("Q ${sale.tenderedAmount.fmtMoney(2)}")
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Vuelto"); Text("Q ${sale.changeAmount.fmtMoney(2)}")

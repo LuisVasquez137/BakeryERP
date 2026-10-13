@@ -33,6 +33,7 @@ actual fun createAppViewModels(): AppViewModels {
         saleHistory = koin.get(),
         cashRegisterAdmin = koin.get(),
         posCategoryAdmin = koin.get(),
+        packagingAdmin = koin.get(),
         credit = koin.get(),
         breadCount = koin.get(),
         dailyCashClose = koin.get(),

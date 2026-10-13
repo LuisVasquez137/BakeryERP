@@ -19,6 +19,11 @@ data class SalesSummary(
      * en 20 para la gráfica; el reporte "Pedido vs. recibido" necesita el resto.
      */
     val unitsByProduct: Map<String, Double> = emptyMap(),
+    /**
+     * Empaques cobrados (la bolsa), aparte de [topProducts]: una bolsa no es pan vendido y
+     * mezclada en el ranking se comería un lugar del top.
+     */
+    val packagingSales: List<ProductSalesStat> = emptyList(),
     val hourHistogram: Map<Int, Double> = emptyMap(),
     val byDay: List<DailySalesPoint> = emptyList()
 )

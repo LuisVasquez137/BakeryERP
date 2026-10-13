@@ -75,6 +75,7 @@ companies/{c}/
   preparations/{id}/ingredients/{id}
   preparationBatches/{id}                  ← lotes con remainingWeightGrams
   priceLists/{id}                          ← RETAIL|WHOLESALE|CUSTOM, isDefault, priceFactor
+  packagingItems/{id}                      ← empaques cobrados en caja (bolsa); sin inventario
   productPrices/{productId}_{listId}       ← override plano por producto+lista
   dispatchNotes/{id}/lines/{id}            ← auto-creadas al completeLot
   deliveryRuns/{id}                        ← dispatchNoteIds array

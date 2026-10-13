@@ -75,6 +75,8 @@ data class AppViewModels(
     val saleHistory: SaleHistoryViewModel,
     val cashRegisterAdmin: CashRegisterAdminViewModel,
     val posCategoryAdmin: POSCategoryAdminViewModel,
+    /** Empaques que se cobran en caja (la bolsa). */
+    val packagingAdmin: com.bakery.erp.presentation.pos.admin.PackagingAdminViewModel,
     val credit: com.bakery.erp.presentation.credit.CreditViewModel,
     val breadCount: BreadCountViewModel,
     val dailyCashClose: DailyCashCloseViewModel,

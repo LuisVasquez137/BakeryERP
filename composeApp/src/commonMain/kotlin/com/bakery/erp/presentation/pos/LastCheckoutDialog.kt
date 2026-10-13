@@ -91,7 +91,9 @@ fun LastCheckoutDialog(
 
 @Composable
 private fun CheckoutDetail(c: CheckoutRecord) {
-    val isCash = c.method == SalePaymentMethod.CASH
+    // En un pago dividido con efectivo también hubo billetes y vuelto (de esa parte).
+    val cashPart = c.parts[SalePaymentMethod.CASH] ?: 0.0
+    val isCash = c.method == SalePaymentMethod.CASH || cashPart > 0.004
     Column(
         Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -112,6 +114,16 @@ private fun CheckoutDetail(c: CheckoutRecord) {
         ) {
             Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 AmountRow("Cobrado", c.total, emphasize = false)
+                if (c.parts.isNotEmpty()) {
+                    listOf(SalePaymentMethod.CARD, SalePaymentMethod.TRANSFER, SalePaymentMethod.CASH)
+                        .filter { (c.parts[it] ?: 0.0) > 0.004 }
+                        .forEach { m ->
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("· ${SalePaymentMethod.label(m)}", style = MaterialTheme.typography.bodyMedium)
+                                Text("Q ${c.parts.getValue(m).fmtMoney(2)}", style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                }
                 if (isCash) {
                     AmountRow("Le dieron", c.tendered, emphasize = false)
                     HorizontalDivider(Modifier.padding(vertical = 2.dp))

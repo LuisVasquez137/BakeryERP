@@ -124,6 +124,7 @@ import com.bakery.erp.presentation.pos.admin.CashRegisterAdminScreen
 import com.bakery.erp.presentation.pos.admin.CashRegisterFormScreen
 import com.bakery.erp.presentation.pos.admin.POSCategoryAdminScreen
 import com.bakery.erp.presentation.pos.admin.POSCategoryFormScreen
+import com.bakery.erp.presentation.pos.admin.PackagingAdminScreen
 import com.bakery.erp.presentation.recipes.RecipeDetailScreen
 import com.bakery.erp.presentation.recipes.RecipeFormScreen
 import com.bakery.erp.presentation.recipes.RecipeListScreen
@@ -420,6 +421,7 @@ sealed class Screen(val route: String) {
         fun route(saleId: String) = "sales/$saleId"
     }
     object POSCategoryAdminList : Screen("admin/posCategories")
+    object PackagingAdmin : Screen("admin/packaging")
     // Créditos
     object CreditAccountList : Screen("credit/accounts")
     object CreditAgingReport : Screen("credit/aging")
@@ -561,6 +563,7 @@ fun AppNavigation(
     val saleHistoryViewModel = vms.saleHistory
     val cashRegisterAdminViewModel = vms.cashRegisterAdmin
     val posCategoryAdminViewModel = vms.posCategoryAdmin
+    val packagingAdminViewModel = vms.packagingAdmin
     val creditViewModel = vms.credit
     val breadCountViewModel = vms.breadCount
     val dailyCashCloseViewModel = vms.dailyCashClose
@@ -835,6 +838,7 @@ fun AppNavigation(
                 onNavigateToSalesHistory = { navController.navigate(Screen.SaleHistoryList.route) },
                 onNavigateToCashRegisterAdmin = { navController.navigate(Screen.CashRegisterAdminList.route) },
                 onNavigateToQuickGroupAdmin = { navController.navigate(Screen.POSCategoryAdminList.route) },
+                onNavigateToPackagingAdmin = { navController.navigate(Screen.PackagingAdmin.route) },
                 onNavigateToCredit = { navController.navigate(Screen.CreditAccountList.route) },
                 onNavigateToBreadCount = { navController.navigate(Screen.BreadCountList.route) },
                 onNavigateToDailyCashClose = { navController.navigate(Screen.DailyCashCloseList.route) },
@@ -1434,6 +1438,17 @@ fun AppNavigation(
                     onNavigateBack = { navController.popBackStack() },
                     authViewModel = viewModel,
                     viewModel = posCategoryAdminViewModel
+                )
+            }
+        }
+
+        // ── Admin POS: empaques que se cobran ────────────────────────────────
+        composable(Screen.PackagingAdmin.route) {
+            RequirePermission(state.user, Permission.MANAGE_POS_CONFIG, onBack = { navController.popBackStack() }) {
+                PackagingAdminScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = packagingAdminViewModel
                 )
             }
         }

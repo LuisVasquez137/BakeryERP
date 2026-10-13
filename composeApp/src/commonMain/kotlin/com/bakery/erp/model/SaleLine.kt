@@ -3,10 +3,11 @@ package com.bakery.erp.model
 /**
  * Línea de venta. Subcolección de [Sale].
  *
- * Una línea vende un producto concreto ([productId]) o un grupo de precio ([quickGroupId],
- * ej. "Pan Q0.50", ver [POSCategory.sellAsGroup]). La de grupo no trae producto y no
- * descuenta inventario al cobrarse: el conteo de cierre reparte esas unidades entre los panes
- * del grupo según lo que de verdad falta (`allocateGroupSales`).
+ * Una línea vende un producto concreto ([productId]), un grupo de precio ([quickGroupId],
+ * ej. "Pan Q0.50", ver [POSCategory.sellAsGroup]) o un empaque cobrado ([packagingItemId], la
+ * bolsa). La de grupo no trae producto y no descuenta inventario al cobrarse: el conteo de
+ * cierre reparte esas unidades entre los panes del grupo según lo que de verdad falta
+ * (`allocateGroupSales`). La de empaque tampoco mueve inventario (ver [PackagingItem]).
  *
  * [costAtSale] es el snapshot del `avgUnitCost` de [FinishedProductStock] al momento de la venta,
  * para que reportes históricos de margen no se vean afectados por compras posteriores.
@@ -39,8 +40,14 @@ data class SaleLine(
     val linkedIngredientId: String = "",
     val linkedIngredientName: String = "",
     /** Unidades base del insumo que consumió UNA pieza vendida. 0 = uno a uno. */
-    val ingredientUnitsPerSale: Double = 0.0
+    val ingredientUnitsPerSale: Double = 0.0,
+    /** Empaque cobrado (bolsa, caja). Sin producto y sin inventario. Ver [PackagingItem]. */
+    val packagingItemId: String? = null
 )
+
+/** `true` si la línea cobra un empaque (la bolsa) y no pan. */
+val SaleLine.isPackaging: Boolean
+    get() = !packagingItemId.isNullOrEmpty()
 
 /** `true` si la línea descuenta inventario de insumos en vez de terminado. */
 val SaleLine.isIngredientBacked: Boolean
@@ -59,7 +66,18 @@ object SaleLinePriceSource {
     const val PRODUCT_SALE_PRICE = "PRODUCT_SALE_PRICE"
     /** Línea de grupo de precio ([POSCategory.sellAsGroup]) — cobra `groupUnitPrice`. */
     const val QUICK_GROUP        = "QUICK_GROUP"
+    /** Empaque cobrado ([PackagingItem.salePrice]): mismo precio en toda sucursal y cliente. */
+    const val PACKAGING          = "PACKAGING"
 }
 
 /** Clave con la que una línea de grupo entra al desglose por producto de los reportes. */
 fun groupSaleKey(groupId: String): String = "grp_$groupId"
+
+/**
+ * Clave con la que un empaque entra al desglose por producto de los reportes. Va aparte del
+ * pan a propósito: una bolsa no es una pieza vendida.
+ */
+fun packagingSaleKey(itemId: String): String = "pkg_$itemId"
+
+/** `true` si la clave del desglose es de un empaque y no de pan. */
+fun isPackagingSaleKey(key: String): Boolean = key.startsWith("pkg_")

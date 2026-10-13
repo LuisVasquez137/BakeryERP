@@ -16,6 +16,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CallSplit
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CreditCard
@@ -65,7 +66,9 @@ fun PaymentDialog(
      * [bills] = billetes que la cajera tocó (valor → cantidad). Vacío si tecleó el monto: en
      * ese caso no se sabe con qué billetes pagaron, y es mejor no inventarlo.
      */
-    onConfirm: (method: String, tendered: Double, bills: Map<Int, Int>, invoice: com.bakery.erp.model.FelInvoiceRequest?) -> Unit,
+    onConfirm: (method: String, tendered: Double, bills: Map<Int, Int>, invoice: com.bakery.erp.model.FelInvoiceRequest?,
+                /** Pago dividido: tarjeta / transferencia → monto. Vacío = un solo método. */
+                split: Map<String, Double>) -> Unit,
     /**
      * Cuentas a las que se puede fiar. `null` = esta cajera no puede vender a crédito (o el
      * carrito trae una cuenta del restaurante) y la opción no aparece.
@@ -94,9 +97,14 @@ fun PaymentDialog(
     var discountPickerOpen by remember { mutableStateOf(false) }
     val baseTotal = total
     var method by remember { mutableStateOf(SalePaymentMethod.CASH) }
+    // Pago dividido: se teclea lo de tarjeta/transferencia y el efectivo es lo que falta.
+    var splitMode by remember { mutableStateOf(false) }
+    var cardText by remember { mutableStateOf("") }
+    var transferText by remember { mutableStateOf("") }
     val isCash = method == SalePaymentMethod.CASH
     val isCredit = method == SalePaymentMethod.CREDIT
-    val discountAmount = if (isCash && discountAccount != null) employeeDiscount else 0.0
+    // Sin descuento de colaborador en un pago dividido: premia pagar TODO de contado.
+    val discountAmount = if (isCash && !splitMode && discountAccount != null) employeeDiscount else 0.0
     var deposit by remember { mutableStateOf<com.bakery.erp.model.CustomerDeposit?>(null) }
     var depositPickerOpen by remember { mutableStateOf(false) }
     // Lo que vale la venta (va en la factura) y lo que se cobra hoy: el anticipo ya se pagó en
@@ -110,26 +118,47 @@ fun PaymentDialog(
     var tenderedText by remember { mutableStateOf("") }
     var bills by remember { mutableStateOf(emptyMap<Int, Int>()) }
     val tendered = tenderedText.toDoubleOrNull() ?: 0.0
-    val change = if (isCash) (tendered - total).coerceAtLeast(0.0) else 0.0
-    val isCashShort = isCash && tenderedText.isNotEmpty() && tendered < total - 0.004
+    val splitAmounts = mapOf(
+        SalePaymentMethod.CARD to (cardText.toDoubleOrNull() ?: 0.0),
+        SalePaymentMethod.TRANSFER to (transferText.toDoubleOrNull() ?: 0.0)
+    )
+    val splitActive = splitMode && !coveredByDeposit
+    val splitProblem = if (splitActive) com.bakery.erp.model.splitPaymentProblem(total, splitAmounts) else null
+    // Lo que se paga en billetes: el total, o en un pago dividido lo que falta.
+    val cashTarget = if (splitActive) (com.bakery.erp.model.splitPaymentParts(total, splitAmounts)[SalePaymentMethod.CASH] ?: 0.0)
+                     else total
+    val needsCash = isCash && cashTarget > 0.004
+    val change = if (needsCash) (tendered - cashTarget).coerceAtLeast(0.0) else 0.0
+    val isCashShort = needsCash && tenderedText.isNotEmpty() && tendered < cashTarget - 0.004
 
     val methods = SalePaymentMethod.all + listOfNotNull(SalePaymentMethod.CREDIT.takeIf { creditAccounts != null })
     // Lo facturable (pan + restaurante no facturado en ComandaYa), con el descuento de colaborador.
     val invoicedTotal = ((invoiceOptions?.invoiceableTotal ?: 0.0) - discountAmount).coerceAtLeast(0.0)
     val invoice = if (invoiceOptions != null) invoiceForm.request() else null
     val invoiceReady = invoiceOptions == null || invoiceForm.problem(invoicedTotal) == null
-    val canConfirm = invoiceReady && (coveredByDeposit || when (method) {
+    val canConfirm = invoiceReady && (coveredByDeposit || when {
+        splitActive -> splitProblem == null && (cashTarget <= 0.004 || tendered >= cashTarget - 0.004)
+        else -> null
+    } ?: when (method) {
         SalePaymentMethod.CASH -> tendered >= total - 0.004 && total > 0
         SalePaymentMethod.CREDIT -> creditReady && total > 0
         else -> total > 0
     })
     val showInvoice = invoiceOptions != null && invoiceOptions.invoiceableTotal > 0.0
-    val hasExtras = (deposits != null && !isCredit) || (isCash && discountAccounts.isNotEmpty() && employeeDiscount > 0.0)
+    val hasExtras = (deposits != null && !isCredit) ||
+        (isCash && !splitMode && discountAccounts.isNotEmpty() && employeeDiscount > 0.0)
 
     fun confirm() {
         val c = credit
         if (isCredit && c != null) onConfirmCredit(c, invoice)
-        else onConfirm(method, if (isCash) tendered else total, if (isCash) bills else emptyMap(), invoice)
+        else if (splitActive) onConfirm(
+            SalePaymentMethod.CASH,
+            if (needsCash) tendered else 0.0,
+            if (needsCash) bills else emptyMap(),
+            invoice,
+            splitAmounts.filterValues { it > 0.004 }
+        )
+        else onConfirm(method, if (isCash) tendered else total, if (isCash) bills else emptyMap(), invoice, emptyMap())
     }
 
     // ── Piezas: las mismas en uno o dos paneles ───────────────────────────────
@@ -160,12 +189,41 @@ fun PaymentDialog(
     }
 
     val methodsRow: @Composable () -> Unit = {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            methods.forEach { m ->
-                MethodCard(label = SalePaymentMethod.label(m), icon = methodIcon(m), selected = method == m,
-                    onClick = { method = m }, modifier = Modifier.weight(1f))
+        if (splitMode) {
+            Surface(shape = RoundedCornerShape(14.dp), color = BrandColors.PrimaryContainer,
+                border = BorderStroke(2.dp, BrandColors.Primary), modifier = Modifier.fillMaxWidth()) {
+                Row(Modifier.padding(start = 14.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.CallSplit, null, tint = BrandColors.Primary)
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Pago dividido", fontWeight = FontWeight.Bold, color = BrandColors.Primary)
+                        Text("Lo que no va con tarjeta o transferencia se paga en efectivo",
+                            style = MaterialTheme.typography.bodySmall, color = BrandColors.TextSlate)
+                    }
+                    TextButton(onClick = {
+                        splitMode = false; cardText = ""; transferText = ""
+                        tenderedText = ""; bills = emptyMap()
+                    }) { Text("Un solo método") }
+                }
+            }
+        } else {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                methods.forEach { m ->
+                    MethodCard(label = SalePaymentMethod.label(m), icon = methodIcon(m), selected = method == m,
+                        onClick = { method = m }, modifier = Modifier.weight(1f))
+                }
             }
         }
+    }
+
+    // Sin fiado combinado, y no hace falta si el anticipo ya cubre todo.
+    val canSplit = !isCredit && !coveredByDeposit
+    fun startSplit() {
+        splitMode = true; method = SalePaymentMethod.CASH
+        tenderedText = ""; bills = emptyMap()
+        // Dividir quita el descuento de colaborador: avisarle a la pantalla.
+        if (discountAccount != null) { discountAccount = null; onDiscountChange(null) }
     }
 
     // Cómo paga: lo que cambia con el método elegido.
@@ -178,6 +236,19 @@ fun PaymentDialog(
                 CreditChargeSelector(accounts = creditAccounts, selection = credit, onChange = { credit = it })
             }
             isCash -> {
+                if (splitActive) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SplitAmountField("Tarjeta", cardText, Modifier.weight(1f)) { cardText = it }
+                        SplitAmountField("Transferencia", transferText, Modifier.weight(1f)) { transferText = it }
+                    }
+                    if (splitProblem != null && (cardText.isNotEmpty() || transferText.isNotEmpty())) {
+                        Text(splitProblem, color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                    // Con efectivo, lo que falta ya va en la etiqueta de "Le dieron".
+                    if (!needsCash) SplitCashRow(cashTarget)
+                }
+                if (needsCash) {
                 OutlinedTextField(
                     value = tenderedText,
                     onValueChange = {
@@ -186,7 +257,16 @@ fun PaymentDialog(
                         bills = emptyMap()
                     },
                     prefix = { Text("Q ") },
-                    label = { Text("Le dieron") },
+                    label = {
+                        Text(if (splitActive) "Le dieron (efectivo Q ${cashTarget.fmtMoney(2)})" else "Le dieron")
+                    },
+                    trailingIcon = if (canSplit && !splitMode) ({
+                        TextButton(onClick = { startSplit() }, contentPadding = PaddingValues(horizontal = 10.dp)) {
+                            Icon(Icons.Default.CallSplit, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Dividir cuenta")
+                        }
+                    }) else null,
                     singleLine = true,
                     isError = isCashShort,
                     textStyle = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
@@ -195,10 +275,10 @@ fun PaymentDialog(
                 )
                 // Montos típicos: lo exacto y los billetes redondos que alcanzan.
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    QuickAmount("Exacto", selected = tenderedText.isNotEmpty() && tendered == total && bills.isEmpty()) {
-                        tenderedText = total.fmt(2); bills = emptyMap()
+                    QuickAmount("Exacto", selected = tenderedText.isNotEmpty() && tendered == cashTarget && bills.isEmpty()) {
+                        tenderedText = cashTarget.fmt(2); bills = emptyMap()
                     }
-                    suggestedAmounts(total).forEach { amount ->
+                    suggestedAmounts(cashTarget).forEach { amount ->
                         QuickAmount("Q ${amount}", selected = tenderedText.isNotEmpty() && tendered == amount.toDouble()) {
                             tenderedText = amount.toDouble().fmt(2)
                             // Si el monto ES un billete, se sabe con qué pagaron.
@@ -226,12 +306,24 @@ fun PaymentDialog(
                 ChangePanel(
                     hasAmount = tenderedText.isNotEmpty(),
                     short = isCashShort,
-                    missing = (total - tendered).coerceAtLeast(0.0),
+                    missing = (cashTarget - tendered).coerceAtLeast(0.0),
                     change = change
                 )
+                }
             }
-            method == SalePaymentMethod.CARD -> InfoNote("Pasá la tarjeta y confirmá cuando el voucher salga aprobado.")
-            else -> InfoNote("Confirmá que la transferencia ya se acreditó antes de cobrar.")
+            else -> {
+                InfoNote(
+                    if (method == SalePaymentMethod.CARD) "Pasá la tarjeta y confirmá cuando el voucher salga aprobado."
+                    else "Confirmá que la transferencia ya se acreditó antes de cobrar."
+                )
+                if (canSplit) {
+                    TextButton(onClick = { startSplit() }) {
+                        Icon(Icons.Default.CallSplit, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Dividir pago: parte con ${SalePaymentMethod.label(method).lowercase()}, parte en efectivo")
+                    }
+                }
+            }
         }
     }
 
@@ -251,7 +343,7 @@ fun PaymentDialog(
                 )
             }
         }
-        if (isCash && discountAccounts.isNotEmpty() && employeeDiscount > 0.0) {
+        if (isCash && !splitMode && discountAccounts.isNotEmpty() && employeeDiscount > 0.0) {
             val d = discountAccount
             if (d == null) {
                 ExtraButton("¿Es un colaborador? Descuento de Q ${employeeDiscount.fmtMoney(2)}", Icons.Default.PersonOutline) {
@@ -279,6 +371,7 @@ fun PaymentDialog(
                 when {
                     coveredByDeposit -> "Entregar (pagado con anticipo)"
                     isCredit -> "Cargar Q ${total.fmtMoney(2)} a la cuenta"
+                    splitActive -> "Cobrar Q ${total.fmtMoney(2)} dividido"
                     else -> "Cobrar Q ${total.fmtMoney(2)}"
                 },
                 style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold
@@ -390,6 +483,44 @@ fun PaymentDialog(
             confirmButton = {},
             dismissButton = { TextButton(onClick = { discountPickerOpen = false }) { Text("Cancelar") } }
         )
+    }
+}
+
+/** Monto de tarjeta o transferencia en un pago dividido. */
+@Composable
+private fun SplitAmountField(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    onChange: (String) -> Unit
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = { onChange(it.filter { c -> c.isDigit() || c == '.' }) },
+        prefix = { Text("Q ") },
+        label = { Text(label) },
+        singleLine = true,
+        textStyle = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        modifier = modifier
+    )
+}
+
+/** Lo que queda por pagar en efectivo: se calcula, no se teclea. */
+@Composable
+private fun SplitCashRow(cash: Double) {
+    Surface(shape = RoundedCornerShape(12.dp), color = BrandColors.Ivory,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.Payments, null, tint = BrandColors.Primary)
+            Spacer(Modifier.width(10.dp))
+            Text(if (cash > 0.004) "En efectivo" else "Sin efectivo: lo tecleado cubre todo",
+                color = BrandColors.TextSlate, modifier = Modifier.weight(1f))
+            if (cash > 0.004) {
+                Text("Q ${cash.fmtMoney(2)}", fontWeight = FontWeight.ExtraBold,
+                    style = MaterialTheme.typography.titleLarge, color = BrandColors.Primary)
+            }
+        }
     }
 }
 

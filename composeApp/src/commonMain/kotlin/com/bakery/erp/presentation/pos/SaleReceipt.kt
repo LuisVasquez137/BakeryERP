@@ -5,6 +5,7 @@ import com.bakery.erp.model.ReceiptLine
 import com.bakery.erp.model.Sale
 import com.bakery.erp.model.SaleLine
 import com.bakery.erp.model.SalePaymentMethod
+import com.bakery.erp.model.effectivePaymentBreakdown
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlin.time.Clock
@@ -50,6 +51,9 @@ internal fun saleReceiptData(
         // El revendedor va junto al método de pago y no en un renglón propio del ticket: así
         // sale igual en la impresora, en el acuse y en la reimpresión sin tocar el formato.
         else SalePaymentMethod.label(sale.paymentMethod) +
+            // Pago dividido: cuánto por cada método. "Recibido" y "vuelto" son del efectivo.
+            (if (sale.paymentMethod == SalePaymentMethod.MIXED)
+                " · " + com.bakery.erp.model.paymentPartsLabel(sale.effectivePaymentBreakdown) else "") +
             (if (sale.resellerName.isNotBlank()) " · Revendedor: ${sale.resellerName}" else ""),
         tenderedAmount = sale.tenderedAmount,
         changeAmount = sale.changeAmount,

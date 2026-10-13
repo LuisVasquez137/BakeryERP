@@ -91,6 +91,14 @@ data class Sale(
     val groupIds: List<String> = emptyList(),
     val groupUnits: List<Double> = emptyList(),
     /**
+     * Empaques cobrados en esta venta (bolsas, cajas): cuántos y por cuánto. Es lo que contesta
+     * "¿se cobró la bolsa?" en el historial sin abrir las líneas de cada ticket. El detalle de
+     * cuál empaque va en las líneas ([SaleLine.packagingItemId]). 0 = no se cobró ninguno (o
+     * venta anterior a esto, o empresa que no cobra empaque).
+     */
+    val packagingUnits: Double = 0.0,
+    val packagingAmount: Double = 0.0,
+    /**
      * Un cobro en caja puede pagar varias ventas de una vez: el pan del mostrador más la
      * cuenta del restaurante que el cliente trajo. Todas llevan el mismo [checkoutId] y los
      * mismos datos del pago —[checkoutTotal], [tenderedAmount], [changeAmount] y los
@@ -216,6 +224,12 @@ object SalePaymentMethod {
      * de la gaveta — ese dinero entró como movimiento en la caja donde se recibió.
      */
     const val CUSTOMER_DEPOSIT = "CUSTOMER_DEPOSIT"
+    /**
+     * Pago dividido (parte tarjeta, parte efectivo…). Solo va en el encabezado: el detalle por
+     * método está en `paymentBreakdown`, que es lo que suman la caja y los reportes. Ver
+     * `SplitPayment.kt`.
+     */
+    const val MIXED = "MIXED"
 
     fun label(method: String) = when (method) {
         CASH     -> "Efectivo"
@@ -223,6 +237,7 @@ object SalePaymentMethod {
         TRANSFER -> "Transferencia"
         CREDIT   -> "Crédito"
         CUSTOMER_DEPOSIT -> "Anticipo"
+        MIXED    -> "Mixto"
         else     -> "Desconocido"
     }
 

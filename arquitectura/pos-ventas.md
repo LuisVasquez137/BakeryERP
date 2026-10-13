@@ -295,3 +295,65 @@ mayoría no tiene la app, así que **Revendedores** (Home, `ResellerApprovalScre
 - Inactivar (switch "Activo") lo saca de la caja sin borrar su historial.
 - Los 4 de prueba se borraron con `functions/tools/delete-test-resellers.js` (respaldo en JSON);
   sus 5 pedidos de prueba quedan, guardan el nombre como copia.
+
+### Empaques que se cobran: la bolsa (oct 2026)
+
+Muchas panaderías cobran la bolsa plástica y la caja de pastel; otras no. Decisiones con el dueño:
+
+- **No es producto.** Como `Product` entraría a producción, despacho, terminado, listas y al
+  conteo de cierre — quedaría siempre como faltante e inflaría "ventas de pan". Es un catálogo
+  aparte, `PackagingItem` (`companies/{c}/packagingItems`: nombre, `salePrice`, `active`,
+  `sortOrder`), administrado en Inicio → **Empaques** (`PackagingAdminScreen`, permiso
+  `MANAGE_POS_CONFIG`, que también exige la regla de Firestore).
+- **Sin inventario.** La compra de bolsas entra como compra rápida (gasto); la venta no descuenta
+  nada. Decisión del dueño: por ahora no vale la pena llevar existencia.
+- **Un solo precio** para todas las sucursales, y también al revendedor (`repriceCart` deja la
+  línea tal cual: la bolsa no está en ninguna lista de precios).
+- **Opcional por empresa**: sin empaques activos el POS no muestra nada.
+- **POS**: `PackagingQuickBar` ("+ Bolsa Q0.25", con "×2" si ya va) junto al total en
+  `CartPanel` (tablet y hoja del carrito) y, en teléfono, sobre la barra azul cuando el carrito
+  no está vacío. Va al pie y no en la cuadrícula porque la bolsa se pide al empacar. Cada toque
+  suma uno sobre la línea `pkg_<id>`; se quita con el "−" del renglón. Los empaques se observan
+  en vivo: un precio nuevo llega a las cajas abiertas sin recargar; lo que ya está en un carrito
+  conserva su precio.
+- **La venta guarda si se cobró**: línea con `productId = null` + `packagingItemId`
+  (`priceSource = PACKAGING`, `stockDeducted = false`) y el encabezado denormaliza
+  `packagingUnits`/`packagingAmount`, así el historial lo muestra sin abrir líneas: chip
+  "Empaque ×N" en cada venta y filtro Todas / Con empaque / Sin empaque (solo si ese día se cobró
+  alguno; "sin empaque" ignora el restaurante). Ticket y FEL lo llevan solos como un renglón más.
+- **Reportes**: en el resumen diario entra con clave `pkg_<id>` (`packagingSaleKey`) y NO suma a
+  `unitsSold`. `salesSummaryFromDaily` lo saca de `topProducts`/`unitsByProduct` a
+  `packagingSales` → sección "Empaques cobrados" del reporte de ventas.
+- Tests: `PackagingItemTest`; reglas en `rules-tests` ("configuración solo con su permiso").
+
+### Pago dividido: parte tarjeta, parte efectivo (oct 2026)
+
+Antes un cobro era de un solo método. El modelo ya guardaba `Sale.paymentBreakdown` (nació con
+las cuentas partidas de ComandaYa) y la caja y la entrega de turno ya sumaban por desglose; faltaba
+poder hacerlo desde el cobro.
+
+- **UI** (`PaymentDialog`): el botón "Dividir cuenta" va DENTRO del campo "Le dieron" (con tarjeta o
+  transferencia elegida, debajo del aviso). En una fila propia empujaba el vuelto fuera de la vista
+  y había que desplazarse. Se teclea solo lo de **Tarjeta** y **Transferencia** (lado a lado);
+  **el efectivo es lo que falta** (`splitPaymentParts`) y va en la etiqueta "Le dieron (efectivo
+  Q X)", con el mismo bloque de siempre (montos rápidos, billetes, vuelto) contra ESA parte. El
+  vuelto sale solo del efectivo.
+- **Decisiones del dueño**: sin fiado combinado (el cargo a la cuenta y la venta tendrían que
+  partirse) y sin descuento de colaborador (premia pagar todo de contado; entrar al modo lo quita).
+- **Lógica pura** en `model/SplitPayment.kt` (tests `SplitPaymentTest`), en centavos enteros:
+  `splitPaymentProblem` (no negativos, que no pase del total), `splitPaymentParts`,
+  `allocatePaymentParts` (reparte las partes entre las ventas del cobro —restaurante primero, el
+  pan al final, como el anticipo— llenando cada venta en orden tarjeta → transferencia →
+  efectivo) y `headerMethodFor`.
+- **La venta**: `paymentMethod = MIXED` ("Mixto") solo si ESA venta quedó con más de un método;
+  el detalle va en `paymentBreakdown` (+ anticipo si hubo). Las cuentas del restaurante reciben su
+  parte por `CheckoutPayment.parts`. `tenderedAmount`/`changeAmount` = de la parte en efectivo.
+  `confirmSale(split = …)` revalida todo contra el total recién calculado. Si una sola parte cubre
+  el total (tarjeta por todo), se guarda como cobro normal de ese método.
+- **Ticket y detalle**: "Mixto · Tarjeta Q 50.00 · Efectivo Q 30.00" (`paymentPartsLabel`).
+  "Último cobro" suma las partes de todas las ventas del cobro (`CheckoutRecord.parts`).
+- **Reportes**: `SaleContribution.paymentParts` — el resumen diario suma "por método" según el
+  desglose (si cuadra con el total y tiene más de una parte); un ticket dividido cuenta como ticket
+  en cada método. Esto también corrige las cuentas partidas de ComandaYa, que antes iban enteras a
+  un método; el histórico se repara con `rebuildDailyRollups`. Efecto colateral aceptado: una venta
+  con anticipo + saldo ahora muestra la parte "Anticipo" en "por método".

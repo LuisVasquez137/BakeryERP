@@ -28,6 +28,8 @@ import com.bakery.erp.model.SalesDaily
 import com.bakery.erp.model.plus
 import com.bakery.erp.model.salesDailyId
 import com.bakery.erp.model.groupSaleKey
+import com.bakery.erp.model.isPackaging
+import com.bakery.erp.model.packagingSaleKey
 import com.bakery.erp.model.StockMovement
 import com.bakery.erp.model.ingredientUnitsConsumed
 import com.bakery.erp.model.isIngredientBacked
@@ -331,7 +333,12 @@ class FirebaseSaleRepository(
                 depositFolio = checkout.depositFolio.takeIf { checkout.depositAmount > 0.004 }.orEmpty(),
                 depositAmount = checkout.depositAmount,
                 // Con anticipo, el desglose separa lo que paga el anticipo del saldo cobrado hoy.
-                paymentBreakdown = com.bakery.erp.model.paymentBreakdownWithDeposit(
+                // En un pago dividido, la parte de esta cuenta por método (ya repartida).
+                paymentBreakdown = if (checkout.parts.isNotEmpty()) buildMap {
+                    if (checkout.depositAmount > 0.004)
+                        put(SalePaymentMethod.CUSTOMER_DEPOSIT, checkout.depositAmount)
+                    putAll(checkout.parts)
+                } else com.bakery.erp.model.paymentBreakdownWithDeposit(
                     received.total, checkout.depositAmount, checkout.method
                 )
             ).let { s ->
@@ -422,12 +429,14 @@ class FirebaseSaleRepository(
         // Las líneas express no tienen producto: suman a las unidades y al total, pero no
         // pueden entrar al desglose por producto. Las de grupo de precio ("Pan Q0.50") sí
         // entran, con clave `grp_<id>`: son la mayor parte del pan vendido y sin esto el
-        // reporte las perdería de vista.
+        // reporte las perdería de vista. Los empaques (la bolsa) entran con `pkg_<id>`: se ve
+        // cuánto se cobró de bolsa, pero no cuentan como piezas vendidas.
         val withProduct = lines.mapNotNull { line ->
             when {
                 !line.productId.isNullOrEmpty() -> line
                 !line.quickGroupId.isNullOrEmpty() ->
                     line.copy(productId = groupSaleKey(line.quickGroupId))
+                line.isPackaging -> line.copy(productId = packagingSaleKey(line.packagingItemId!!))
                 else -> null
             }
         }
@@ -447,12 +456,17 @@ class FirebaseSaleRepository(
             cashierId = sale.cashierEmployeeId.ifEmpty { sale.cashierId.ifEmpty { sale.externalUserId } },
             cashierName = sale.cashierName.ifEmpty { sale.externalUserName },
             channel = sale.salesChannel,
-            units = lines.sumOf { it.quantity },
+            units = lines.filterNot { it.isPackaging }.sumOf { it.quantity },
             productName = withProduct.associate { it.productId!! to it.productName },
             productQty = withProduct.groupBy { it.productId!! }
                 .mapValues { (_, ls) -> ls.sumOf { it.quantity } },
             productRevenue = withProduct.groupBy { it.productId!! }
-                .mapValues { (_, ls) -> ls.sumOf { it.subtotal } }
+                .mapValues { (_, ls) -> ls.sumOf { it.subtotal } },
+            // Solo si el desglose cuadra con el total: uno que no cuadre (dato viejo o de
+            // afuera) descuadraría "por método" contra el ingreso del día.
+            paymentParts = sale.paymentBreakdown.takeIf {
+                it.size > 1 && kotlin.math.abs(it.values.sum() - sale.total) < 0.01
+            } ?: emptyMap()
         )
     }
 
@@ -509,6 +523,8 @@ class FirebaseSaleRepository(
         "collectedAt" to collectedAt,
         "groupIds" to groupIds,
         "groupUnits" to groupUnits,
+        "packagingUnits" to packagingUnits,
+        "packagingAmount" to packagingAmount,
         "checkoutId" to checkoutId,
         "checkoutTotal" to checkoutTotal,
         "billValues" to billValues,
@@ -572,6 +588,10 @@ class FirebaseSaleRepository(
         collectedAt = readMillis("collectedAt"),
         groupIds = runCatching { get<List<String>?>("groupIds") }.getOrNull() ?: emptyList(),
         groupUnits = runCatching { get<List<Double>?>("groupUnits") }.getOrNull() ?: emptyList(),
+        packagingUnits = runCatching { get<Double?>("packagingUnits") }.getOrNull()
+            ?: runCatching { get<Long?>("packagingUnits")?.toDouble() }.getOrNull() ?: 0.0,
+        packagingAmount = runCatching { get<Double?>("packagingAmount") }.getOrNull()
+            ?: runCatching { get<Long?>("packagingAmount")?.toDouble() }.getOrNull() ?: 0.0,
         checkoutId = get<String?>("checkoutId") ?: "",
         checkoutTotal = get<Double?>("checkoutTotal") ?: 0.0,
         billValues = runCatching { get<List<Double>?>("billValues") }.getOrNull() ?: emptyList(),
@@ -619,7 +639,8 @@ class FirebaseSaleRepository(
         "stockDeducted" to stockDeducted,
         "linkedIngredientId" to linkedIngredientId,
         "linkedIngredientName" to linkedIngredientName,
-        "ingredientUnitsPerSale" to ingredientUnitsPerSale
+        "ingredientUnitsPerSale" to ingredientUnitsPerSale,
+        "packagingItemId" to packagingItemId
     )
 
     private fun DocumentSnapshot.toLine() = SaleLine(
@@ -638,7 +659,8 @@ class FirebaseSaleRepository(
         stockDeducted = get<Boolean?>("stockDeducted") ?: false,
         linkedIngredientId = runCatching { get<String?>("linkedIngredientId") }.getOrNull() ?: "",
         linkedIngredientName = runCatching { get<String?>("linkedIngredientName") }.getOrNull() ?: "",
-        ingredientUnitsPerSale = runCatching { get<Double?>("ingredientUnitsPerSale") }.getOrNull() ?: 0.0
+        ingredientUnitsPerSale = runCatching { get<Double?>("ingredientUnitsPerSale") }.getOrNull() ?: 0.0,
+        packagingItemId = runCatching { get<String?>("packagingItemId") }.getOrNull()
     )
 
     private fun SalesDaily.toMap(): Map<String, Any?> = firestoreSafeOf(

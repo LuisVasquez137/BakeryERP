@@ -26,7 +26,12 @@ data class CheckoutPayment(
      */
     val depositId: String = "",
     val depositFolio: String = "",
-    val depositAmount: Double = 0.0
+    val depositAmount: Double = 0.0,
+    /**
+     * Pago dividido: lo que ESTA venta cobra hoy por método (ver `allocatePaymentParts`).
+     * Vacío = todo por [method]. Se arma por venta, igual que el anticipo.
+     */
+    val parts: Map<String, Double> = emptyMap()
 )
 
 /**
@@ -45,7 +50,12 @@ data class CheckoutRecord(
     val bills: List<Pair<Double, Int>> = emptyList(),
     /** "3 × Pan de Q0.50", "Restaurante #47 · Mesa 4"… vacío si no se conoce el detalle. */
     val items: List<String> = emptyList(),
-    val cashierName: String = ""
+    val cashierName: String = "",
+    /**
+     * Pago dividido: cuánto entró por cada método en todo el cobro ("Efectivo Q30 · Tarjeta
+     * Q50"). Vacío si se pagó con uno solo. [tendered] y [change] son de la parte en efectivo.
+     */
+    val parts: Map<String, Double> = emptyMap()
 )
 
 /**
@@ -60,10 +70,19 @@ fun checkoutsFromSales(sales: List<Sale>): List<CheckoutRecord> =
         .groupBy { it.checkoutId.ifEmpty { "sale_" + it.id } }
         .map { (key, group) ->
             val first = group.maxBy { it.createdAt }
+            // Lo cobrado hoy por método, sumando las ventas del cobro: en un pago dividido cada
+            // venta lleva solo su parte (el pan pudo quedar todo en tarjeta y la cuenta del
+            // restaurante en efectivo), así que el método de UNA venta no describe el cobro.
+            val parts = group.flatMap { it.effectivePaymentBreakdown.entries }
+                .filter { it.key != SalePaymentMethod.CUSTOMER_DEPOSIT }
+                .groupBy({ it.key }, { it.value })
+                .mapValues { (_, v) -> kotlin.math.round(v.sum() * 100) / 100 }
+                .filterValues { it > 0.004 }
             CheckoutRecord(
                 checkoutId = key,
                 at = group.maxOf { maxOf(it.createdAt, it.collectedAt) },
-                method = first.paymentMethod,
+                method = if (parts.size > 1) SalePaymentMethod.MIXED else first.paymentMethod,
+                parts = if (parts.size > 1) parts else emptyMap(),
                 total = first.effectiveCheckoutTotal,
                 tendered = first.tenderedAmount,
                 change = first.changeAmount,

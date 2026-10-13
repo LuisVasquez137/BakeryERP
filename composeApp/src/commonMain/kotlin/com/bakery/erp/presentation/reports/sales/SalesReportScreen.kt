@@ -183,6 +183,22 @@ fun SalesReportScreen(
                             }
                         }
                     }
+                    // Solo si se cobró empaque en el período: la panadería que no cobra la
+                    // bolsa no ve una sección vacía.
+                    if (s.packagingSales.isNotEmpty()) item {
+                        ReportSection(title = "Empaques cobrados") {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                s.packagingSales.forEach { p ->
+                                    TopProductRow(
+                                        name = p.productName,
+                                        quantity = p.quantity,
+                                        revenue = p.revenue,
+                                        showValue = showValue
+                                    )
+                                }
+                            }
+                        }
+                    }
                     item {
                         ReportSection(title = "Cajeros") {
                             if (s.byCashier.isEmpty()) {

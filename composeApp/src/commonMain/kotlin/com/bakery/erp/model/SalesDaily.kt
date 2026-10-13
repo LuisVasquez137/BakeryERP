@@ -70,7 +70,13 @@ data class SaleContribution(
     val units: Double,
     val productName: Map<String, String>,
     val productQty: Map<String, Double>,
-    val productRevenue: Map<String, Double>
+    val productRevenue: Map<String, Double>,
+    /**
+     * Lo que entró por cada método (el desglose de la venta). Vacío = todo [total] por
+     * [paymentMethod]. Sin esto, un pago dividido —o una cuenta de ComandaYa partida— se
+     * sumaba entero a un solo método en "Por método de pago".
+     */
+    val paymentParts: Map<String, Double> = emptyMap()
 )
 
 /**
@@ -89,8 +95,9 @@ operator fun SalesDaily.plus(c: SaleContribution): SalesDaily = copy(
     revenue = revenue + c.total,
     transactionCount = transactionCount + 1,
     unitsSold = unitsSold + c.units,
-    paymentTotal = paymentTotal.addDouble(c.paymentMethod, c.total),
-    paymentCount = paymentCount.addInt(c.paymentMethod, 1),
+    paymentTotal = c.effectiveParts.entries.fold(paymentTotal) { acc, (m, v) -> acc.addDouble(m, v) },
+    // Un ticket dividido cuenta como ticket en cada método que usó.
+    paymentCount = c.effectiveParts.keys.fold(paymentCount) { acc, m -> acc.addInt(m, 1) },
     cashierName = cashierName + (c.cashierId to c.cashierName),
     cashierTotal = cashierTotal.addDouble(c.cashierId, c.total),
     cashierCount = cashierCount.addInt(c.cashierId, 1),
@@ -102,6 +109,9 @@ operator fun SalesDaily.plus(c: SaleContribution): SalesDaily = copy(
     channelCount = channelCount.addInt(c.channel, 1),
     channelUnits = channelUnits.addDouble(c.channel, c.units)
 )
+
+private val SaleContribution.effectiveParts: Map<String, Double>
+    get() = paymentParts.takeIf { it.isNotEmpty() } ?: mapOf(paymentMethod to total)
 
 private fun Map<String, Double>.addDouble(key: String, value: Double): Map<String, Double> =
     this + (key to (this[key] ?: 0.0) + value)

@@ -57,6 +57,7 @@ import com.bakery.erp.model.hasPermission
 import com.bakery.erp.model.Permission
 import com.bakery.erp.model.groupDisplayName
 import com.bakery.erp.model.groupSaleKey
+import com.bakery.erp.model.PackagingItem
 import com.bakery.erp.model.Product
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.ui.ProductImage
@@ -208,7 +209,7 @@ fun POSScreen(
 
     // Mapa productId -> CartLine (para tile selected state y tap-to-deselect)
     val cartByProductId = remember(state.cart) {
-        state.cart.filter { !it.isGroup && !it.isRestaurant }.associateBy { it.productId }
+        state.cart.filter { it.hasProductStock }.associateBy { it.productId }
     }
     val cartItemCount = state.cart.sumOf { it.quantity }.toInt()
 
@@ -555,6 +556,8 @@ fun POSScreen(
                         onIncrement = { line -> viewModel.updateLineQuantity(line.key, line.quantity + 1) },
                         onDecrement = { line -> viewModel.updateLineQuantity(line.key, line.quantity - 1) },
                         onRemoveLine = { key -> viewModel.removeLine(key) },
+                        packagingItems = state.packagingItems,
+                        onAddPackaging = { viewModel.addPackagingToCart(it) },
                         onCheckout = { paymentOpen = true },
                         highlightItem = highlightItem,
                         highlightAt = highlightAt,
@@ -599,6 +602,16 @@ fun POSScreen(
                             groupPriceOf = { viewModel.groupPriceFor(it) },
                             modifier = Modifier.weight(1f).fillMaxWidth().padding(12.dp)
                         )
+                    }
+                    if (state.cart.isNotEmpty() && state.packagingItems.isNotEmpty()) {
+                        Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
+                            PackagingQuickBar(
+                                items = state.packagingItems,
+                                inCart = state.cart.packagingCounts(),
+                                onAdd = { viewModel.addPackagingToCart(it) },
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)
+                            )
+                        }
                     }
                     if (state.cart.isNotEmpty()) {
                         Surface(
@@ -706,7 +719,7 @@ fun POSScreen(
         PaymentDialog(
             onDismiss = { paymentOpen = false; paymentDiscountAccount = null },
             total = viewModel.cartTotal(),
-            onConfirm = { method, tendered, bills, invoice ->
+            onConfirm = { method, tendered, bills, invoice, split ->
                 paymentOpen = false
                 cartSheetOpen = false
                 val discount = paymentDiscountAccount
@@ -716,7 +729,7 @@ fun POSScreen(
                 user?.let {
                     viewModel.confirmSale(
                         companyId, it, method, tendered, bills,
-                        discountAccount = discount, invoice = invoice, deposit = deposit
+                        discountAccount = discount, invoice = invoice, deposit = deposit, split = split
                     )
                 }
             },
@@ -834,6 +847,8 @@ fun POSScreen(
                 onIncrement = { line -> viewModel.updateLineQuantity(line.key, line.quantity + 1) },
                 onDecrement = { line -> viewModel.updateLineQuantity(line.key, line.quantity - 1) },
                 onRemoveLine = { key -> viewModel.removeLine(key) },
+                packagingItems = state.packagingItems,
+                onAddPackaging = { viewModel.addPackagingToCart(it) },
                 onCheckout = {
                     cartSheetOpen = false
                     paymentOpen = true
@@ -1373,13 +1388,16 @@ private fun CartPanel(
     onDecrement: (CartLine) -> Unit,
     onRemoveLine: (key: String) -> Unit,
     onCheckout: () -> Unit,
+    /** Empaques que se cobran (la bolsa); vacío = la empresa no cobra empaque. */
+    packagingItems: List<PackagingItem> = emptyList(),
+    onAddPackaging: (PackagingItem) -> Unit = {},
     /** Renglón al que acaba de llegar el vuelo ("productId" o "grp_<id>") y cuándo. */
     highlightItem: String? = null,
     highlightAt: Long = 0L,
     modifier: Modifier = Modifier
 ) {
     // El grupo de precio no tiene producto contra el cual comparar stock.
-    val oversoldCount = cart.count { !it.isGroup && !it.isRestaurant && it.quantity > stockOf(it.productId) }
+    val oversoldCount = cart.count { it.hasProductStock && it.quantity > stockOf(it.productId) }
     Column(modifier) {
         Text("Carrito", fontWeight = FontWeight.SemiBold,
              style = MaterialTheme.typography.titleSmall)
@@ -1412,7 +1430,7 @@ private fun CartPanel(
                         line = line,
                         highlightAt = if (highlightItem != null &&
                             (line.productId == highlightItem || "grp_${line.quickGroupId}" == highlightItem)) highlightAt else 0L,
-                        available = if (line.isGroup || line.isRestaurant) Double.MAX_VALUE else stockOf(line.productId),
+                        available = if (!line.hasProductStock) Double.MAX_VALUE else stockOf(line.productId),
                         onIncrement = { onIncrement(line) },
                         onDecrement = { onDecrement(line) },
                         onRemove = { onRemoveLine(line.key) }
@@ -1437,6 +1455,16 @@ private fun CartPanel(
                 )
             }
             Spacer(Modifier.height(6.dp))
+        }
+        if (packagingItems.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            PackagingQuickBar(
+                items = packagingItems,
+                inCart = cart.packagingCounts(),
+                onAdd = onAddPackaging,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
         }
         HorizontalDivider()
         Spacer(Modifier.height(8.dp))
@@ -1612,6 +1640,10 @@ private fun CartLineRow(
         }
     }
 }
+
+/** Cuántos de cada empaque van en el carrito, por id: el botón muestra "×2". */
+private fun List<CartLine>.packagingCounts(): Map<String, Double> =
+    filter { it.isPackaging }.associate { it.packagingItemId to it.quantity }
 
 /** Naranja pálido del destello: más marcado que `AccentSoft` para que el renglón nuevo se note. */
 private val CartFlashColor = Color(0xFFFFE0B2)
