@@ -13,9 +13,12 @@ import com.bakery.erp.model.Purchase
 import com.bakery.erp.model.PurchaseLine
 import com.bakery.erp.model.PurchaseLineKind
 import com.bakery.erp.model.PurchaseStatus
+import com.bakery.erp.model.StockTransfer
+import com.bakery.erp.model.StockTransferItemKind
 import com.bakery.erp.model.effectiveBranchId
 import com.bakery.erp.model.lineTotal
 import com.bakery.erp.model.plantShare
+import com.bakery.erp.model.stockTransferEffects
 
 /**
  * Resultado por sucursal (paso 6 de `arquitectura/propuesta-rentabilidad-por-sucursal.md`).
@@ -62,9 +65,11 @@ data class StoreResult(
     val expenses: Double,
     val payroll: Double,
     val delivery: Double,
-    val deliveries: Int
+    val deliveries: Int,
+    /** Traslados entre sucursales a costo: lo recibido menos lo enviado (ver `stockTransferEffects`). */
+    val transfers: Double = 0.0
 ) {
-    val grossMargin: Double get() = sales - bread - resale - ingredients
+    val grossMargin: Double get() = sales - bread - resale - ingredients - transfers
     val contribution: Double get() = grossMargin - expenses - payroll - delivery
 }
 
@@ -76,9 +81,11 @@ data class PlantResult(
     /** Insumos comprados para la planta en el mes (no lo que se consumió: ver doc). */
     val material: Double,
     val expenses: Double,
-    val payroll: Double
+    val payroll: Double,
+    /** Insumos (o producto, si no tiene tienda) trasladados: recibido menos enviado, a costo. */
+    val transfers: Double = 0.0
 ) {
-    val result: Double get() = shipped - material - expenses - payroll
+    val result: Double get() = shipped - material - expenses - payroll - transfers
 }
 
 data class GeneralResult(
@@ -121,7 +128,9 @@ fun branchResults(
     expenses: List<Expense>,
     employees: List<Employee>,
     payrollRecords: List<PayrollRecord>,
-    delivery: DeliveryMonthCost
+    delivery: DeliveryMonthCost,
+    /** Traslados recibidos en el mes. Se cancelan entre sucursales: no tocan [BranchResultsMonth.companyCheck]. */
+    transfers: List<StockTransfer> = emptyList()
 ): BranchResultsMonth {
     val byId = branches.associateBy { it.id }
     val recordsByEmployee = payrollRecords.groupBy { it.employeeId }
@@ -183,6 +192,18 @@ fun branchResults(
         }
     }
 
+    // Traslados: el producto es de la tienda y el insumo de la planta; si la sucursal no tiene
+    // esa mitad, va a la otra. Una sucursal borrada se queda en `orphanTransfers`.
+    val storeTransfers = HashMap<String, Double>()
+    val plantTransfers = HashMap<String, Double>()
+    var orphanTransfers = 0.0
+    for (e in stockTransferEffects(transfers)) {
+        val b = byId[e.branchId]
+        if (b == null) { orphanTransfers += e.value; continue }
+        val toStore = if (e.kind == StockTransferItemKind.PRODUCT) b.hasStore else !b.produces
+        add(if (toStore) storeTransfers else plantTransfers, b.id, e.value)
+    }
+
     val deliveryBy = delivery.stores.associateBy { it.branchId }
     val ordered = branches.sortedBy { it.name.lowercase() }
 
@@ -194,9 +215,10 @@ fun branchResults(
             // Una planta usa todo el insumo que compra; su reventa la vende su tienda.
             material = (ingredientBy[b.id] ?: 0.0) + if (b.hasStore) 0.0 else resaleBy[b.id] ?: 0.0,
             expenses = plantExp[b.id] ?: 0.0,
-            payroll = plantPay[b.id] ?: 0.0
+            payroll = plantPay[b.id] ?: 0.0,
+            transfers = plantTransfers[b.id] ?: 0.0
         )
-    }.filter { it.shipped != 0.0 || it.material != 0.0 || it.expenses != 0.0 || it.payroll != 0.0 || byId[it.branchId]?.active == true }
+    }.filter { it.shipped != 0.0 || it.material != 0.0 || it.expenses != 0.0 || it.payroll != 0.0 || it.transfers != 0.0 || byId[it.branchId]?.active == true }
 
     val stores = ordered.filter { it.hasStore }.map { b ->
         StoreResult(
@@ -210,11 +232,12 @@ fun branchResults(
             expenses = storeExp[b.id] ?: 0.0,
             payroll = storePay[b.id] ?: 0.0,
             delivery = deliveryBy[b.id]?.charge ?: 0.0,
-            deliveries = deliveryBy[b.id]?.deliveries ?: 0
+            deliveries = deliveryBy[b.id]?.deliveries ?: 0,
+            transfers = storeTransfers[b.id] ?: 0.0
         )
     }.filter {
         it.sales != 0.0 || it.bread != 0.0 || it.resale != 0.0 || it.ingredients != 0.0 ||
-            it.expenses != 0.0 || it.payroll != 0.0 || it.delivery != 0.0 || byId[it.branchId]?.active == true
+            it.expenses != 0.0 || it.payroll != 0.0 || it.delivery != 0.0 || it.transfers != 0.0 || byId[it.branchId]?.active == true
     }
 
     // Lo que no cae en ninguna columna (sucursal borrada) también se resta de la empresa.
@@ -229,13 +252,17 @@ fun branchResults(
     }
 
     val unlistedDelivery = delivery.stores.filter { it.branchId !in listedIds }.sumOf { it.charge }
+    // Un traslado cuya mitad cayó en una columna que no se muestra: su costo va a Generales.
+    val unlistedStockTransfers = orphanTransfers +
+        storeTransfers.filterKeys { id -> stores.none { it.branchId == id } }.values.sum() +
+        plantTransfers.filterKeys { id -> plants.none { it.branchId == id } }.values.sum()
 
     val undistributed = if (delivery.deliveries == 0) delivery.total else 0.0
     val generals = GeneralResult(
         expenses = generalExpenses,
         payroll = generalPayroll,
         undistributedDelivery = undistributed,
-        orphan = orphan + unlistedInventory - unlistedSales - unlistedTransfers + unlistedDelivery
+        orphan = orphan + unlistedInventory - unlistedSales - unlistedTransfers + unlistedDelivery + unlistedStockTransfers
     )
 
     // La empresa sin sucursales: todo lo vendido − todo lo comprado de inventario − todos los

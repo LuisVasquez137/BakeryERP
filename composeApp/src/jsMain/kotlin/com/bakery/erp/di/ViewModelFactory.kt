@@ -207,6 +207,10 @@ actual fun createAppViewModels(): AppViewModels {
             com.bakery.erp.data.JsCounterRemovalPhotoUploader(storage),
             employeeRepo, employeeAccessRepo, notificationRepo, branchRepo
         ),
+        stockTransfer = com.bakery.erp.presentation.transfers.StockTransferViewModel(
+            com.bakery.erp.data.FirebaseStockTransferRepository(firestore, finishedStockRepo, ingredientRepo),
+            branchRepo, productRepoJs, ingredientRepo, finishedStockRepo, notificationRepo
+        ),
         cashRegisterAdmin = CashRegisterAdminViewModel(cashRegisterRepo, branchRepo, cashSessionRepo),
         posCategoryAdmin = POSCategoryAdminViewModel(posCategoryRepo, productRepoJs, branchRepo),
         packagingAdmin = com.bakery.erp.presentation.pos.admin.PackagingAdminViewModel(packagingItemRepo),
@@ -236,7 +240,8 @@ actual fun createAppViewModels(): AppViewModels {
         ),
         branchResult = com.bakery.erp.presentation.reports.productcost.BranchResultViewModel(
             branchRepo, saleRepo, dispatchRepo, purchaseRepo, expenseRepo, employeeRepo, payrollRepo,
-            com.bakery.erp.data.FirebaseStandardCostRepository(firestore)
+            com.bakery.erp.data.FirebaseStandardCostRepository(firestore),
+            com.bakery.erp.data.FirebaseStockTransferRepository(firestore, finishedStockRepo, ingredientRepo)
         ),
         customerOrder = CustomerOrderViewModel(
             customerOrderRepo, externalCustomerRepo, productionRepo,

@@ -41,7 +41,7 @@ object FinishedMovementType {
         VENTA         -> "Venta"
         MERMA         -> "Merma"
         AJUSTE        -> "Ajuste"
-        TRANSFERENCIA -> "Transferencia"
+        TRANSFERENCIA -> "Traslado"
         DEVOLUCION    -> "Devolución (venta anulada)"
         PORCIONADO    -> "Porcionado"
         ACCIDENTE     -> "Accidente (cobrado)"

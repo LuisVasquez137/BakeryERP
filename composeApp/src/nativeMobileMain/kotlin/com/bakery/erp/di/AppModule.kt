@@ -178,6 +178,7 @@ val appModule = module {
     single<com.bakery.erp.domain.HeldCartRepository> { com.bakery.erp.data.FirebaseHeldCartRepository(get()) }
     single<com.bakery.erp.domain.BankDepositRepository> { com.bakery.erp.data.FirebaseBankDepositRepository(get()) }
     single<com.bakery.erp.domain.CounterRemovalRepository> { com.bakery.erp.data.FirebaseCounterRemovalRepository(get(), get(), get()) }
+    single<com.bakery.erp.domain.StockTransferRepository> { com.bakery.erp.data.FirebaseStockTransferRepository(get(), get(), get()) }
     // Android lo sobreescribe con AndroidCounterRemovalPhotoUploader.
     single<com.bakery.erp.domain.CounterRemovalPhotoUploader> { com.bakery.erp.domain.NoOpCounterRemovalPhotoUploader() }
     single<CashRegisterRepository> { FirebaseCashRegisterRepository(get()) }
@@ -234,6 +235,7 @@ val appModule = module {
     single { CashSessionViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { SaleHistoryViewModel(get(), get(), get(), get(), get(), get(), get(), get()) }
     single { com.bakery.erp.presentation.pos.CounterRemovalViewModel(get(), get(), get(), get(), get(), get()) }
+    single { com.bakery.erp.presentation.transfers.StockTransferViewModel(get(), get(), get(), get(), get(), get()) }
     single { CashRegisterAdminViewModel(get(), get(), get()) }
     single { POSCategoryAdminViewModel(get(), get(), get()) }
     single { com.bakery.erp.presentation.pos.admin.PackagingAdminViewModel(get()) }
@@ -251,7 +253,7 @@ val appModule = module {
     single<com.bakery.erp.domain.StandardCostRepository> { com.bakery.erp.data.FirebaseStandardCostRepository(get()) }
     single { com.bakery.erp.presentation.reports.productcost.StandardCostViewModel(get(), get(), get(), get(), get(), get(), get()) }
     single { com.bakery.erp.presentation.reports.productcost.DeliveryCostViewModel(get(), get(), get(), get()) }
-    single { com.bakery.erp.presentation.reports.productcost.BranchResultViewModel(get(), get(), get(), get(), get(), get(), get(), get()) }
+    single { com.bakery.erp.presentation.reports.productcost.BranchResultViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { ExternalCustomerViewModel(get(), get(), get(), get()) }
     single { CustomerOrderViewModel(get(), get(), get(), get(), get(), get()) }
     single { OrganizationSettingsViewModel(get(), get()) }

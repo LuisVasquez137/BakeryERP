@@ -75,6 +75,8 @@ enum class Permission {
     DRIVE_DELIVERY,
     RECEIVE_DISPATCH,
     MANAGE_FINISHED_STOCK,
+    /** Enviar traslados de inventario a otra sucursal. Recibirlos es RECEIVE_DISPATCH. Ver `StockTransfer`. */
+    SEND_STOCK_TRANSFER,
     VIEW_DISPATCH_VALUE,
 
     // Ventas (POS)
@@ -166,6 +168,7 @@ enum class Permission {
         DRIVE_DELIVERY -> "Repartidor"
         RECEIVE_DISPATCH -> "Recibir despachos en sucursal"
         MANAGE_FINISHED_STOCK -> "Ajustar inventario de producto terminado"
+        SEND_STOCK_TRANSFER -> "Enviar traslados a otra sucursal"
         VIEW_DISPATCH_VALUE -> "Ver valor monetario en despachos"
         OPERATE_POS -> "Operar punto de venta"
         VIEW_SALES -> "Ver historial de ventas"
@@ -244,6 +247,7 @@ enum class Permission {
         DRIVE_DELIVERY -> "Puede ver y completar las hojas de reparto que le sean asignadas"
         RECEIVE_DISPATCH -> "Puede recibir y verificar despachos en sucursal de venta"
         MANAGE_FINISHED_STOCK -> "Puede registrar mermas y ajustes al inventario de producto terminado en sucursal"
+        SEND_STOCK_TRANSFER -> "Puede mandar pan, reventa o insumos de su sucursal a otra (sale de su inventario y entra al de la otra cuando la reciben) y cancelar el traslado mientras no lo reciban"
         VIEW_DISPATCH_VALUE -> "Puede ver el precio unitario y el total monetario de las notas de despacho"
         OPERATE_POS -> "Puede abrir caja, registrar ventas y cerrar la sesión de caja al final del turno"
         VIEW_SALES -> "Puede consultar el historial de ventas y los detalles de cada transacción"
@@ -302,7 +306,7 @@ enum class Permission {
         MANAGE_PRICE_LISTS -> "Catálogo"
         DISPATCH_PACK, MANAGE_DELIVERY_RUNS,
         DRIVE_DELIVERY, RECEIVE_DISPATCH,
-        MANAGE_FINISHED_STOCK, VIEW_DISPATCH_VALUE -> "Distribución"
+        MANAGE_FINISHED_STOCK, VIEW_DISPATCH_VALUE, SEND_STOCK_TRANSFER -> "Distribución"
         OPERATE_POS, VIEW_SALES, MANAGE_POS_CONFIG,
         VIEW_SALES_VALUE, VOID_SALE,
         MANAGE_DAILY_CASH_CLOSE, SPOT_CHECK_CASH, VIEW_CASH_AUDIT, WITHDRAW_AT_CLOSE, BANK_DEPOSIT,

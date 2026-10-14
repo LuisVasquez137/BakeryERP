@@ -180,7 +180,7 @@ Plano `companies/{c}/finishedStocks/{branchId}_{productId}` con `currentStock` +
 - Ingreso (qty>0): `avg = (stockPrev × avgPrev + qty × unitPrice) / (stockPrev + qty)`.
 - Salida (qty<0): stock baja, avg se mantiene.
 
-**Tipos**: RECEPCION (auto), VENTA, MERMA, AJUSTE, TRANSFERENCIA, DEVOLUCION, PORCIONADO.
+**Tipos**: RECEPCION (auto), VENTA, MERMA, AJUSTE, TRANSFERENCIA (traslado entre sucursales, ± con costo), DEVOLUCION, PORCIONADO.
 
 **La lista no sale solo de los documentos de stock** (`model/StoreInventory.kt::buildStoreInventoryRows`,
 tests en `StoreInventoryTest`). Un `FinishedProductStock` nace con el primer movimiento, así que
@@ -225,6 +225,48 @@ Es una **transformación**, no venta ni merma: `−1` del entero y `+N` de la po
   venta no se bloquea: "Ahora no" deja la línea (con el aviso de sobreventa) y no vuelve a
   preguntar por esa porción hasta que el carrito quede vacío (`declinedPortionPrompts`).
 - Pendiente: reporte de porcionado (lo que habrían dado enteros vs. porcionados).
+
+### Traslados entre sucursales (oct 2026)
+
+Mandar inventario de una sucursal a otra, planta incluida: pan, pasteles, porciones, reventa,
+materia prima y suministros **con conteo** (`Ingredient.isTransferable`). Lo que no lleva
+existencias (cloro sin conteo, conceptos de compra) no aparece. Modelo y reglas puras en
+`model/StockTransfer.kt` (`StockTransferTest`); colección `stockTransfers` (historial: no se borra).
+
+- **Dos pasos, como el despacho**. Enviar: sale del stock del origen y queda `IN_TRANSIT`.
+  Recibir: el destino cuenta (cada línea arranca con lo enviado) y solo eso entra. En camino no
+  está en ninguna de las dos sucursales; así el conteo de cierre del origen no se descuadra.
+- **Faltante**: queda escrito en el traslado (`shortage`) y se avisa al origen; no se le cobra a
+  nadie (desde la hoja no se sabe si se perdió en el camino o salió incompleto). Decisión del
+  dueño, 14 oct 2026.
+- **Cancelar** solo mientras va en camino, desde el origen (`SEND_STOCK_TRANSFER`): el stock y sus
+  lotes vuelven con un movimiento de regreso; la salida queda en el Kardex. Recibido ya no se
+  deshace: se corrige con otro traslado de regreso.
+- **El costo viaja**: el producto sale al `avgUnitCost` del origen (si no hay, `purchaseCost`) y
+  entra al destino a ese costo, mezclándose con su promedio (`TRANSFERENCIA` ± con
+  `unitPriceAtMovement`, referencia `TRANSFER`). El insumo se valora con `costPerStockUnit()`
+  (presentación predeterminada convertida a la unidad del stock, no `defaultUnitCost`).
+- **Lotes**: al enviar se calcula el mismo reparto FEFO que hará `updateBranchStock`
+  (`transferLotsFrom`) y se guarda en la línea; al recibir se crea en el destino un lote por cada
+  uno con la misma fecha y costo (`lotsForReceived` recorta los que vencen más tarde si llegó
+  menos). Así el aviso de caducidad sigue funcionando del otro lado.
+- **Insumos en presentación**: "2 Saco 100 lb" o suelto en una unidad convertible
+  (`packagesToBaseUnitOrNull`/`looseToBaseUnitOrNull`, los mismos del vale de planta); si no
+  convierte, no deja enviar. En el Kardex del insumo el tipo es `TRASLADO`.
+- Mandar más de lo que dice el inventario **avisa pero no bloquea** (el stock del día es
+  aproximado hasta el conteo de cierre), igual que la sobreventa en el POS.
+- Encabezado antes que stock en las tres operaciones; recibir y cancelar vuelven a leer y chocan
+  con la guarda de estado. Líneas y lotes como arreglos paralelos en el mismo documento.
+- Permisos: enviar/cancelar `SEND_STOCK_TRANSFER` (nuevo, grupo Distribución); recibir
+  `RECEIVE_DISPATCH` o `MANAGE_FINISHED_STOCK` en la sucursal destino. Avisos
+  `NotificationType.STOCK_TRANSFER` → `STOCK_TRANSFER_DETAIL`: al destino al enviar y al
+  cancelar, al origen si llegó incompleto.
+- **Reporte por sucursal** (`branchResults(transfers = …)`): por lo que se RECIBIÓ, en el mes de
+  recepción. El destino suma el costo y el origen lo resta; el faltante lo absorbe el origen
+  (solo se le acredita lo que llegó), así las dos puntas se cancelan y `companyCheck` no cambia.
+  Producto → la tienda; insumo → la planta (si la sucursal no tiene esa mitad, a la otra). Por eso
+  Bombero no necesita partirse en dos sucursales.
+- Sin reparto por ahora (decisión del dueño): quien lo lleva va en la nota.
 
 ## Precio por escalón en las listas (oct 2026)
 

@@ -11,6 +11,7 @@ import com.bakery.erp.model.Ingredient
 import com.bakery.erp.model.PlantIssue
 import com.bakery.erp.model.PlantIssueIngredientSummary
 import com.bakery.erp.model.PlantIssueReason
+import com.bakery.erp.model.STOCK_TRANSFER_MOVEMENT_TYPE
 import com.bakery.erp.model.PurchaseFormat
 import com.bakery.erp.model.StockMovement
 import com.bakery.erp.model.User
@@ -364,6 +365,7 @@ fun stockMovementTypeLabel(type: String): String = when (type) {
     "AJUSTE" -> "Ajuste"
     "VENTA" -> "Venta"
     PLANT_ISSUE_MOVEMENT_TYPE -> "Consumo de planta"
+    STOCK_TRANSFER_MOVEMENT_TYPE -> "Traslado"
     else -> type
 }
 

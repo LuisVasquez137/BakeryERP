@@ -80,6 +80,9 @@ object NotificationType {
      */
     const val COUNTER_ACCIDENT = "COUNTER_ACCIDENT"
 
+    /** Traslado de inventario: va en camino a la sucursal (avisa a quien recibe) o llegó con faltante. */
+    const val STOCK_TRANSFER = "STOCK_TRANSFER"
+
     fun label(type: String) = when (type) {
         ORDER_RECEIVED -> "Pedido recibido"
         ORDER_IN_LOT -> "Pedido tomado"
@@ -90,6 +93,7 @@ object NotificationType {
         SALE_VOIDED -> "Venta anulada"
         BANK_DEPOSIT -> "Depósito al banco"
         COUNTER_ACCIDENT -> "Accidente en mostrador"
+        STOCK_TRANSFER -> "Traslado"
         else -> "Aviso"
     }
 }
@@ -109,6 +113,8 @@ object NotificationTarget {
     const val CASH_AUDIT = "CASH_AUDIT"
     /** Salidas del mostrador (merma, accidentes, regalos); `targetId` = sucursal. */
     const val COUNTER_REMOVALS = "COUNTER_REMOVALS"
+    /** Detalle de un traslado; `targetId` = el traslado. */
+    const val STOCK_TRANSFER_DETAIL = "STOCK_TRANSFER_DETAIL"
 }
 
 /**

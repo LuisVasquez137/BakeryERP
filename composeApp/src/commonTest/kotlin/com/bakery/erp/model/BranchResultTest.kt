@@ -22,7 +22,7 @@ class BranchResultTest {
         originBranchId = "pan", destinationBranchId = dest, status = DispatchStatus.DELIVERED, totalValueWholesale = value
     )
 
-    private fun compute() = branchResults(
+    private fun compute(transfers: List<StockTransfer> = emptyList()) = branchResults(
         branches = branches,
         salesByBranch = mapOf("pan" to 30_000.0, "t1" to 20_000.0),
         notes = listOf(note("pan", 15_000.0), note("t1", 12_000.0),
@@ -53,7 +53,8 @@ class BranchResultTest {
             Employee(id = "e", branchId = "pan", baseSalary = 3_400.0, costCenter = CostCenter.DELIVERY)
         ),
         payrollRecords = emptyList(),
-        delivery = DeliveryMonthCost(600.0, 3_400.0, 1, listOf(StoreDeliveryCharge("t1", "Pacajá", 40, 4_000.0)))
+        delivery = DeliveryMonthCost(600.0, 3_400.0, 1, listOf(StoreDeliveryCharge("t1", "Pacajá", 40, 4_000.0))),
+        transfers = transfers
     )
 
     @Test
@@ -94,5 +95,33 @@ class BranchResultTest {
         // Empresa: ventas − inventario comprado − gastos − planilla.
         near(50_000.0 - 9_800.0 - 12_500.0 - 19_600.0, r.companyCheck)
         assertEquals(2, r.stores.size)
+    }
+
+    /**
+     * Pacajá le manda 100 panes a Bombero (llegan 90) y Bombero le manda 50 lb de harina a Pacajá.
+     * El pan entra a la TIENDA de Bombero y el insumo sale de su PLANTA; el faltante lo absorbe
+     * quien envió. La empresa completa no cambia: los traslados son internos.
+     */
+    @Test
+    fun losTrasladosMuevenCostoSinCambiarLaEmpresa() {
+        val panes = StockTransfer(
+            originBranchId = "t1", destinationBranchId = "pan", status = StockTransferStatus.RECEIVED,
+            lines = listOf(StockTransferLine(kind = StockTransferItemKind.PRODUCT, quantity = 100.0, unitCost = 0.5, receivedQuantity = 90.0))
+        )
+        val harina = StockTransfer(
+            originBranchId = "pan", destinationBranchId = "t1", status = StockTransferStatus.RECEIVED,
+            lines = listOf(StockTransferLine(kind = StockTransferItemKind.INGREDIENT, quantity = 50.0, unitCost = 2.0, receivedQuantity = 50.0))
+        )
+        val enCamino = harina.copy(status = StockTransferStatus.IN_TRANSIT)
+        val base = compute()
+        val r = compute(listOf(panes, harina, enCamino))
+
+        near(45.0, r.stores.first { it.branchId == "pan" }.transfers)
+        near(-100.0, r.plants.single().transfers)
+        // Pacajá no produce: lo que manda y recibe es de su tienda.
+        near(-45.0 + 100.0, r.stores.first { it.branchId == "t1" }.transfers)
+        near(base.companyCheck, r.companyCheck)
+        near(base.total, r.total)
+        assertTrue(r.balances)
     }
 }

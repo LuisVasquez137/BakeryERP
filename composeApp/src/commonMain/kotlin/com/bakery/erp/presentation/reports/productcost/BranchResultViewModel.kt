@@ -51,7 +51,8 @@ class BranchResultViewModel(
     private val expenseRepository: ExpenseRepository,
     private val employeeRepository: EmployeeRepository,
     private val payrollRepository: PayrollRepository,
-    private val standardCostRepository: StandardCostRepository
+    private val standardCostRepository: StandardCostRepository,
+    private val stockTransferRepository: com.bakery.erp.domain.StockTransferRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(BranchResultUiState(period = currentMonth()))
@@ -82,6 +83,8 @@ class BranchResultViewModel(
         val expensesD = async { expenseRepository.getExpensesForPeriod(companyId, period) }
         val employeesD = async { employeeRepository.getEmployees(companyId) }
         val payrollD = async { runCatching { payrollRepository.getPayrollForPeriod(companyId, from, until) }.getOrElse { emptyList() } }
+        // Traslados del mes en que se RECIBIERON: es cuando el costo cambió de sucursal.
+        val transfersD = async { runCatching { stockTransferRepository.getReceivedInRange(companyId, from, until) }.getOrElse { emptyList() } }
         val frozenD = async { runCatching { standardCostRepository.getPeriod(companyId, period) }.getOrNull() }
         // Solo las compras del mes ya recibidas; sus líneas dicen qué es reventa y qué insumo.
         val purchases = purchaseRepository.getPurchases(companyId)
@@ -106,7 +109,8 @@ class BranchResultViewModel(
                 expenses = expenses,
                 employees = employees,
                 payrollRecords = payroll,
-                delivery = delivery
+                delivery = delivery,
+                transfers = transfersD.await()
             ),
             standardCostFrozen = frozenD.await() != null
         )

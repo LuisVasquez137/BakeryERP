@@ -521,6 +521,13 @@ sealed class Screen(val route: String) {
         fun route(branchId: String?) =
             if (branchId.isNullOrEmpty()) "pos/counterRemovals" else "pos/counterRemovals?branchId=$branchId"
     }
+    object StockTransferList : Screen("transfers?branchId={branchId}") {
+        fun route(branchId: String?) = if (branchId.isNullOrEmpty()) "transfers" else "transfers?branchId=$branchId"
+    }
+    object StockTransferForm : Screen("transfers/new")
+    object StockTransferDetail : Screen("transfers/detail/{transferId}") {
+        fun route(transferId: String) = "transfers/detail/$transferId"
+    }
     object CashAudit : Screen("cash/audit?branchId={branchId}") {
         fun route(branchId: String?) = if (branchId.isNullOrEmpty()) "cash/audit" else "cash/audit?branchId=$branchId"
     }
@@ -688,6 +695,9 @@ fun AppNavigation(
                 navController.navigate(Screen.CashAudit.route(targetId))
             NotificationTarget.COUNTER_REMOVALS ->
                 navController.navigate(Screen.CounterRemovals.route(targetId))
+            NotificationTarget.STOCK_TRANSFER_DETAIL ->
+                if (targetId.isNotEmpty()) navController.navigate(Screen.StockTransferDetail.route(targetId))
+                else navController.navigate(Screen.StockTransferList.route(null))
             else -> Unit
         }
     }
@@ -874,6 +884,7 @@ fun AppNavigation(
                 onNavigateToFelSetup = { navController.navigate(Screen.FelSetup.route) },
                 onNavigateToCashAudit = { navController.navigate(Screen.CashAudit.route(null)) },
                 onNavigateToCounterRemovals = { navController.navigate(Screen.CounterRemovals.route(null)) },
+                onNavigateToStockTransfers = { navController.navigate(Screen.StockTransferList.route(null)) },
                 onNavigateToResellerApproval = { navController.navigate(Screen.ResellerApproval.route) },
                 onNavigateToNotificationTarget = ::navigateToNotificationTarget,
                 viewModel = viewModel,
@@ -2648,6 +2659,55 @@ fun AppNavigation(
                     onNavigateBack = { navController.popBackStack() },
                     authViewModel = viewModel,
                     viewModel = vms.counterRemoval
+                )
+            }
+        }
+        composable(
+            route = Screen.StockTransferList.route,
+            arguments = listOf(navArgument("branchId") { type = NavType.StringType; nullable = true; defaultValue = null })
+        ) { entry ->
+            RequirePermission(
+                state.user, Permission.SEND_STOCK_TRANSFER, Permission.RECEIVE_DISPATCH,
+                Permission.MANAGE_FINISHED_STOCK, onBack = { navController.popBackStack() }
+            ) {
+                com.bakery.erp.presentation.transfers.StockTransferListScreen(
+                    initialBranchId = entry.savedStateHandle.get<String>("branchId"),
+                    onNavigateBack = { navController.popBackStack() },
+                    onNew = { navController.navigate(Screen.StockTransferForm.route) },
+                    onOpen = { id -> navController.navigate(Screen.StockTransferDetail.route(id)) },
+                    authViewModel = viewModel,
+                    viewModel = vms.stockTransfer
+                )
+            }
+        }
+        composable(Screen.StockTransferForm.route) {
+            RequirePermission(state.user, Permission.SEND_STOCK_TRANSFER, onBack = { navController.popBackStack() }) {
+                com.bakery.erp.presentation.transfers.StockTransferFormScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    // El formulario se cierra y queda el detalle del traslado recién enviado.
+                    onSent = { id ->
+                        navController.navigate(Screen.StockTransferDetail.route(id)) {
+                            popUpTo(Screen.StockTransferForm.route) { inclusive = true }
+                        }
+                    },
+                    authViewModel = viewModel,
+                    viewModel = vms.stockTransfer
+                )
+            }
+        }
+        composable(
+            route = Screen.StockTransferDetail.route,
+            arguments = listOf(navArgument("transferId") { type = NavType.StringType })
+        ) { entry ->
+            RequirePermission(
+                state.user, Permission.SEND_STOCK_TRANSFER, Permission.RECEIVE_DISPATCH,
+                Permission.MANAGE_FINISHED_STOCK, onBack = { navController.popBackStack() }
+            ) {
+                com.bakery.erp.presentation.transfers.StockTransferDetailScreen(
+                    transferId = entry.savedStateHandle.get<String>("transferId").orEmpty(),
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = vms.stockTransfer
                 )
             }
         }

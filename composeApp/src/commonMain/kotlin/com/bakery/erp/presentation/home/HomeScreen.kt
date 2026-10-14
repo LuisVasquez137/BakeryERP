@@ -97,6 +97,7 @@ private val ALL_SECTIONS = listOf(
         ModuleItem("Despacho",   "Empaque de la planta", Icons.Default.AllInbox),
         ModuleItem("Reparto",    "Cómo va el pan del día", Icons.Default.LocalShipping),
         ModuleItem("Inventario tienda", "Stock terminado y mermas", Icons.Default.Inventory),
+        ModuleItem("Traslados", "Entre sucursales", Icons.Default.SyncAlt),
         ModuleItem("Conteo de pan", "Cierre de día con merma",   Icons.Default.Checklist),
     )),
     // Ventas = el teal que la app ya usa en las categorias del POS.
@@ -194,6 +195,9 @@ private fun hasModuleAccess(title: String, user: User) = with(user) {
         "Configuración"       -> hasPermission(Permission.MANAGE_USERS)
         "Facturación"         -> role == UserRole.OWNER
         "Bitácora de cajas"   -> hasPermission(Permission.VIEW_CASH_AUDIT)
+        "Traslados" -> hasPermission(Permission.SEND_STOCK_TRANSFER) ||
+                       hasPermission(Permission.RECEIVE_DISPATCH) ||
+                       hasPermission(Permission.MANAGE_FINISHED_STOCK)
         "Salidas del mostrador" -> hasPermission(Permission.VIEW_CASH_AUDIT) ||
                                    hasPermission(Permission.FORGIVE_STAFF_ACCIDENT) ||
                                    hasPermission(Permission.MANAGE_FINISHED_STOCK)
@@ -253,6 +257,7 @@ fun HomeScreen(
     onNavigateToFelSetup: () -> Unit = {},
     onNavigateToCashAudit: () -> Unit = {},
     onNavigateToCounterRemovals: () -> Unit = {},
+    onNavigateToStockTransfers: () -> Unit = {},
     onNavigateToResellerApproval: () -> Unit = {},
     onNavigateToNotificationTarget: (targetScreen: String, targetId: String) -> Unit = { _, _ -> },
     viewModel: AuthViewModel,
@@ -340,6 +345,7 @@ fun HomeScreen(
             "Facturación"             -> onNavigateToFelSetup()
             "Bitácora de cajas"       -> onNavigateToCashAudit()
             "Salidas del mostrador"   -> onNavigateToCounterRemovals()
+            "Traslados"               -> onNavigateToStockTransfers()
             "Revendedores"    -> onNavigateToResellerApproval()
             "Créditos"                -> onNavigateToCredit()
         }

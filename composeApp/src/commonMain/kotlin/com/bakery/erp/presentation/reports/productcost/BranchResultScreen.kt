@@ -169,6 +169,7 @@ private fun StoreCard(s: StoreResult) {
         Line("Pan recibido", -s.bread)
         if (s.resale != 0.0) Line("Reventa comprada", -s.resale)
         if (s.ingredients != 0.0) Line("Insumos comprados", -s.ingredients)
+        if (s.transfers != 0.0) Line("Traslados (recibido − enviado)", -s.transfers)
         Line("Margen", s.grossMargin, bold = true)
         Line("Gastos", -s.expenses)
         Line("Planilla", -s.payroll)
@@ -181,6 +182,7 @@ private fun PlantCard(p: PlantResult) {
     DetailCard("Planta ${p.name}", p.result, "Resultado") {
         Line("Despachado a las tiendas", p.shipped)
         Line("Insumos comprados", -p.material)
+        if (p.transfers != 0.0) Line("Traslados (recibido − enviado)", -p.transfers)
         Line("Gastos", -p.expenses)
         Line("Planilla", -p.payroll)
     }
