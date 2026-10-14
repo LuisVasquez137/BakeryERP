@@ -10,6 +10,8 @@ import com.bakery.erp.model.CashSessionStatus
 import com.bakery.erp.model.CashTransfer
 import com.bakery.erp.model.CashDenominations
 import com.bakery.erp.model.SalePaymentMethod
+import com.bakery.erp.model.Sale
+import com.bakery.erp.model.withSaleVoided
 import dev.gitlive.firebase.firestore.DocumentSnapshot
 import dev.gitlive.firebase.firestore.FirebaseFirestore
 import dev.gitlive.firebase.firestore.Timestamp
@@ -112,6 +114,11 @@ class FirebaseCashSessionRepository(
                 totalSales = current.totalSales + amount,
                 saleCount = current.saleCount + 1
             )
+            SalePaymentMethod.PEDIDOS_YA -> current.copy(
+                totalPedidosYaSales = current.totalPedidosYaSales + amount,
+                totalSales = current.totalSales + amount,
+                saleCount = current.saleCount + 1
+            )
             SalePaymentMethod.CREDIT -> current.copy(
                 totalCreditSales = current.totalCreditSales + amount,
                 totalSales = current.totalSales + amount,
@@ -131,7 +138,12 @@ class FirebaseCashSessionRepository(
         sessionsCol(companyId).document(sessionId).set(updated.toMap())
     }
 
-    override suspend fun addMovement(companyId: String, movement: CashMovement) {
+    override suspend fun applySaleVoid(companyId: String, sessionId: String, sale: Sale) {
+        val current = getSession(companyId, sessionId) ?: return
+        sessionsCol(companyId).document(sessionId).set(current.withSaleVoided(sale).toMap())
+    }
+
+    override suspend fun addMovement(companyId: String, movement: CashMovement): String {
         val docRef = movementsCol(companyId, movement.sessionId).document
         val now = Clock.System.now().toEpochMilliseconds()
         val toSave = movement.copy(
@@ -141,7 +153,7 @@ class FirebaseCashSessionRepository(
         docRef.set(toSave.toMap())
 
         // Acumular en denormalizado de la sesión.
-        val session = getSession(companyId, movement.sessionId) ?: return
+        val session = getSession(companyId, movement.sessionId) ?: return toSave.id
         val sign = CashMovementType.sign(movement.type)
         val updated = when {
             sign > 0 -> session.copy(totalMovementsIn = session.totalMovementsIn + movement.amount)
@@ -149,6 +161,7 @@ class FirebaseCashSessionRepository(
             else     -> session
         }
         sessionsCol(companyId).document(movement.sessionId).set(updated.toMap())
+        return toSave.id
     }
 
     override suspend fun listMovements(companyId: String, sessionId: String): List<CashMovement> =
@@ -197,12 +210,14 @@ class FirebaseCashSessionRepository(
         companyId: String,
         sessionId: String,
         withdrawal: Double,
-        handover: com.bakery.erp.model.ShiftHandover
+        handover: com.bakery.erp.model.ShiftHandover,
+        bankDepositId: String
     ) {
         // Escritura parcial: el cierre ya reescribió la sesión y esto solo le agrega la entrega.
         sessionsCol(companyId).document(sessionId).update(
             firestoreSafeOf(
                 "closingWithdrawal" to withdrawal,
+                "closingBankDepositId" to bankDepositId,
                 "carriedOutCash" to handover.cash,
                 "carriedOutCard" to handover.card,
                 "carriedOutTransfer" to handover.transfer,
@@ -409,6 +424,7 @@ class FirebaseCashSessionRepository(
         "totalCashSales" to totalCashSales,
         "totalCardSales" to totalCardSales,
         "totalTransferSales" to totalTransferSales,
+        "totalPedidosYaSales" to totalPedidosYaSales,
         "totalCreditSales" to totalCreditSales,
         "totalSales" to totalSales,
         "totalMovementsIn" to totalMovementsIn,
@@ -433,10 +449,14 @@ class FirebaseCashSessionRepository(
         "carriedInCard" to carriedInCard,
         "carriedInTransfer" to carriedInTransfer,
         "closingWithdrawal" to closingWithdrawal,
+        "closingBankDepositId" to closingBankDepositId,
         "carriedOutCash" to carriedOutCash,
         "carriedOutCard" to carriedOutCard,
         "carriedOutTransfer" to carriedOutTransfer,
-        "handoverRecorded" to handoverRecorded
+        "handoverRecorded" to handoverRecorded,
+        "voidedSaleCount" to voidedSaleCount,
+        "totalVoidedSales" to totalVoidedSales,
+        "totalVoidedNonCash" to totalVoidedNonCash
     )
 
     private fun DocumentSnapshot.toSession() = CashSession(
@@ -453,6 +473,7 @@ class FirebaseCashSessionRepository(
         totalCashSales = get<Double?>("totalCashSales") ?: 0.0,
         totalCardSales = get<Double?>("totalCardSales") ?: 0.0,
         totalTransferSales = get<Double?>("totalTransferSales") ?: 0.0,
+        totalPedidosYaSales = get<Double?>("totalPedidosYaSales") ?: 0.0,
         totalCreditSales = get<Double?>("totalCreditSales") ?: 0.0,
         totalSales = get<Double?>("totalSales") ?: 0.0,
         totalMovementsIn = get<Double?>("totalMovementsIn") ?: 0.0,
@@ -477,10 +498,14 @@ class FirebaseCashSessionRepository(
         carriedInCard = readMoney("carriedInCard"),
         carriedInTransfer = readMoney("carriedInTransfer"),
         closingWithdrawal = readMoney("closingWithdrawal"),
+        closingBankDepositId = runCatching { get<String?>("closingBankDepositId") }.getOrNull() ?: "",
         carriedOutCash = readMoney("carriedOutCash"),
         carriedOutCard = readMoney("carriedOutCard"),
         carriedOutTransfer = readMoney("carriedOutTransfer"),
-        handoverRecorded = runCatching { get<Boolean?>("handoverRecorded") }.getOrNull() ?: false
+        handoverRecorded = runCatching { get<Boolean?>("handoverRecorded") }.getOrNull() ?: false,
+        voidedSaleCount = readMoney("voidedSaleCount").toInt(),
+        totalVoidedSales = readMoney("totalVoidedSales"),
+        totalVoidedNonCash = readMoney("totalVoidedNonCash")
     )
 
     private fun CashMovement.toMap(): Map<String, Any?> = firestoreSafeOf(
@@ -499,7 +524,8 @@ class FirebaseCashSessionRepository(
         "sourcePurchaseId" to sourcePurchaseId,
         "sourceMovementId" to sourceMovementId,
         "sourceCreditMovementId" to sourceCreditMovementId,
-        "sourceDepositId" to sourceDepositId
+        "sourceDepositId" to sourceDepositId,
+        "sourceBankDepositId" to sourceBankDepositId
     )
 
     private fun DocumentSnapshot.toMovement() = CashMovement(
@@ -518,7 +544,8 @@ class FirebaseCashSessionRepository(
         sourcePurchaseId = get<String?>("sourcePurchaseId") ?: "",
         sourceMovementId = get<String?>("sourceMovementId") ?: "",
         sourceCreditMovementId = get<String?>("sourceCreditMovementId") ?: "",
-        sourceDepositId = runCatching { get<String?>("sourceDepositId") }.getOrNull() ?: ""
+        sourceDepositId = runCatching { get<String?>("sourceDepositId") }.getOrNull() ?: "",
+        sourceBankDepositId = runCatching { get<String?>("sourceBankDepositId") }.getOrNull() ?: ""
     )
 
     private fun DocumentSnapshot.readMillis(field: String): Long =

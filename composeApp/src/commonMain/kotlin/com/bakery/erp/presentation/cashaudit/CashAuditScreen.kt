@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.LockClock
@@ -172,6 +173,9 @@ private fun AuditRow(e: CashAuditEvent) {
         CashAuditEventType.CLOSE -> Icons.Default.LockClock
         CashAuditEventType.CLOSE_SCREEN -> Icons.Default.Visibility
         CashAuditEventType.HELD_CART_DISCARDED -> Icons.Default.RemoveShoppingCart
+        CashAuditEventType.SALE_VOID -> Icons.Default.RemoveShoppingCart
+        CashAuditEventType.BANK_DEPOSIT_OUT, CashAuditEventType.BANK_DEPOSIT_SLIP,
+        CashAuditEventType.BANK_DEPOSIT_NO_SLIP -> Icons.Default.AccountBalance
         else -> Icons.Default.PointOfSale
     }
     Surface(
@@ -219,6 +223,23 @@ private fun AuditRow(e: CashAuditEvent) {
                         style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate)
                     CashAuditEventType.HELD_CART_DISCARDED -> Text("Cuenta de Q ${e.expectedCash.fmtMoney(2)} sin cobrar",
                         style = MaterialTheme.typography.bodySmall, color = BrandColors.AccentDeep, fontWeight = FontWeight.SemiBold)
+                    CashAuditEventType.SALE_VOID -> Text(
+                        "Venta de Q ${e.expectedCash.fmtMoney(2)}" +
+                            if (e.countedCash > 0.004) " · salió de la gaveta Q ${e.countedCash.fmtMoney(2)}" else "",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.SemiBold)
+                    CashAuditEventType.BANK_DEPOSIT_OUT -> Text("Q ${e.expectedCash.fmtMoney(2)} salieron de la gaveta",
+                        style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate)
+                    CashAuditEventType.BANK_DEPOSIT_SLIP -> Text(
+                        "Salió Q ${e.expectedCash.fmtMoney(2)} · boleta Q ${e.countedCash.fmtMoney(2)}" +
+                            when {
+                                e.difference < -0.01 -> " · faltan Q ${(-e.difference).fmtMoney(2)}"
+                                e.difference > 0.01 -> " · sobran Q ${e.difference.fmtMoney(2)}"
+                                else -> " · cuadra"
+                            },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (kotlin.math.abs(e.difference) > 0.01) MaterialTheme.colorScheme.error else BrandColors.MutedSlate)
+                    CashAuditEventType.BANK_DEPOSIT_NO_SLIP -> Text("Q ${e.expectedCash.fmtMoney(2)} sin boleta",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.SemiBold)
                 }
                 if (e.notes.isNotBlank()) {
                     Text("Nota: ${e.notes}", style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate)

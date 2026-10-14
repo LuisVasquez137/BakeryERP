@@ -71,6 +71,7 @@ import kotlinx.datetime.toInstant
 import kotlinx.datetime.toLocalDateTime
 import kotlin.math.roundToInt
 import com.bakery.erp.ui.theme.BrandColors
+import com.bakery.erp.model.isPortion
 
 /** Estado del permiso de ubicación al crear un pedido — ver
  *  [com.bakery.erp.model.Branch.latitude] / `LocationRequester`. Puramente de
@@ -269,8 +270,9 @@ fun ProductionOrderFormScreen(
             ?.takeIf { it.isNotEmpty() }
             ?.let { ids -> productState.productList.filter { it.id in ids } }
             ?: productState.productList
+        // La porción de pastel se corta en la tienda; a planta se le pide el entero.
         base.filter {
-            it.active && (searchQuery.isEmpty() || it.name.contains(searchQuery, ignoreCase = true))
+            it.active && !it.isPortion && (searchQuery.isEmpty() || it.name.contains(searchQuery, ignoreCase = true))
         }.sortedBy { it.name }
     }
 

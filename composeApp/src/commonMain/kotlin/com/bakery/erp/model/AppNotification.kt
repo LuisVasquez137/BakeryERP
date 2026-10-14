@@ -62,6 +62,24 @@ object NotificationType {
      */
     const val CASH_CLOSE_OUT_OF_SCHEDULE = "CASH_CLOSE_OUT_OF_SCHEDULE"
 
+    /**
+     * Se anuló una venta ya cobrada. Al dueño, siempre: anular con el cliente ya ido es la forma
+     * de quedarse con el dinero sin que la caja descuadre, y lo que lo frena es que se sepa.
+     */
+    const val SALE_VOIDED = "SALE_VOIDED"
+
+    /**
+     * Depósito al banco desde una caja: salió el efectivo, llegó la boleta (con diferencia si la
+     * hay) o se dejó sin boleta. Al dueño: es la forma de saber que el dinero llegó al banco.
+     */
+    const val BANK_DEPOSIT = "BANK_DEPOSIT"
+
+    /**
+     * Accidente en el mostrador que el dueño tiene que ver: lo perdonó alguien, la responsable
+     * no confirmó con PIN, o fue de alguien que puede perdonar (no se perdona a sí misma).
+     */
+    const val COUNTER_ACCIDENT = "COUNTER_ACCIDENT"
+
     fun label(type: String) = when (type) {
         ORDER_RECEIVED -> "Pedido recibido"
         ORDER_IN_LOT -> "Pedido tomado"
@@ -69,6 +87,9 @@ object NotificationType {
         PRODUCT_CANCELLED_MIN_BATCH -> "Producto anulado"
         DISPATCH_QUANTITY_CHANGED -> "Cambio en tu envío"
         CASH_CLOSE_OUT_OF_SCHEDULE -> "Caja fuera de horario"
+        SALE_VOIDED -> "Venta anulada"
+        BANK_DEPOSIT -> "Depósito al banco"
+        COUNTER_ACCIDENT -> "Accidente en mostrador"
         else -> "Aviso"
     }
 }
@@ -86,6 +107,8 @@ object NotificationTarget {
     const val DISPATCH_NOTE_DETAIL = "DISPATCH_NOTE_DETAIL"
     /** Bitácora de cajas; `targetId` = sucursal. */
     const val CASH_AUDIT = "CASH_AUDIT"
+    /** Salidas del mostrador (merma, accidentes, regalos); `targetId` = sucursal. */
+    const val COUNTER_REMOVALS = "COUNTER_REMOVALS"
 }
 
 /**

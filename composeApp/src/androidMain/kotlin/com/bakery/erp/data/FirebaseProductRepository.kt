@@ -131,6 +131,9 @@ class FirebaseProductRepository(
         "linkedIngredientId" to linkedIngredientId,
         "linkedIngredientName" to linkedIngredientName,
         "ingredientUnitsPerSale" to ingredientUnitsPerSale,
+        "portionOfProductId" to portionOfProductId,
+        "portionOfProductName" to portionOfProductName,
+        "portionsPerWhole" to portionsPerWhole,
         "notes" to notes,
         "createdAt" to if (createdAt == 0L) System.currentTimeMillis() else createdAt,
         "updatedAt" to System.currentTimeMillis()
@@ -208,6 +211,9 @@ class FirebaseProductRepository(
         linkedIngredientName = runCatching { get<String?>("linkedIngredientName") }.getOrNull() ?: "",
         // 0 en docs viejos; `ingredientUnitsFor` lo trata como uno a uno.
         ingredientUnitsPerSale = runCatching { get<Double?>("ingredientUnitsPerSale") }.getOrNull() ?: 1.0,
+        portionOfProductId = runCatching { get<String?>("portionOfProductId") }.getOrNull() ?: "",
+        portionOfProductName = runCatching { get<String?>("portionOfProductName") }.getOrNull() ?: "",
+        portionsPerWhole = runCatching { get<Long?>("portionsPerWhole")?.toInt() }.getOrNull() ?: 0,
         notes = get<String?>("notes"),
         createdAt = readTimestampAsMillis("createdAt"),
         updatedAt = readTimestampAsMillis("updatedAt")

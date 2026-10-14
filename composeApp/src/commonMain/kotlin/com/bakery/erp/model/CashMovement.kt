@@ -49,7 +49,9 @@ data class CashMovement(
      * corrige desde la lista de la caja: se corrige en el anticipo, que es lo que el cliente
      * tiene en su comprobante.
      */
-    val sourceDepositId: String = ""
+    val sourceDepositId: String = "",
+    /** Depósito al banco ([BankDeposit]) que sacó este efectivo de la gaveta. */
+    val sourceBankDepositId: String = ""
 )
 
 object CashMovementType {
@@ -65,6 +67,8 @@ object CashMovementType {
     const val TRANSFER_OUT  = "TRANSFER_OUT"
     /** Entrada de efectivo desde otra caja (espejo de TRANSFER_OUT en la sesión origen). */
     const val TRANSFER_IN   = "TRANSFER_IN"
+    /** Efectivo que se lleva a depositar al banco a medio turno (ver [BankDeposit]). No es gasto. */
+    const val BANK_DEPOSIT  = "BANK_DEPOSIT"
 
     fun label(type: String) = when (type) {
         WITHDRAWAL    -> "Retiro"
@@ -73,6 +77,7 @@ object CashMovementType {
         FUND_ADDITION -> "Más fondo de cambio"
         TRANSFER_OUT  -> "Traslado a otra caja"
         TRANSFER_IN   -> "Recibido de otra caja"
+        BANK_DEPOSIT  -> "Depósito al banco"
         else          -> "Desconocido"
     }
 
@@ -102,7 +107,7 @@ object CashMovementType {
     /** Signo del movimiento sobre el efectivo esperado. */
     fun sign(type: String): Int = when (type) {
         DEPOSIT, FUND_ADDITION, TRANSFER_IN -> +1
-        WITHDRAWAL, EXPENSE, TRANSFER_OUT   -> -1
+        WITHDRAWAL, EXPENSE, TRANSFER_OUT, BANK_DEPOSIT -> -1
         else                                -> 0
     }
 }

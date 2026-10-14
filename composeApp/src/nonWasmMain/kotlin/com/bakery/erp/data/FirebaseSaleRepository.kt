@@ -26,6 +26,9 @@ import com.bakery.erp.model.SalePaymentMethod
 import com.bakery.erp.model.SaleStatus
 import com.bakery.erp.model.SalesDaily
 import com.bakery.erp.model.plus
+import com.bakery.erp.model.minus
+import com.bakery.erp.model.SaleVoidRequest
+import com.bakery.erp.model.voidBankAmount
 import com.bakery.erp.model.salesDailyId
 import com.bakery.erp.model.groupSaleKey
 import com.bakery.erp.model.isPackaging
@@ -229,6 +232,109 @@ class FirebaseSaleRepository(
         runCatching { addToDailyRollup(companyId, contributionOf(finalSale, resolvedLines)) }
 
         finalSale
+    }
+
+    override suspend fun voidSale(
+        companyId: String, saleId: String, request: SaleVoidRequest
+    ): Sale {
+        val ref = salesCol(companyId).document(saleId)
+        val now = Clock.System.now().toEpochMilliseconds()
+        val voided = firestore.runTransaction {
+            val snapshot = get(ref)
+            if (!snapshot.exists) error("La venta ya no existe.")
+            val sale = snapshot.toSale()
+            if (sale.status == SaleStatus.VOIDED) error("Esta venta ya estaba anulada.")
+            if (sale.status != SaleStatus.COMPLETED) error("Solo se anulan ventas completadas.")
+            val updated = sale.copy(
+                status = SaleStatus.VOIDED,
+                voidReason = request.reason,
+                voidedAt = now,
+                voidedByUserId = request.userId,
+                voidedByUserName = request.userName,
+                voidedByEmployeeId = request.employeeId,
+                bankRefundAmount = sale.voidBankAmount
+            )
+            update(ref, firestoreSafeOf(
+                "status" to updated.status,
+                "voidReason" to updated.voidReason,
+                "voidedAt" to updated.voidedAt,
+                "voidedByUserId" to updated.voidedByUserId,
+                "voidedByUserName" to updated.voidedByUserName,
+                "voidedByEmployeeId" to updated.voidedByEmployeeId,
+                "bankRefundAmount" to updated.bankRefundAmount
+            ))
+            updated
+        }
+
+        val lines = getSaleLines(companyId, saleId)
+        // Lo mismo que descontó el cobro, al revés. Cada línea es un producto distinto (el
+        // carrito ya agrupa), pero se va en serie: applyMovement lee-modifica-escribe.
+        lines.filter { it.stockDeducted && !it.productId.isNullOrEmpty() }.forEach { line ->
+            if (line.isIngredientBacked) {
+                val returned = line.ingredientUnitsConsumed
+                val previous = ingredientRepository
+                    .getBranchStocksForIngredient(companyId, line.linkedIngredientId, listOf(voided.branchId))
+                    .find { it.branchId == voided.branchId }?.currentStock ?: 0.0
+                ingredientRepository.updateBranchStock(
+                    companyId, line.linkedIngredientId, line.linkedIngredientName,
+                    voided.branchId, voided.branchName, returned
+                )
+                ingredientRepository.addStockMovement(
+                    companyId, line.linkedIngredientId,
+                    StockMovement(
+                        type = "DEVOLUCION",
+                        quantity = returned,
+                        balanceBefore = previous,
+                        balanceAfter = previous + returned,
+                        branchId = voided.branchId,
+                        branchName = voided.branchName,
+                        reference = saleId,
+                        date = now
+                    )
+                )
+            } else {
+                // Vuelve al costo al que salió: con el precio de venta inflaría el costo promedio.
+                val productId = line.productId!!
+                val cost = line.costAtSale.takeIf { it > 0.0 }
+                    ?: finishedStockRepository.getStock(companyId, voided.branchId, productId)?.avgUnitCost
+                    ?: 0.0
+                finishedStockRepository.applyMovement(
+                    companyId,
+                    FinishedStockMovement(
+                        productId = productId,
+                        productName = line.productName,
+                        branchId = voided.branchId,
+                        branchName = voided.branchName,
+                        type = FinishedMovementType.DEVOLUCION,
+                        quantity = line.quantity,
+                        unitPriceAtMovement = cost,
+                        referenceType = FinishedMovementReference.SALE_VOID,
+                        referenceId = saleId,
+                        reason = request.reason,
+                        createdByUserId = request.userId,
+                        createdByUserName = request.userName,
+                        createdAt = now
+                    )
+                )
+            }
+        }
+
+        if (voided.sessionId.isNotEmpty()) {
+            cashSessionRepository.applySaleVoid(companyId, voided.sessionId, voided)
+        }
+
+        // Igual que al cobrar: el resumen se repara con rebuildDailyRollups (que ya ignora las
+        // anuladas), así que un fallo acá no deshace una anulación que ya ocurrió.
+        runCatching { subtractFromDailyRollup(companyId, contributionOf(voided, lines)) }
+
+        return voided
+    }
+
+    override suspend fun markBankRefunded(companyId: String, saleId: String, userName: String) {
+        salesCol(companyId).document(saleId).update(firestoreSafeOf(
+            "bankRefundDoneAt" to Clock.System.now().toEpochMilliseconds(),
+            "bankRefundDoneByName" to userName
+        ))
     }
 
     override suspend fun getSale(companyId: String, saleId: String): Sale? =
@@ -493,6 +599,19 @@ class FirebaseSaleRepository(
         }
     }
 
+    private suspend fun subtractFromDailyRollup(companyId: String, c: SaleContribution) {
+        val ref = dailyCol(companyId).document(salesDailyId(c.branchId, c.businessDate))
+        firestore.runTransaction {
+            val snapshot = get(ref)
+            if (snapshot.exists) {
+                val updated = (snapshot.toSalesDaily() - c).copy(
+                    updatedAt = Clock.System.now().toEpochMilliseconds()
+                )
+                set(ref, updated.toMap())
+            }
+        }
+    }
+
     // ── Serialización ────────────────────────────────────────────────────────
 
     private fun Sale.toMap(): Map<String, Any?> = firestoreSafeOf(
@@ -558,6 +677,14 @@ class FirebaseSaleRepository(
         "externalDeliveryFee" to externalDeliveryFee,
         "externalDteId" to externalDteId,
         "invoiceConflict" to invoiceConflict,
+        "voidReason" to voidReason,
+        "voidedAt" to voidedAt,
+        "voidedByUserId" to voidedByUserId,
+        "voidedByUserName" to voidedByUserName,
+        "voidedByEmployeeId" to voidedByEmployeeId,
+        "bankRefundAmount" to bankRefundAmount,
+        "bankRefundDoneAt" to bankRefundDoneAt,
+        "bankRefundDoneByName" to bankRefundDoneByName,
         "createdAt" to createdAt
     )
 
@@ -628,6 +755,15 @@ class FirebaseSaleRepository(
             ?: runCatching { get<Long?>("externalDeliveryFee")?.toDouble() }.getOrNull() ?: 0.0,
         externalDteId = runCatching { get<String?>("externalDteId") }.getOrNull() ?: "",
         invoiceConflict = runCatching { get<Boolean?>("invoiceConflict") }.getOrNull() ?: false,
+        voidReason = runCatching { get<String?>("voidReason") }.getOrNull() ?: "",
+        voidedAt = readMillis("voidedAt"),
+        voidedByUserId = runCatching { get<String?>("voidedByUserId") }.getOrNull() ?: "",
+        voidedByUserName = runCatching { get<String?>("voidedByUserName") }.getOrNull() ?: "",
+        voidedByEmployeeId = runCatching { get<String?>("voidedByEmployeeId") }.getOrNull() ?: "",
+        bankRefundAmount = runCatching { get<Double?>("bankRefundAmount") }.getOrNull()
+            ?: runCatching { get<Long?>("bankRefundAmount")?.toDouble() }.getOrNull() ?: 0.0,
+        bankRefundDoneAt = readMillis("bankRefundDoneAt"),
+        bankRefundDoneByName = runCatching { get<String?>("bankRefundDoneByName") }.getOrNull() ?: "",
         createdAt = readMillis("createdAt")
     )
 

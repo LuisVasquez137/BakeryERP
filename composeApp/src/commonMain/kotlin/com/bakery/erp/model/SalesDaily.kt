@@ -84,7 +84,15 @@ data class SaleContribution(
  * incremental al cobrar y para reconstruir un día entero desde cero, así que no hay dos
  * fórmulas que puedan discrepar.
  */
-operator fun SalesDaily.plus(c: SaleContribution): SalesDaily = copy(
+operator fun SalesDaily.plus(c: SaleContribution): SalesDaily = applying(c, 1)
+
+/**
+ * Saca una venta anulada del resumen de su día: el mismo cálculo que [plus] con signo contrario,
+ * así anular nunca puede restar algo distinto de lo que sumó el cobro.
+ */
+operator fun SalesDaily.minus(c: SaleContribution): SalesDaily = applying(c, -1)
+
+private fun SalesDaily.applying(c: SaleContribution, sign: Int): SalesDaily = copy(
     id = salesDailyId(c.branchId, c.businessDate),
     branchId = c.branchId,
     // El nombre se refresca con el de la última venta: si renombran la sucursal, el resumen
@@ -92,22 +100,22 @@ operator fun SalesDaily.plus(c: SaleContribution): SalesDaily = copy(
     branchName = c.branchName,
     businessDate = c.businessDate,
     dateMillis = c.dateMillis,
-    revenue = revenue + c.total,
-    transactionCount = transactionCount + 1,
-    unitsSold = unitsSold + c.units,
-    paymentTotal = c.effectiveParts.entries.fold(paymentTotal) { acc, (m, v) -> acc.addDouble(m, v) },
+    revenue = revenue + sign * c.total,
+    transactionCount = transactionCount + sign,
+    unitsSold = unitsSold + sign * c.units,
+    paymentTotal = c.effectiveParts.entries.fold(paymentTotal) { acc, (m, v) -> acc.addDouble(m, sign * v) },
     // Un ticket dividido cuenta como ticket en cada método que usó.
-    paymentCount = c.effectiveParts.keys.fold(paymentCount) { acc, m -> acc.addInt(m, 1) },
+    paymentCount = c.effectiveParts.keys.fold(paymentCount) { acc, m -> acc.addInt(m, sign) },
     cashierName = cashierName + (c.cashierId to c.cashierName),
-    cashierTotal = cashierTotal.addDouble(c.cashierId, c.total),
-    cashierCount = cashierCount.addInt(c.cashierId, 1),
-    hourTotal = hourTotal.addDouble(c.hour.toString(), c.total),
+    cashierTotal = cashierTotal.addDouble(c.cashierId, sign * c.total),
+    cashierCount = cashierCount.addInt(c.cashierId, sign),
+    hourTotal = hourTotal.addDouble(c.hour.toString(), sign * c.total),
     productName = productName + c.productName,
-    productQty = c.productQty.entries.fold(productQty) { acc, (k, v) -> acc.addDouble(k, v) },
-    productRevenue = c.productRevenue.entries.fold(productRevenue) { acc, (k, v) -> acc.addDouble(k, v) },
-    channelRevenue = channelRevenue.addDouble(c.channel, c.total),
-    channelCount = channelCount.addInt(c.channel, 1),
-    channelUnits = channelUnits.addDouble(c.channel, c.units)
+    productQty = c.productQty.entries.fold(productQty) { acc, (k, v) -> acc.addDouble(k, sign * v) },
+    productRevenue = c.productRevenue.entries.fold(productRevenue) { acc, (k, v) -> acc.addDouble(k, sign * v) },
+    channelRevenue = channelRevenue.addDouble(c.channel, sign * c.total),
+    channelCount = channelCount.addInt(c.channel, sign),
+    channelUnits = channelUnits.addDouble(c.channel, sign * c.units)
 )
 
 private val SaleContribution.effectiveParts: Map<String, Double>

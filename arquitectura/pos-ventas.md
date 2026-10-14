@@ -83,9 +83,36 @@ contar sin autorización. Decisiones tomadas con él:
     transferencia (hora, factura) — de qué turno es cada voucher — y qué entregó o retiró. Solo
     cerrado: abierto diría cuánto se lleva vendido.
   - El `DailyCashClose` sigue aparte: la cadena no lo usa todavía.
-- **Pendiente (Fase C)**: depósitos al banco por tandas con foto de la boleta, que cuentan en el
-  cuadre y no pasan al siguiente turno — el dueño quiere que todo el dinero termine en el banco y
-  nadie retire.
+- **Fase C (hecha oct 2026, sin probar en dispositivo): depósitos al banco con boleta**
+  (`model/BankDeposit.kt`, `companies/{c}/bankDeposits`, plana; tests en `BankDepositTest`). La
+  meta del dueño: que todo el dinero termine en el banco y nadie retire.
+  - **Dos pasos**: el dinero se descuenta al SALIR de la gaveta (si se esperara la boleta, la caja
+    descuadra mientras la cajera está en el banco) y la boleta se adjunta al volver: foto
+    obligatoria (cámara), número y monto que dice. Monto de boleta ≠ lo que salió → rojo + aviso.
+  - **A medio turno**: menú del POS "Depositar al banco" (permiso `BANK_DEPOSIT`; en la tablet lo
+    necesitan la cuenta y el colaborador). Crea el depósito PENDING y después un `CashMovement`
+    `BANK_DEPOSIT` (signo −, no es gasto) con `sourceBankDepositId`; si el movimiento falla, el
+    depósito queda CANCELLED. Tope: el esperado de la gaveta.
+  - **Al cerrar**: el campo de retiro tiene "Depositar al banco" (por omisión) / "Retiro" (solo con
+    `WITHDRAW_AT_CLOSE`). Al banco usa el mismo `closingWithdrawal` (ya descuenta de lo que se
+    entrega) y la sesión guarda `closingBankDepositId`; no hay movimiento.
+  - **PIN de quien lo lleva** (decisión del dueño): si la tablet usa PIN (`carrierMustConfirm` =
+    `operatorEmployeeId` no vacío), quien lo lleva escribe SU PIN, aunque sea quien abrió la caja.
+    `verifyCarrier` llama a `verifyPin` ANTES de cualquier escritura (a medio turno y al principio
+    de `closeSession`); el depósito guarda `carrierConfirmedWithPin` y la tarjeta dice "(con PIN)".
+    El error del PIN se muestra dentro del diálogo (`bankDepositError`).
+  - **Bloqueo**: no se cierra un turno mientras la CAJA (por `registerId`, de cualquier turno)
+    tenga depósitos PENDING — así el depósito del cierre de anoche bloquea el primer cierre de
+    hoy. Se destraba adjuntando la boleta o con "No tengo la boleta" + motivo (NO_SLIP, aviso al
+    dueño). Chequeo en `goToClose` del POS, en la pantalla de cierre y en `closeSession`.
+  - **Visibilidad**: ícono de banco con número en la barra del POS mientras falte boleta; tarjeta
+    "Depósitos al banco" (miniatura, toque = zoom) en el cierre y en el detalle de la caja
+    (abierta o cerrada; ahí también se adjunta). Push `NotificationType.BANK_DEPOSIT` y bitácora
+    (`BANK_DEPOSIT_OUT/SLIP/NO_SLIP`) en los tres momentos.
+  - Foto en Storage `companies/{c}/bankDeposits/{id}.jpg` (`BankSlipImageUploader`; ya cubierto
+    por las reglas). `bankDeposits` está en `isHistory` (no se borra) — regla en el repo.
+  - **No hecho**: aviso automático "lleva N horas sin boleta" (requiere función programada) y
+    "visto en el estado de cuenta" por parte del dueño.
 
 ### POS: diálogo de cobro (`PaymentDialog`)
 
@@ -389,6 +416,20 @@ Configurable al 100% por empresa (todas las sucursales): Inicio → **Pago con t
 - **Reportes**: clave `srg_card`, fuera de top productos y de unidades; `cardSurchargeTotal` →
   sección "Recargo por tarjeta" del reporte de ventas.
 
+### PedidosYa como método de pago (oct 2026)
+
+- `SalePaymentMethod.PEDIDOS_YA`: el pedido lo cobra la app (o su repartidor) y PedidosYa lo
+  liquida después. No entra dinero a la gaveta → no suma a `expectedCashNow`.
+- Solo en el cobro del POS (`SalePaymentMethod.checkout`); `all` (abonos de crédito, anticipos)
+  NO lo incluye. No se divide (`canSplit` falso) ni lleva recargo de tarjeta.
+- Caja: `CashSession.totalPedidosYaSales` (sumado en `incrementSaleTotals`), renglón "sin dinero
+  en gaveta" en el cierre, en el detalle y en el cierre del día (`DailyCashClose.totalPedidosYaSales`).
+  **No pasa de turno** en `ShiftHandover`: no hay voucher físico; el total del día sale de sumar turnos.
+- Anular: entra en `SalePaymentMethod.nonCashSettled` → `voidBankAmount` (se devuelve por PedidosYa).
+- Reportes: `paymentTotal` de `salesDaily` va por clave de método, así que aparece solo en
+  "por método de pago". Montos brutos: la comisión de PedidosYa no se registra.
+- Las cuentas del restaurante que llegan de ComandaYa siguen normalizadas a CASH|CARD|TRANSFER.
+
 ### Cuentas en espera (oct 2026)
 
 El cliente va por más pan a mitad del cobro: la cajera guarda el carrito, atiende al siguiente y
@@ -441,3 +482,71 @@ juntos salían como dos ventas separadas.
 - **Encabezado de la caja**: a la vista restaurante (si hay cuentas), lupa, carrito (teléfono),
   último cobro, anotar gasto y ⋮. Todo lo demás en el menú, igual en teléfono y tablet.
 - `SaleDetailScreen` (una venta) queda para los enlaces viejos.
+
+
+### Anular venta / devolución (oct 2026, sin probar en dispositivo)
+
+El cliente devuelve el pan o la cajera se equivocó. El robo que esto puede tapar: el cliente paga
+en efectivo, se va, la cajera anula y se queda el dinero — la caja cuadra. Decidido con el dueño:
+**sin PIN de autorizador**, pero **motivo obligatorio**, **push al dueño** en cada anulación
+(`NotificationType.SALE_VOIDED`, permiso `VIEW_CASH_AUDIT`, tap → bitácora), evento `SALE_VOID` en
+la bitácora de cajas y **lista de anuladas en el cuadre**. Lo que disuade es que se vea.
+
+- Desde el detalle del cobro (`SaleOrderDetailScreen` → "Anular venta (devolución)"), permiso
+  `VOID_SALE` (el mismo de corregir factura; en un equipo de sucursal lo necesitan la cuenta Y el
+  colaborador). Diálogo `VoidSaleDialog` en `pos/SaleVoidUi.kt`.
+- **Se anula el cobro entero**, nunca una parte: devolución parcial = anular y volver a cobrar.
+  Encaja con FEL (con CF no hay NCRE; se anula y se emite otra).
+- **Solo con la caja del cobro abierta** (`saleVoidBlocker` en `model/SaleVoid.kt`, tests en
+  `SaleVoidTest`). También bloquea, por ahora: restaurante/ComandaYa, crédito, anticipo, encargo,
+  factura todavía emitiéndose o en conflicto.
+- **Orden** (`SaleHistoryViewModel.voidOrder`): 1) factura CERTIFICADA → `felRepository.voidInvoice`
+  (si falla, nada se tocó); 2) `SaleRepository.voidSale` por venta: transacción con guarda
+  COMPLETED → VOIDED, **escritura parcial** (el servidor de FEL guarda campos que la app no
+  modela: un `set()` los borraría); devuelve inventario (`DEVOLUCION`/`SALE_VOID` al costo de
+  salida `costAtSale`, insumos por `updateBranchStock`); `applySaleVoid` en la caja; resta del
+  resumen diario (`SalesDaily - contribution`); 3) bitácora + push (fallas contenidas).
+- **Caja** (`CashSession.withSaleVoided`): el efectivo baja de `totalCashSales` (sale de la gaveta,
+  el esperado baja igual). **Tarjeta/transferencia NO baja** de su total: el voucher sigue en la
+  gaveta y pasa de turno igual; se devuelve **por banco** y queda pendiente en la venta
+  (`bankRefundAmount`, "Ya se devolvió por banco" → `bankRefundDoneAt`). `totalSales` y
+  `saleCount` bajan; `voidedSaleCount/totalVoidedSales/totalVoidedNonCash` para el cuadre.
+- Pan por grupo de precio: no hay stock que devolver; el conteo de cierre ya ignora VOIDED
+  (`countsAsRevenue`) y el pan devuelto está en el estante.
+- Historial: filtro "Anuladas" y chip "Devolver por banco".
+
+## Sacar del mostrador: merma, accidente, regalo (oct 2026)
+
+Con la caja abierta no había cómo dar de baja pan: todo esperaba al conteo de cierre y ahí
+cualquier faltante parecía lo mismo. Menú ⋮ del POS → "Sacar del mostrador". Modelo y reglas en
+`model/CounterRemoval.kt` (`CounterRemovalTest`), colección `counterRemovals` (historial, no se
+borra), repo `FirebaseCounterRemovalRepository`, VM `CounterRemovalViewModel`.
+
+El dueño quiere los tres casos separados, y que la cajera no pueda disfrazar uno de otro. El
+sistema no sabe quién tiró el pan: cada caso tiene un control que hace que mentir cueste más:
+
+| Caso | Movimiento | Control |
+|---|---|---|
+| Venía mal | `MERMA` (ref `COUNTER_REMOVAL`) | Foto obligatoria |
+| Se cayó / se arruinó aquí | `ACCIDENTE` + cargo a costo en la cuenta de la colaboradora (`CreditMovementType.ACCIDENT`, id fijo `accident_<id>`) | Si la responsable no es quien está en la caja, confirma con SU PIN (`verifyPin`). Sin PIN asignado: se registra igual (`responsibleConfirmation = NONE`) y avisa al dueño |
+| Lo regalé | `CORTESIA` | Sin PIN; nota obligatoria; cuota diaria en Q a precio de venta por sucursal (`Branch.dailyCourtesyQuota`, solo OWNER la edita en el form de sucursal). **Pasarse bloquea**; 0 = no se regala. La cuota se relee justo antes de guardar |
+
+- **Perdonar** (`FORGIVE_STAFF_ACCIDENT`, sensible): encabezado marcado primero y luego un
+  `ADJUSTMENT` negativo con id fijo; el cargo nunca se borra. **Nadie se perdona a sí misma**
+  (`accidentForgiveBlocker`); la ficha propia sale de `operatorEmployeeId` o de
+  `Employee.userId`. Si la responsable tiene el permiso de perdonar, el accidente avisa al
+  dueño para que él decida. Perdonar siempre avisa (`NotificationType.COUNTER_ACCIDENT`).
+- **Por qué no rompe el conteo**: la salida baja el stock en el momento, así que el conteo ya
+  espera menos y el faltante del pan por grupo queda solo como venta. Lo que NO se registra
+  aparece en el conteo como faltante (y en el grupo, como venta sin efectivo).
+- **Reportes**: el financiero toma la merma del conteo; lo sacado en caja ya no llega ahí como
+  faltante, por eso `StockMovementSummary.counterDamagedValue` y `courtesyValue` (a costo) se
+  restan aparte en la utilidad con su propia línea. El accidente no se resta (se cobró).
+- Pantalla "Salidas del mostrador" (Home → Ventas; `VIEW_CASH_AUDIT`, `FORGIVE_STAFF_ACCIDENT`
+  o `MANAGE_FINISHED_STOCK`): sucursal, Hoy/7/30 días, tipo, foto ampliable, **resumen por
+  persona** (`counterRemovalByPerson`: merma y regalo para quien registró, accidente para la
+  responsable — ahí se ven los patrones) y "Perdonar".
+- El cierre de turno muestra "Salió del mostrador sin venta" (`counterRemovalSummary`).
+- Pendiente: el descuento en planilla del cargo lo decide el dueño con su contador (queda como
+  deuda en la cuenta, no se descuenta solo).
+

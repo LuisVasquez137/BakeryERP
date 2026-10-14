@@ -73,11 +73,18 @@ fun CashSessionDetailScreen(
         if (companyId.isNotEmpty()) {
             viewModel.observeSession(companyId, sessionId)
             viewModel.loadSessionNonCashSales(companyId, sessionId)
+            viewModel.loadSessionVoidedSales(companyId, sessionId)
+            viewModel.loadSessionBankDeposits(companyId, sessionId)
         }
     }
     LaunchedEffect(state.error) {
         state.error?.let { snackbar.showSnackbar(it); viewModel.clearError() }
     }
+    LaunchedEffect(state.bankDepositNotice) {
+        state.bankDepositNotice?.let { snackbar.showSnackbar(it); viewModel.clearBankDepositNotice() }
+    }
+    val canBankDeposit = user?.hasPermission(com.bakery.erp.model.Permission.BANK_DEPOSIT) == true
+    val slipActions = remember { BankSlipActions() }
     // El borrado lo hace el VM de compras, que no sabe de esta lista: sin recargar acá, el
     // movimiento de devolución aparecía solo al salir y volver a entrar, y parecía que
     // eliminar no había hecho nada.
@@ -138,6 +145,18 @@ fun CashSessionDetailScreen(
                     item { SessionHeaderCard(session) }
                     // Solo cerrada: abierta, la lista de cobros con tarjeta diría cuánto se lleva vendido.
                     item { ShiftHandoverCard(session, state.sessionNonCashSales) }
+                    if (state.sessionVoidedSales.isNotEmpty()) item { VoidedSalesCard(state.sessionVoidedSales) }
+                }
+                // Abierta o cerrada: un depósito no dice cuánto se vendió, y la boleta se puede
+                // completar aquí (también desde el POS).
+                val deposits = state.sessionBankDeposits.filter { it.sessionId == sessionId }
+                if (deposits.isNotEmpty()) item {
+                    BankDepositsCard(
+                        deposits = deposits,
+                        canAct = canBankDeposit,
+                        onAttach = { slipActions.attachFor = it },
+                        onNoSlip = { slipActions.noSlipFor = it }
+                    )
                 }
                 item { MovementTotalsCard(totals) }
                 item {
@@ -278,6 +297,16 @@ fun CashSessionDetailScreen(
             message = if (purchaseState.isProcessing) "Eliminando el gasto…" else "Guardando…"
         )
 
+        BankSlipActionDialogs(
+            actions = slipActions,
+            companyId = companyId,
+            user = user,
+            viewModel = viewModel,
+            isBusy = state.isBankDepositBusy,
+            notice = state.bankDepositNotice,
+            viewingSessionId = sessionId
+        )
+
         if (showTransfer && user != null) {
             CashTransferDialog(
                 companyId = companyId,
@@ -322,14 +351,14 @@ private fun ShiftHandoverCard(session: CashSession, nonCash: List<com.bakery.erp
 
             if (nonCash.isNotEmpty()) {
                 HorizontalDivider(Modifier.padding(vertical = 6.dp))
-                Text("Tarjeta y transferencias de este turno", fontWeight = FontWeight.SemiBold,
+                Text("Tarjeta, transferencias y PedidosYa de este turno", fontWeight = FontWeight.SemiBold,
                     style = MaterialTheme.typography.bodyMedium)
                 nonCash.forEach { sale ->
                     val t = kotlin.time.Instant.fromEpochMilliseconds(sale.createdAt)
                         .toLocalDateTime(kotlinx.datetime.TimeZone.currentSystemDefault())
                     val time = "${t.hour.toString().padStart(2, '0')}:${t.minute.toString().padStart(2, '0')}"
                     sale.effectivePaymentBreakdown
-                        .filterKeys { it == com.bakery.erp.model.SalePaymentMethod.CARD || it == com.bakery.erp.model.SalePaymentMethod.TRANSFER }
+                        .filterKeys { it in com.bakery.erp.model.SalePaymentMethod.nonCashSettled }
                         .forEach { (method, amount) ->
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("$time · ${com.bakery.erp.model.SalePaymentMethod.label(method)}" +
@@ -348,7 +377,11 @@ private fun ShiftHandoverCard(session: CashSession, nonCash: List<com.bakery.erp
                     fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium
                 )
                 if (session.closingWithdrawal > 0.004) {
-                    Text("Retiró Q ${session.closingWithdrawal.fmtMoney(2)}", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        if (session.closingBankDepositId.isNotBlank()) "Al banco Q ${session.closingWithdrawal.fmtMoney(2)}"
+                        else "Retiró Q ${session.closingWithdrawal.fmtMoney(2)}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
                 Text("Efectivo Q ${session.carriedOutCash.fmtMoney(2)} · tarjeta Q ${session.carriedOutCard.fmtMoney(2)} · " +
                     "transferencias Q ${session.carriedOutTransfer.fmtMoney(2)}", style = MaterialTheme.typography.bodySmall)
@@ -389,9 +422,15 @@ private fun SessionHeaderCard(session: CashSession) {
             }
             Text("Efectivo: Q ${session.totalCashSales.fmtMoney(2)} · " +
                  "Tarjeta: Q ${session.totalCardSales.fmtMoney(2)} · " +
-                 "Transf: Q ${session.totalTransferSales.fmtMoney(2)}",
+                 "Transf: Q ${session.totalTransferSales.fmtMoney(2)}" +
+                 (if (session.totalPedidosYaSales > 0.004) " · PedidosYa: Q ${session.totalPedidosYaSales.fmtMoney(2)}" else ""),
                  style = MaterialTheme.typography.labelSmall,
                  color = MaterialTheme.colorScheme.outline)
+            if (session.voidedSaleCount > 0) {
+                Text("Anuladas (${session.voidedSaleCount}): Q ${session.totalVoidedSales.fmtMoney(2)}" +
+                    if (session.totalVoidedNonCash > 0.004) " · por banco Q ${session.totalVoidedNonCash.fmtMoney(2)}" else "",
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+            }
             Text("# ventas: ${session.saleCount}",
                  style = MaterialTheme.typography.labelSmall,
                  color = MaterialTheme.colorScheme.outline)
@@ -445,7 +484,7 @@ private fun MovementTotalsCard(totals: CashMovementTotals) {
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Column {
-                Text("Gastos", style = MaterialTheme.typography.labelMedium,
+                Text("Salidas", style = MaterialTheme.typography.labelMedium,
                      color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("Q ${totals.gastos.fmtMoney(2)}", fontWeight = FontWeight.Bold,
                      color = Color(0xFFB00020))

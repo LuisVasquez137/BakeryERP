@@ -22,6 +22,11 @@ data class CashSession(
     val totalCashSales: Double = 0.0,
     val totalCardSales: Double = 0.0,
     val totalTransferSales: Double = 0.0,
+    /**
+     * Pedidos de PedidosYa. No hay dinero ni voucher en la gaveta: lo liquida PedidosYa. Por eso
+     * no pasa de turno como los vouchers ([ShiftHandover]); el total del día sale de sumar turnos.
+     */
+    val totalPedidosYaSales: Double = 0.0,
     /** Vendido a crédito en el turno. Informativo: no es dinero que esté en la gaveta. */
     val totalCreditSales: Double = 0.0,
     val totalSales: Double = 0.0,
@@ -74,12 +79,28 @@ data class CashSession(
     val carriedInTransfer: Double = 0.0,
     /** Efectivo que se retiró de la gaveta al cerrar (permiso aparte). */
     val closingWithdrawal: Double = 0.0,
+    /**
+     * Si lo que salió al cerrar fue al banco, el [BankDeposit] (queda pendiente de boleta). Vacío =
+     * fue un retiro.
+     */
+    val closingBankDepositId: String = "",
     /** Lo que se entregó al cerrar: al siguiente turno, o lo que quedó para mañana. */
     val carriedOutCash: Double = 0.0,
     val carriedOutCard: Double = 0.0,
     val carriedOutTransfer: Double = 0.0,
     /** El cierre registró la entrega (los cierres anteriores a esto no la traen). */
-    val handoverRecorded: Boolean = false
+    val handoverRecorded: Boolean = false,
+
+    // ── Ventas anuladas en el turno (ver SaleVoid.kt) ────────────────────────
+    val voidedSaleCount: Int = 0,
+    /** Total de las ventas anuladas. Ya NO está en [totalSales]. */
+    val totalVoidedSales: Double = 0.0,
+    /**
+     * De lo anulado, lo que se había pagado con tarjeta o transferencia. Sigue en
+     * [totalCardSales]/[totalTransferSales] porque el voucher sigue en la gaveta: se devuelve por
+     * el banco.
+     */
+    val totalVoidedNonCash: Double = 0.0
 ) {
     /** Diferencia al abrir: contado/recibido menos lo que se esperaba. Solo si había qué esperar. */
     val openingDifference: Double get() = if (openingExpected > 0.004) openingBalance - openingExpected else 0.0

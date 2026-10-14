@@ -13,6 +13,9 @@ import com.bakery.erp.model.SaleLine
 import com.bakery.erp.model.User
 import com.bakery.erp.model.canAccessBranch
 import com.bakery.erp.model.isRestaurantSale
+import com.bakery.erp.model.bankRefundPending
+import com.bakery.erp.model.voidCashAmount
+import com.bakery.erp.util.fmtMoney
 import kotlin.time.Clock
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -54,7 +57,11 @@ data class SaleHistoryUiState(
     val posRegisterId: String = "",
     /** Líneas por venta del cobro abierto en el detalle. */
     val orderLines: Map<String, List<SaleLine>> = emptyMap(),
-    val isOrderLoading: Boolean = false
+    val isOrderLoading: Boolean = false,
+    /** Caja del cobro abierto en el detalle: decide si todavía se puede anular. */
+    val orderSession: CashSession? = null,
+    /** Anulando un cobro: tapa la pantalla (factura, inventario y caja). */
+    val isVoidBusy: Boolean = false
 ) {
     val posMode: Boolean get() = posRegisterId.isNotEmpty()
 }
@@ -68,7 +75,11 @@ class SaleHistoryViewModel(
     /** Reimpresión del ticket desde el detalle. */
     private val receiptPrinter: com.bakery.erp.domain.ReceiptPrinter,
     /** Solo para el nombre comercial del encabezado del ticket, igual que en el POS. */
-    private val authRepository: com.bakery.erp.domain.AuthRepository
+    private val authRepository: com.bakery.erp.domain.AuthRepository,
+    /** Aviso al dueño de cada venta anulada. */
+    private val notificationRepository: com.bakery.erp.domain.NotificationRepository,
+    /** Cada anulación queda en la bitácora de cajas. */
+    private val cashAuditRepository: com.bakery.erp.domain.CashAuditRepository
 ) : ViewModel() {
 
     val canPrint: Boolean get() = receiptPrinter.isAvailable
@@ -198,6 +209,116 @@ class SaleHistoryViewModel(
             runCatching { saleIds.associateWith { id -> saleRepository.getSaleLines(companyId, id) } }
                 .onSuccess { map -> _uiState.update { it.copy(isOrderLoading = false, orderLines = map) } }
                 .onFailure { e -> _uiState.update { it.copy(isOrderLoading = false, error = e.message) } }
+        }
+    }
+
+    /** Caja del cobro abierto: si ya cerró, el cobro no se puede anular. */
+    fun loadOrderSession(companyId: String, sessionId: String) {
+        if (sessionId.isBlank()) { _uiState.update { it.copy(orderSession = null) }; return }
+        viewModelScope.launch {
+            runCatching { cashSessionRepository.getSession(companyId, sessionId) }
+                .onSuccess { s -> _uiState.update { it.copy(orderSession = s) } }
+        }
+    }
+
+    /**
+     * Anula el cobro entero (ver `SaleVoid.kt`).
+     *
+     * La factura va PRIMERO: si la SAT no la anula, no se toca nada y se puede reintentar. Si la
+     * factura se anuló y algo de después falla, el reintento la encuentra ANULADA y sigue. Después
+     * cada venta (guarda de estado, inventario, caja, resumen) y al final la bitácora y el aviso
+     * al dueño, que no pueden tumbar una anulación que ya ocurrió.
+     */
+    fun voidOrder(companyId: String, order: com.bakery.erp.model.SaleOrder, reason: String, currentUser: User) {
+        if (_uiState.value.isVoidBusy) return
+        val cleanReason = reason.trim()
+        if (cleanReason.length < com.bakery.erp.model.MIN_SALE_VOID_REASON) {
+            _uiState.update { it.copy(error = "Escribe el motivo de la anulación.") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isVoidBusy = true, error = null) }
+            val result = runCatching {
+                val session = cashSessionRepository.getSession(companyId, order.primary.sessionId)
+                com.bakery.erp.model.saleVoidBlocker(order, session)?.let { error(it) }
+                val invoiced = order.sales.firstOrNull {
+                    it.invoiceStatus == com.bakery.erp.model.FelInvoiceStatus.CERTIFICADO && it.dteId.isNotBlank()
+                }
+                if (invoiced != null) {
+                    runCatching { felRepository.voidInvoice(companyId, invoiced.dteId, "Venta anulada: $cleanReason") }
+                        .onFailure { e -> error("No se pudo anular la factura, la venta no se tocó: ${readable(e, "")}") }
+                }
+                val request = com.bakery.erp.model.SaleVoidRequest(
+                    reason = cleanReason,
+                    userId = currentUser.id,
+                    userName = currentUser.displayName,
+                    employeeId = currentUser.operatorEmployeeId
+                )
+                val voided = order.sales.map { saleRepository.voidSale(companyId, it.id, request) }
+                Triple(session!!, voided, invoiced != null)
+            }
+            result.onFailure { e ->
+                _uiState.update { it.copy(isVoidBusy = false, error = readable(e, "No se pudo anular la venta.")) }
+                return@launch
+            }
+            val (session, voided, hadInvoice) = result.getOrThrow()
+            val total = voided.sumOf { it.total }
+            val cash = voided.sumOf { it.voidCashAmount }
+            val bank = voided.sumOf { it.bankRefundAmount }
+            runCatching {
+                cashAuditRepository.log(companyId, com.bakery.erp.model.CashAuditEvent(
+                    type = com.bakery.erp.model.CashAuditEventType.SALE_VOID,
+                    branchId = session.branchId,
+                    branchName = session.branchName,
+                    registerId = session.registerId,
+                    registerName = session.registerName,
+                    sessionId = session.id,
+                    userId = currentUser.id,
+                    userName = currentUser.displayName,
+                    employeeName = session.openedByEmployeeName,
+                    expectedCash = total,
+                    countedCash = cash,
+                    notes = cleanReason.take(500)
+                ))
+            }
+            runCatching {
+                val time = formatReceiptTimestamp(order.at)
+                notificationRepository.push(companyId, com.bakery.erp.model.AppNotification(
+                    type = com.bakery.erp.model.NotificationType.SALE_VOIDED,
+                    title = "Venta anulada: Q ${total.fmtMoney(2)}",
+                    body = "${session.branchName} · ${session.registerName} · ${currentUser.displayName} anuló el cobro de $time. " +
+                        "Motivo: $cleanReason" +
+                        (if (bank > 0.004) ". Devolver por banco Q ${bank.fmtMoney(2)}" else "") +
+                        (if (hadInvoice) ". La factura se anuló" else ""),
+                    targetBranchIds = listOf(session.branchId),
+                    requiredPermission = com.bakery.erp.model.Permission.VIEW_CASH_AUDIT.name,
+                    targetScreen = com.bakery.erp.model.NotificationTarget.CASH_AUDIT,
+                    targetId = session.branchId,
+                    createdByUserId = currentUser.id,
+                    createdByUserName = currentUser.displayName
+                ))
+            }
+            val notice = buildString {
+                append("Venta anulada.")
+                if (cash > 0.004) append(" Devuelve Q ${cash.fmtMoney(2)} en efectivo.")
+                if (bank > 0.004) append(" Q ${bank.fmtMoney(2)} queda pendiente de devolver por banco.")
+            }
+            _uiState.update { it.copy(isVoidBusy = false, notice = notice) }
+            loadOrderSession(companyId, session.id)
+        }
+    }
+
+    /** La parte de tarjeta/transferencia de un cobro anulado ya se le devolvió al cliente. */
+    fun markBankRefunded(companyId: String, order: com.bakery.erp.model.SaleOrder, currentUser: User) {
+        if (_uiState.value.isVoidBusy) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isVoidBusy = true, error = null) }
+            runCatching {
+                order.sales.filter { it.bankRefundPending }.forEach {
+                    saleRepository.markBankRefunded(companyId, it.id, currentUser.displayName)
+                }
+            }.onSuccess { _uiState.update { it.copy(isVoidBusy = false, notice = "Marcado como devuelto por banco.") } }
+                .onFailure { e -> _uiState.update { it.copy(isVoidBusy = false, error = readable(e, "No se pudo guardar.")) } }
         }
     }
 

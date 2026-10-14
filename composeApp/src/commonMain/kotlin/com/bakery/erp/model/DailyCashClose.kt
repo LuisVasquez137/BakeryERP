@@ -19,6 +19,7 @@ data class DailyCashClose(
     val totalCashSales: Double = 0.0,
     val totalCardSales: Double = 0.0,
     val totalTransferSales: Double = 0.0,
+    val totalPedidosYaSales: Double = 0.0,
     val totalSales: Double = 0.0,
     val totalMovementsIn: Double = 0.0,
     val totalMovementsOut: Double = 0.0,

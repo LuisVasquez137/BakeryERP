@@ -109,6 +109,7 @@ private val ALL_SECTIONS = listOf(
         ModuleItem("Historial de ventas", "Transacciones del día", Icons.Default.Receipt),
         ModuleItem("Cierre del día",      "Consolidado por sucursal", Icons.Default.LockClock),
         ModuleItem("Cuadre sorpresa",     "Auditoría a cajas abiertas", Icons.Default.Policy),
+        ModuleItem("Salidas del mostrador", "Merma, accidentes y regalos", Icons.Default.DeleteSweep),
         ModuleItem("Créditos",            "Cuentas por cobrar y adelantos", Icons.Default.CreditScore),
     )),
     // Administracion = se toca una vez al mes; que se apague es correcto.
@@ -193,6 +194,9 @@ private fun hasModuleAccess(title: String, user: User) = with(user) {
         "Configuración"       -> hasPermission(Permission.MANAGE_USERS)
         "Facturación"         -> role == UserRole.OWNER
         "Bitácora de cajas"   -> hasPermission(Permission.VIEW_CASH_AUDIT)
+        "Salidas del mostrador" -> hasPermission(Permission.VIEW_CASH_AUDIT) ||
+                                   hasPermission(Permission.FORGIVE_STAFF_ACCIDENT) ||
+                                   hasPermission(Permission.MANAGE_FINISHED_STOCK)
         "Revendedores" -> hasPermission(Permission.MANAGE_EXTERNAL_CUSTOMERS)
         "Créditos"          -> hasPermission(Permission.MANAGE_CREDIT_ACCOUNTS)
         else                      -> true
@@ -248,6 +252,7 @@ fun HomeScreen(
     onNavigateToOrganizationSettings: () -> Unit = {},
     onNavigateToFelSetup: () -> Unit = {},
     onNavigateToCashAudit: () -> Unit = {},
+    onNavigateToCounterRemovals: () -> Unit = {},
     onNavigateToResellerApproval: () -> Unit = {},
     onNavigateToNotificationTarget: (targetScreen: String, targetId: String) -> Unit = { _, _ -> },
     viewModel: AuthViewModel,
@@ -334,6 +339,7 @@ fun HomeScreen(
             "Configuración"           -> onNavigateToOrganizationSettings()
             "Facturación"             -> onNavigateToFelSetup()
             "Bitácora de cajas"       -> onNavigateToCashAudit()
+            "Salidas del mostrador"   -> onNavigateToCounterRemovals()
             "Revendedores"    -> onNavigateToResellerApproval()
             "Créditos"                -> onNavigateToCredit()
         }

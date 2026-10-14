@@ -23,7 +23,8 @@ import com.bakery.erp.util.fmtMoney
 fun ProductPickerDialog(
     title: String,
     products: List<Product>,
-    stockOf: (productId: String) -> Double,
+    /** null = no mostrar existencias (elegir de catálogo, no del estante). */
+    stockOf: ((productId: String) -> Double)?,
     showSearch: Boolean = false,
     onDismiss: () -> Unit,
     onSelect: (Product) -> Unit
@@ -58,7 +59,7 @@ fun ProductPickerDialog(
                     modifier = Modifier.weight(1f, fill = false)
                 ) {
                     items(filtered, key = { it.id }) { p ->
-                        val stock = stockOf(p.id)
+                        val stock = stockOf?.invoke(p.id)
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(8.dp),
@@ -75,7 +76,7 @@ fun ProductPickerDialog(
                                          style = MaterialTheme.typography.bodySmall,
                                          color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
-                                Column(horizontalAlignment = Alignment.End) {
+                                if (stock != null) Column(horizontalAlignment = Alignment.End) {
                                     Text("Stock", style = MaterialTheme.typography.labelSmall,
                                          color = MaterialTheme.colorScheme.outline)
                                     Text(stock.fmtMoney(0),

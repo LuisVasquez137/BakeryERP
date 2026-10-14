@@ -197,9 +197,16 @@ actual fun createAppViewModels(): AppViewModels {
         ),
         cashSession = CashSessionViewModel(
             cashSessionRepo, cashRegisterRepo, branchRepo, dailyCloseRepo, purchaseRepo,
-            cashAuditRepo, notificationRepo, employeeRepo, saleRepo, employeeAccessRepo, heldCartRepo
+            cashAuditRepo, notificationRepo, employeeRepo, saleRepo, employeeAccessRepo, heldCartRepo,
+            com.bakery.erp.data.FirebaseBankDepositRepository(firestore),
+            com.bakery.erp.data.JsBankSlipImageUploader(storage)
         ),
-        saleHistory = SaleHistoryViewModel(saleRepo, cashSessionRepo, branchRepo, felRepo, JsReceiptPrinter(), authRepo),
+        saleHistory = SaleHistoryViewModel(saleRepo, cashSessionRepo, branchRepo, felRepo, JsReceiptPrinter(), authRepo, notificationRepo, cashAuditRepo),
+        counterRemoval = com.bakery.erp.presentation.pos.CounterRemovalViewModel(
+            com.bakery.erp.data.FirebaseCounterRemovalRepository(firestore, finishedStockRepo, creditRepo),
+            com.bakery.erp.data.JsCounterRemovalPhotoUploader(storage),
+            employeeRepo, employeeAccessRepo, notificationRepo, branchRepo
+        ),
         cashRegisterAdmin = CashRegisterAdminViewModel(cashRegisterRepo, branchRepo, cashSessionRepo),
         posCategoryAdmin = POSCategoryAdminViewModel(posCategoryRepo, productRepoJs, branchRepo),
         packagingAdmin = com.bakery.erp.presentation.pos.admin.PackagingAdminViewModel(packagingItemRepo),

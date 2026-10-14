@@ -89,6 +89,10 @@ enum class Permission {
     VIEW_CASH_AUDIT,
     /** Retirar efectivo de la gaveta al cerrar el turno. */
     WITHDRAW_AT_CLOSE,
+    /** Sacar efectivo de la gaveta para depositar al banco y adjuntar la boleta. */
+    BANK_DEPOSIT,
+    /** Perdonar el accidente de otra colaboradora (nunca el propio). Ver `CounterRemoval`. */
+    FORGIVE_STAFF_ACCIDENT,
 
     // Conteo de pan (cierre de día)
     COUNT_FINISHED_STOCK,
@@ -172,6 +176,8 @@ enum class Permission {
         SPOT_CHECK_CASH -> "Cuadre sorpresa de caja"
         VIEW_CASH_AUDIT -> "Bitácora de cajas"
         WITHDRAW_AT_CLOSE -> "Retirar efectivo al cerrar caja"
+        BANK_DEPOSIT -> "Depositar al banco desde la caja"
+        FORGIVE_STAFF_ACCIDENT -> "Perdonar accidentes de colaboradores"
         COUNT_FINISHED_STOCK -> "Conteo de pan al cierre"
         VIEW_BREAD_COUNTS -> "Ver conteos de pan"
         VIEW_OPERATIONS_REPORT -> "Ver dashboard operativo"
@@ -243,11 +249,13 @@ enum class Permission {
         VIEW_SALES -> "Puede consultar el historial de ventas y los detalles de cada transacción"
         MANAGE_POS_CONFIG -> "Puede configurar cajas registradoras y grupos rápidos de venta por precio"
         VIEW_SALES_VALUE -> "Puede ver los montos monetarios en el historial de ventas (sin este permiso solo ve el conteo)"
-        VOID_SALE -> "Puede anular ventas ya cobradas (Fase 2 — revierte stock y caja)"
+        VOID_SALE -> "Puede anular ventas cobradas del turno abierto (devuelve inventario y dinero, anula la factura y avisa al dueño) y corregir facturas"
         MANAGE_DAILY_CASH_CLOSE -> "Puede hacer el cierre consolidado del día por sucursal: define cuánto se deja para mañana y cuánto se lleva el owner"
         SPOT_CHECK_CASH -> "Puede hacer cuadres sorpresa a cualquier caja abierta sin cerrarla (auditoría en caliente para owners y supervisores)"
         VIEW_CASH_AUDIT -> "Puede ver la bitácora de cajas por sucursal y recibe el aviso cuando alguien entra al cierre fuera del horario de esa caja"
         WITHDRAW_AT_CLOSE -> "Puede sacar efectivo de la gaveta al cerrar el turno; lo que queda pasa al siguiente turno o al día siguiente"
+        FORGIVE_STAFF_ACCIDENT -> "Puede perdonar el cobro de producto que a otra colaboradora se le cayó o arruinó en el mostrador. Nunca el suyo propio: ése lo decide el dueño, que recibe aviso"
+        BANK_DEPOSIT -> "Puede sacar efectivo de la gaveta para llevarlo al banco (a medio turno o al cerrar) y adjuntar la foto de la boleta; el dueño recibe aviso"
         COUNT_FINISHED_STOCK -> "Puede contar físicamente el pan al cierre del día y aplicar mermas automáticas por las diferencias"
         VIEW_BREAD_COUNTS -> "Puede consultar el historial de conteos de pan y sus mermas"
         VIEW_OPERATIONS_REPORT -> "Puede ver el dashboard del Home con KPIs operativos en vivo y banner de alertas accionables"
@@ -297,7 +305,8 @@ enum class Permission {
         MANAGE_FINISHED_STOCK, VIEW_DISPATCH_VALUE -> "Distribución"
         OPERATE_POS, VIEW_SALES, MANAGE_POS_CONFIG,
         VIEW_SALES_VALUE, VOID_SALE,
-        MANAGE_DAILY_CASH_CLOSE, SPOT_CHECK_CASH, VIEW_CASH_AUDIT, WITHDRAW_AT_CLOSE -> "Ventas (POS)"
+        MANAGE_DAILY_CASH_CLOSE, SPOT_CHECK_CASH, VIEW_CASH_AUDIT, WITHDRAW_AT_CLOSE, BANK_DEPOSIT,
+        FORGIVE_STAFF_ACCIDENT -> "Ventas (POS)"
         COUNT_FINISHED_STOCK, VIEW_BREAD_COUNTS -> "Distribución"
         VIEW_OPERATIONS_REPORT, VIEW_SALES_REPORT,
         VIEW_PRODUCTION_REPORT, VIEW_FINANCIAL_REPORT,
@@ -323,5 +332,7 @@ enum class Permission {
     val isSensitive: Boolean get() =
         this == VIEW_DISPATCH_VALUE || this == VIEW_SALES_VALUE || this == VIEW_EMPLOYEE_SALARY ||
             // Costos de producto, costo estándar, reparto y resultado por sucursal cuelgan de él.
-            this == VIEW_FINANCIAL_REPORT
+            this == VIEW_FINANCIAL_REPORT ||
+            // Perdonar es dar dinero de la empresa: se marca a propósito, no con el atajo del grupo.
+            this == FORGIVE_STAFF_ACCIDENT
 }

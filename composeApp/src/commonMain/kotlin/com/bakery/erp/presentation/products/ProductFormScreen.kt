@@ -110,6 +110,8 @@ import com.bakery.erp.util.fmt
 import com.bakery.erp.util.gramsToOz
 import com.bakery.erp.util.ozToGrams
 import com.bakery.erp.ui.theme.BrandColors
+import com.bakery.erp.model.isPortion
+import com.bakery.erp.presentation.pos.ProductPickerDialog
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -214,6 +216,12 @@ fun ProductFormScreen(
     var linkedIngredientName by rememberSaveable { mutableStateOf(existingProduct?.linkedIngredientName ?: "") }
     var ingredientUnitsPerSale by rememberSaveable {
         mutableStateOf(existingProduct?.ingredientUnitsPerSale?.takeIf { it > 0.0 }?.toString() ?: "")
+    }
+    // Porción de un pastel entero (se corta en la tienda). Vacío = producto normal.
+    var portionOfProductId by rememberSaveable { mutableStateOf(existingProduct?.portionOfProductId ?: "") }
+    var portionOfProductName by rememberSaveable { mutableStateOf(existingProduct?.portionOfProductName ?: "") }
+    var portionsPerWhole by rememberSaveable {
+        mutableStateOf(existingProduct?.portionsPerWhole?.takeIf { it > 0 }?.toString() ?: "")
     }
     // Al crear (productId==null) se pide el tipo antes de mostrar el form.
     var typeChosen by rememberSaveable { mutableStateOf(productId != null) }
@@ -342,7 +350,13 @@ fun ProductFormScreen(
             linkedIngredientName = if (!isInHouseProduced) linkedIngredientName else "",
             ingredientUnitsPerSale = if (!isInHouseProduced && linkedIngredientId.isNotEmpty())
                 ingredientUnitsPerSale.replace(',', '.').toDoubleOrNull()?.takeIf { it > 0.0 } ?: 1.0
-            else 1.0
+            else 1.0,
+            // La porción sale de un pastel nuestro; la reventa no se corta.
+            portionOfProductId = if (isInHouseProduced) portionOfProductId else "",
+            portionOfProductName = if (isInHouseProduced && portionOfProductId.isNotEmpty()) portionOfProductName else "",
+            portionsPerWhole = if (isInHouseProduced && portionOfProductId.isNotEmpty())
+                portionsPerWhole.toIntOrNull()?.takeIf { it > 0 } ?: 0
+            else 0
         ).withDerivedPurchaseReference()
     }
 
@@ -354,6 +368,13 @@ fun ProductFormScreen(
         }
         if (hasError) {
             // Si el error está en la pestaña General, llevamos al usuario allí.
+            selectedTab = 0
+            return
+        }
+        if (isInHouseProduced && portionOfProductId.isNotEmpty() &&
+            (portionsPerWhole.toIntOrNull() ?: 0) < 2
+        ) {
+            formError = "Indica cuántas porciones salen de un $portionOfProductName"
             selectedTab = 0
             return
         }
@@ -501,6 +522,22 @@ fun ProductFormScreen(
                                     isInHouseProduced = isInHouseProduced,
                                     onIsInHouseChange = { isInHouseProduced = it }
                                 )
+                                if (isInHouseProduced) {
+                                    PortionOfSection(
+                                        // Un entero nuestro, que no sea otra porción ni éste mismo.
+                                        wholes = state.productList.filter {
+                                            it.active && it.isInHouseProduced && !it.isPortion &&
+                                                it.id != existingProduct?.id
+                                        }.sortedBy { it.name.lowercase() },
+                                        portionOfProductId = portionOfProductId,
+                                        portionOfProductName = portionOfProductName,
+                                        onPortionOfChange = { id, nm ->
+                                            portionOfProductId = id; portionOfProductName = nm
+                                        },
+                                        portionsPerWhole = portionsPerWhole,
+                                        onPortionsPerWholeChange = { portionsPerWhole = it.filter(Char::isDigit).take(3) }
+                                    )
+                                }
                             }
                             "Precios" -> {
                                 PricesTabContent(
@@ -1452,6 +1489,83 @@ private fun ResaleStockSourceBlock(
                 showPicker = false
             },
             onDismiss = { showPicker = false }
+        )
+    }
+}
+
+/**
+ * "Es porción de…": el producto que se vende cortado ("Porción de selva negra") apunta a su
+ * pastel entero. Así la tienda puede cortar un entero que no se vendió y el inventario baja
+ * 1 del pastel y sube N porciones (ver `model/Portioning.kt`).
+ */
+@Composable
+private fun PortionOfSection(
+    wholes: List<Product>,
+    portionOfProductId: String,
+    portionOfProductName: String,
+    onPortionOfChange: (id: String, name: String) -> Unit,
+    portionsPerWhole: String,
+    onPortionsPerWholeChange: (String) -> Unit
+) {
+    var showPicker by remember { mutableStateOf(false) }
+    val linked = portionOfProductId.isNotEmpty()
+
+    Spacer(Modifier.height(8.dp))
+    HorizontalDivider()
+    Spacer(Modifier.height(12.dp))
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Es porción de un pastel",
+                    color = BrandColors.Primary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    text = if (linked)
+                        "Se obtiene cortando un ${portionOfProductName.ifEmpty { "entero" }} en la tienda. " +
+                            "No se le pide a planta."
+                    else "Actívalo para «Porción de selva negra» y similares: la tienda corta el " +
+                        "entero que no se vendió y el inventario pasa del pastel a las porciones.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = linked,
+                onCheckedChange = { on -> if (on) showPicker = true else onPortionOfChange("", "") }
+            )
+        }
+        if (linked) {
+            OutlinedButton(onClick = { showPicker = true }, modifier = Modifier.fillMaxWidth()) {
+                Text(portionOfProductName.ifEmpty { "Elegir pastel entero" })
+            }
+            OutlinedTextField(
+                value = portionsPerWhole,
+                onValueChange = onPortionsPerWholeChange,
+                label = { Text("Porciones por pastel *") },
+                placeholder = { Text("Ej: 8") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                supportingText = { Text("Lo normal. Al cortar se puede cambiar si salieron más o menos.") }
+            )
+        }
+    }
+
+    if (showPicker) {
+        ProductPickerDialog(
+            title = "¿De qué pastel es la porción?",
+            products = wholes,
+            stockOf = null,
+            showSearch = true,
+            onDismiss = { showPicker = false },
+            onSelect = { p ->
+                onPortionOfChange(p.id, p.name)
+                if (portionsPerWhole.isBlank()) onPortionsPerWholeChange("8")
+                showPicker = false
+            }
         )
     }
 }

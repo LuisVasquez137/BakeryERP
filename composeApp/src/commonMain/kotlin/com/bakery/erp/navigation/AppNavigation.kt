@@ -517,6 +517,10 @@ sealed class Screen(val route: String) {
     }
     object OrganizationSettings : Screen("organization/settings")
     object FelSetup : Screen("fel/setup")
+    object CounterRemovals : Screen("pos/counterRemovals?branchId={branchId}") {
+        fun route(branchId: String?) =
+            if (branchId.isNullOrEmpty()) "pos/counterRemovals" else "pos/counterRemovals?branchId=$branchId"
+    }
     object CashAudit : Screen("cash/audit?branchId={branchId}") {
         fun route(branchId: String?) = if (branchId.isNullOrEmpty()) "cash/audit" else "cash/audit?branchId=$branchId"
     }
@@ -682,6 +686,8 @@ fun AppNavigation(
                 else navController.navigate(Screen.DeliveryList.route)
             NotificationTarget.CASH_AUDIT ->
                 navController.navigate(Screen.CashAudit.route(targetId))
+            NotificationTarget.COUNTER_REMOVALS ->
+                navController.navigate(Screen.CounterRemovals.route(targetId))
             else -> Unit
         }
     }
@@ -867,6 +873,7 @@ fun AppNavigation(
                 onNavigateToOrganizationSettings = { navController.navigate(Screen.OrganizationSettings.route) },
                 onNavigateToFelSetup = { navController.navigate(Screen.FelSetup.route) },
                 onNavigateToCashAudit = { navController.navigate(Screen.CashAudit.route(null)) },
+                onNavigateToCounterRemovals = { navController.navigate(Screen.CounterRemovals.route(null)) },
                 onNavigateToResellerApproval = { navController.navigate(Screen.ResellerApproval.route) },
                 onNavigateToNotificationTarget = ::navigateToNotificationTarget,
                 viewModel = viewModel,
@@ -1327,7 +1334,8 @@ fun AppNavigation(
                     cashSessionViewModel = cashSessionViewModel,
                     bluetoothPrinterManager = bluetoothPrinterManager,
                     creditViewModel = creditViewModel,
-                    documentPrinter = vms.documentPrinter
+                    documentPrinter = vms.documentPrinter,
+                    counterRemovalViewModel = vms.counterRemoval
                 )
             }
         }
@@ -1347,6 +1355,7 @@ fun AppNavigation(
                     },
                     authViewModel = viewModel,
                     viewModel = cashSessionViewModel,
+                    counterRemovalViewModel = vms.counterRemoval,
                     // Entregó la caja: el siguiente turno sigue vendiendo en la misma gaveta.
                     onHandedOver = { next ->
                         navController.navigate(Screen.POSScreen.route(next)) {
@@ -2623,6 +2632,22 @@ fun AppNavigation(
                     onNavigateBack = { navController.popBackStack() },
                     authViewModel = viewModel,
                     viewModel = cashAuditViewModel
+                )
+            }
+        }
+        composable(
+            route = Screen.CounterRemovals.route,
+            arguments = listOf(navArgument("branchId") { type = NavType.StringType; nullable = true; defaultValue = null })
+        ) { entry ->
+            RequirePermission(
+                state.user, Permission.VIEW_CASH_AUDIT, Permission.FORGIVE_STAFF_ACCIDENT,
+                Permission.MANAGE_FINISHED_STOCK, onBack = { navController.popBackStack() }
+            ) {
+                com.bakery.erp.presentation.pos.CounterRemovalListScreen(
+                    initialBranchId = entry.savedStateHandle.get<String>("branchId"),
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = viewModel,
+                    viewModel = vms.counterRemoval
                 )
             }
         }

@@ -177,8 +177,30 @@ data class Sale(
      * una. Lo marca el servidor al enterarse; no se corrige solo.
      */
     val invoiceConflict: Boolean = false,
+    /**
+     * Anulación ([SaleStatus.VOIDED]): por qué, cuándo y quién. Se guarda en la venta misma —no
+     * en otra colección— porque es lo que se mira al revisarla, y la venta nunca se borra.
+     */
+    val voidReason: String = "",
+    val voidedAt: Long = 0L,
+    val voidedByUserId: String = "",
+    val voidedByUserName: String = "",
+    /** Colaborador que anuló, identificado con PIN en un equipo de sucursal. */
+    val voidedByEmployeeId: String = "",
+    /**
+     * Lo que se cobró con tarjeta o transferencia en una venta anulada: ese dinero no está en la
+     * gaveta, se le devuelve al cliente por el banco. 0 = no hay nada que devolver por banco.
+     */
+    val bankRefundAmount: Double = 0.0,
+    /** Cuándo se marcó como ya devuelto por el banco. 0 = sigue pendiente. */
+    val bankRefundDoneAt: Long = 0L,
+    val bankRefundDoneByName: String = "",
     val createdAt: Long = 0L
 )
+
+/** Venta anulada con dinero que todavía hay que devolver por el banco. */
+val Sale.bankRefundPending: Boolean
+    get() = status == SaleStatus.VOIDED && bankRefundAmount > 0.004 && bankRefundDoneAt == 0L
 
 /** Total del cobro al que pertenece esta venta. */
 val Sale.effectiveCheckoutTotal: Double
@@ -220,6 +242,12 @@ object SalePaymentMethod {
     const val CARD     = "CARD"
     const val TRANSFER = "TRANSFER"
     /**
+     * Pedido que entró por PedidosYa: no entra dinero a la gaveta (lo cobró la app o su
+     * repartidor) y PedidosYa lo liquida después, como un voucher de tarjeta que se cobra al banco.
+     * No suma al efectivo esperado; tiene su propio total en la caja y en los reportes.
+     */
+    const val PEDIDOS_YA = "PEDIDOS_YA"
+    /**
      * Fiado: no entra dinero, se carga a una cuenta de crédito. No suma al efectivo esperado
      * de la gaveta (`expectedCashNow` solo mira `totalCashSales`), así que no descuadra caja.
      */
@@ -241,14 +269,24 @@ object SalePaymentMethod {
         CASH     -> "Efectivo"
         CARD     -> "Tarjeta"
         TRANSFER -> "Transferencia"
+        PEDIDOS_YA -> "PedidosYa"
         CREDIT   -> "Crédito"
         CUSTOMER_DEPOSIT -> "Anticipo"
         MIXED    -> "Mixto"
         else     -> "Desconocido"
     }
 
-    /** Formas con las que entra dinero. [CREDIT] se ofrece aparte, solo con permiso. */
+    /**
+     * Formas con las que entra dinero (también abonos y anticipos). [CREDIT] se ofrece aparte,
+     * solo con permiso.
+     */
     val all = listOf(CASH, CARD, TRANSFER)
+
+    /** Las del cobro en el POS: además, el pedido de PedidosYa (no aplica a abonos ni anticipos). */
+    val checkout = all + PEDIDOS_YA
+
+    /** Lo que no es efectivo y NO se devuelve de la gaveta al anular: tarjeta, transferencia, PedidosYa. */
+    val nonCashSettled = listOf(CARD, TRANSFER, PEDIDOS_YA)
 }
 
 /** El desglose efectivo de una venta: el explícito si lo trae, si no todo al método único. */
@@ -257,7 +295,10 @@ val Sale.effectivePaymentBreakdown: Map<String, Double>
 
 object SaleStatus {
     const val COMPLETED = "COMPLETED"
-    /** Reservado para Fase 2 (anulación post-cobro). */
+    /**
+     * Anulada después de cobrar (devolución o error), mientras su caja seguía abierta. No suma al
+     * ingreso; el inventario y la caja se revirtieron. Ver `SaleVoid.kt`.
+     */
     const val VOIDED    = "VOIDED"
     /**
      * Venta real cuyo efectivo todavía no está en ninguna gaveta: el mesero cobró y marcó

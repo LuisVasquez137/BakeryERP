@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
@@ -68,6 +69,11 @@ import com.bakery.erp.util.fmt
 import com.bakery.erp.util.fmtMoney
 import kotlinx.coroutines.launch
 import com.bakery.erp.ui.theme.BrandColors
+import androidx.compose.material.icons.filled.ContentCut
+import com.bakery.erp.model.isPortion
+import com.bakery.erp.presentation.finishedStock.PortioningDialog
+import androidx.compose.material.icons.filled.DeleteSweep
+import com.bakery.erp.model.isIngredientBacked
 
 private const val FILTER_ALL = "__all__"
 
@@ -104,7 +110,9 @@ fun POSScreen(
     /** Cuentas de crédito: vender fiado, cobrar abonos y dar adelantos desde la caja. */
     creditViewModel: com.bakery.erp.presentation.credit.CreditViewModel? = null,
     /** Comprobantes que no son ticket de venta (anticipos de clientes). */
-    documentPrinter: com.bakery.erp.domain.DocumentPrinter? = null
+    documentPrinter: com.bakery.erp.domain.DocumentPrinter? = null,
+    /** "Sacar del mostrador": merma, accidente o regalo con la caja abierta. */
+    counterRemovalViewModel: CounterRemovalViewModel? = null
 ) {
     val state by viewModel.uiState.collectAsState()
     val creditState = creditViewModel?.uiState?.collectAsState()?.value
@@ -137,9 +145,20 @@ fun POSScreen(
     }
     var creditCollectOpen by remember { mutableStateOf(false) }
     var advanceOpen by remember { mutableStateOf(false) }
-    LaunchedEffect(state.notice, state.isCreditBusy) {
+    var portioningOpen by remember { mutableStateOf(false) }
+    var removalOpen by remember { mutableStateOf(false) }
+    val removalState = counterRemovalViewModel?.uiState?.collectAsState()?.value
+    LaunchedEffect(removalState?.notice) {
+        removalState?.notice?.let {
+            removalOpen = false
+            counterRemovalViewModel?.clearNotice()
+            snackbar.showSnackbar(it)
+        }
+    }
+    LaunchedEffect(state.notice, state.isCreditBusy, state.isPortioning) {
         // Cerrar el diálogo cuando terminó bien (hay aviso) — si falló, queda abierto con el error.
         if (!state.isCreditBusy && state.notice != null) { creditCollectOpen = false; advanceOpen = false }
+        if (!state.isPortioning && state.notice != null) portioningOpen = false
     }
     LaunchedEffect(state.justCollected) {
         state.justCollected?.let { collected ->
@@ -200,9 +219,42 @@ fun POSScreen(
     var holdDialogOpen by remember { mutableStateOf(false) }
     var discardTarget by remember { mutableStateOf<com.bakery.erp.model.HeldCart?>(null) }
     var closeBlockedOpen by remember { mutableStateOf(false) }
-    // No se cierra el turno con cuentas en espera (decisión del dueño).
+    // Depósitos al banco: sacar el dinero, y los que están sin boleta (bloquean el cierre).
+    val cashState by cashSessionViewModel.uiState.collectAsState()
+    val canBankDeposit = user?.hasPermission(Permission.BANK_DEPOSIT) == true
+    var bankDepositOpen by remember { mutableStateOf(false) }
+    var pendingDepositsOpen by remember { mutableStateOf(false) }
+    var pendingBlocksClose by remember { mutableStateOf(false) }
+    val slipActions = remember { BankSlipActions() }
+    val registerIdForDeposits = state.session?.registerId.orEmpty()
+    LaunchedEffect(companyId, registerIdForDeposits) {
+        cashSessionViewModel.loadPendingBankDeposits(companyId, registerIdForDeposits)
+    }
+    LaunchedEffect(bankDepositOpen, state.session?.branchId) {
+        val b = state.session?.branchId
+        if (bankDepositOpen && b != null) cashSessionViewModel.loadEmployees(companyId, b)
+    }
+    val pendingDeposits = cashState.pendingBankDeposits.filter { it.registerId == registerIdForDeposits }
+    LaunchedEffect(cashState.bankDepositNotice) {
+        cashState.bankDepositNotice?.let { msg ->
+            bankDepositOpen = false
+            if (pendingDeposits.isEmpty()) pendingDepositsOpen = false
+            // El esperado de la gaveta cambió: de eso cuelga el tope de lo que se paga de la caja.
+            viewModel.load(companyId, sessionId)
+            snackbar.showSnackbar(msg)
+            cashSessionViewModel.clearBankDepositNotice()
+        }
+    }
+    LaunchedEffect(cashState.error) {
+        cashState.error?.let { snackbar.showSnackbar(it); cashSessionViewModel.clearError() }
+    }
+    // No se cierra el turno con cuentas en espera ni con depósitos sin boleta (decisión del dueño).
     fun goToClose(sessionId: String) {
-        if (state.heldCarts.isNotEmpty()) closeBlockedOpen = true else onNavigateToClose(sessionId)
+        when {
+            state.heldCarts.isNotEmpty() -> closeBlockedOpen = true
+            pendingDeposits.isNotEmpty() -> { pendingBlocksClose = true; pendingDepositsOpen = true }
+            else -> onNavigateToClose(sessionId)
+        }
     }
     LaunchedEffect(resellerPickerOpen) {
         if (resellerPickerOpen) viewModel.loadResellers(companyId)
@@ -352,6 +404,22 @@ fun POSScreen(
                                 }
                             }
                         }
+                        // Depósito al banco sin boleta: a la vista mientras falte, porque bloquea el cierre.
+                        if (pendingDeposits.isNotEmpty()) {
+                            BadgedBox(
+                                badge = {
+                                    Badge(
+                                        containerColor = BrandColors.Accent,
+                                        contentColor = BrandColors.OnAccent
+                                    ) { Text("${pendingDeposits.size}") }
+                                },
+                                modifier = Modifier.padding(end = 4.dp)
+                            ) {
+                                IconButton(onClick = { pendingBlocksClose = false; pendingDepositsOpen = true }) {
+                                    Icon(Icons.Default.AccountBalance, "Depósitos sin boleta")
+                                }
+                            }
+                        }
                         IconButton(onClick = { pickerSearchOpen = true }) {
                             Icon(Icons.Default.Search, "Buscar producto")
                         }
@@ -433,10 +501,30 @@ fun POSScreen(
                                         onClick = { overflowOpen = false; advanceOpen = true },
                                         leadingIcon = { Icon(Icons.Default.People, null) }
                                     )
+                                    if (counterRemovalViewModel != null) DropdownMenuItem(
+                                        text = { Text("Sacar del mostrador") },
+                                        onClick = {
+                                            overflowOpen = false
+                                            counterRemovalViewModel.clearError()
+                                            counterRemovalViewModel.prepare(companyId, sess.branchId)
+                                            removalOpen = true
+                                        },
+                                        leadingIcon = { Icon(Icons.Default.DeleteSweep, null) }
+                                    )
+                                    if (state.products.any { it.isPortion }) DropdownMenuItem(
+                                        text = { Text("Porcionar pastel") },
+                                        onClick = { overflowOpen = false; portioningOpen = true },
+                                        leadingIcon = { Icon(Icons.Default.ContentCut, null) }
+                                    )
                                     DropdownMenuItem(
                                         text = { Text("Movimientos de la caja") },
                                         onClick = { overflowOpen = false; onNavigateToSessionDetail(sess.id) },
                                         leadingIcon = { Icon(Icons.Default.Receipt, null) }
+                                    )
+                                    if (canBankDeposit) DropdownMenuItem(
+                                        text = { Text("Depositar al banco") },
+                                        onClick = { overflowOpen = false; bankDepositOpen = true },
+                                        leadingIcon = { Icon(Icons.Default.AccountBalance, null) }
                                     )
                                     DropdownMenuItem(
                                         text = { Text("Transferir efectivo") },
@@ -662,6 +750,91 @@ fun POSScreen(
     if (closeBlockedOpen) {
         CloseBlockedByHeldDialog(held = state.heldCarts, onDismiss = { closeBlockedOpen = false })
     }
+    // Porción cobrada sin existencias pero con enteros: se ofrece cortar ahí mismo.
+    state.portionPrompt?.let { portion ->
+        if (user != null && !portioningOpen) {
+            PortioningDialog(
+                products = state.products,
+                stockOf = viewModel::stockOf,
+                isBusy = state.isPortioning,
+                initialPortionId = portion.id,
+                message = "Según el inventario no alcanzan las porciones de ${portion.portionOfProductName} " +
+                    "ya cortadas. Si estás cortando uno, regístralo aquí.",
+                dismissLabel = "Ahora no",
+                onDismiss = viewModel::dismissPortionPrompt,
+                onConfirm = { p, wholes, perWhole ->
+                    viewModel.cutIntoPortions(companyId, p, wholes, perWhole, user)
+                }
+            )
+        }
+    }
+
+    if (removalOpen && user != null && counterRemovalViewModel != null && removalState != null) {
+        state.session?.let { sess ->
+            CounterRemovalDialog(
+                // Lo que se vende del mostrador con inventario propio (el huevo vive en el insumo).
+                products = state.products.filter { !it.isIngredientBacked },
+                stockOf = viewModel::stockOf,
+                unitCostOf = { id ->
+                    state.stocksByProductId[id]?.avgUnitCost?.takeIf { it > 0.0 }
+                        ?: state.productsById[id]?.purchaseCost ?: 0.0
+                },
+                state = removalState,
+                selfEmployeeId = counterRemovalViewModel.selfEmployeeId(user),
+                onDismiss = { removalOpen = false },
+                onConfirm = { draft, photo, pin ->
+                    counterRemovalViewModel.register(companyId, sess, draft, photo, pin, user)
+                }
+            )
+        }
+    }
+
+    if (portioningOpen && user != null) {
+        PortioningDialog(
+            products = state.products,
+            stockOf = viewModel::stockOf,
+            isBusy = state.isPortioning,
+            onDismiss = { portioningOpen = false },
+            onConfirm = { portion, wholes, perWhole ->
+                viewModel.cutIntoPortions(companyId, portion, wholes, perWhole, user)
+            }
+        )
+    }
+
+    if (bankDepositOpen) {
+        state.session?.let { sess ->
+            BankDepositDialog(
+                cashInDrawer = sess.expectedCashNow,
+                employees = cashState.employees,
+                isBusy = cashState.isBankDepositBusy,
+                onDismiss = { bankDepositOpen = false; cashSessionViewModel.clearBankDepositError() },
+                onConfirm = { amount, draft ->
+                    user?.let { cashSessionViewModel.createBankDeposit(companyId, sess.id, amount, draft, it) }
+                },
+                pinRequired = user?.let { carrierMustConfirm(it) } == true,
+                error = cashState.bankDepositError
+            )
+        }
+    }
+    if (pendingDepositsOpen) {
+        PendingBankDepositsDialog(
+            pending = pendingDeposits,
+            blockingClose = pendingBlocksClose,
+            canAct = canBankDeposit,
+            onAttach = { slipActions.attachFor = it },
+            onNoSlip = { slipActions.noSlipFor = it },
+            onDismiss = { pendingDepositsOpen = false }
+        )
+    }
+    BankSlipActionDialogs(
+        actions = slipActions,
+        companyId = companyId,
+        user = user,
+        viewModel = cashSessionViewModel,
+        isBusy = cashState.isBankDepositBusy,
+        notice = cashState.bankDepositNotice,
+        viewingSessionId = state.session?.id
+    )
 
     if (pickerSearchOpen) {
         ProductPickerDialog(

@@ -145,6 +145,10 @@ fun FinancialReportScreen(
                         ReportSection(title = "P&L del mes") {
                             PnLLine("Ingresos por ventas", state.sales.totalRevenue, isPositive = true)
                             PnLLine("Mermas valoradas",   -state.merma.totalValue)
+                            if (state.stock.counterDamagedValue > 0.004)
+                                PnLLine("Venía mal (sacado en caja)", -state.stock.counterDamagedValue)
+                            if (state.stock.courtesyValue > 0.004)
+                                PnLLine("Regalos desde la caja (a costo)", -state.stock.courtesyValue)
                             PnLLine("Gastos operativos",  -state.expenses.total)
                             PnLLine("Planilla (costo patronal)", -state.payroll.totalEmployerCost)
                             Spacer(Modifier.height(8.dp))

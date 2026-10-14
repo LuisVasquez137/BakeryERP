@@ -18,6 +18,10 @@ import com.bakery.erp.model.CashSession
 import com.bakery.erp.model.CashSessionStatus
 import com.bakery.erp.model.CashTransfer
 import com.bakery.erp.model.User
+import com.bakery.erp.model.BankDeposit
+import com.bakery.erp.model.bankDepositProblem
+import com.bakery.erp.model.bankSlipProblem
+import com.bakery.erp.model.expectedCashNow
 import com.bakery.erp.model.canAccessBranch
 import kotlin.time.Clock
 import kotlinx.coroutines.Job
@@ -91,8 +95,42 @@ data class CashSessionUiState(
     /** Quién y cuándo dejó ese efectivo, para mostrarlo al abrir. */
     val openingExpectedFrom: String = "",
     /** Cobros con tarjeta y transferencia del turno que se está viendo: de cuál turno es cada uno. */
-    val sessionNonCashSales: List<com.bakery.erp.model.Sale> = emptyList()
+    val sessionNonCashSales: List<com.bakery.erp.model.Sale> = emptyList(),
+    /** Ventas anuladas del turno que se está viendo: van en el cuadre (ver `SaleVoid.kt`). */
+    val sessionVoidedSales: List<com.bakery.erp.model.Sale> = emptyList(),
+    /** Depósitos al banco sin boleta de la caja que se está operando: bloquean el cierre. */
+    val pendingBankDeposits: List<BankDeposit> = emptyList(),
+    /** Depósitos del turno que se está viendo (cuadre y detalle). */
+    val sessionBankDeposits: List<BankDeposit> = emptyList(),
+    val isBankDepositBusy: Boolean = false,
+    /** Aviso tras crear un depósito o adjuntar la boleta (lo muestra la pantalla y lo limpia). */
+    val bankDepositNotice: String? = null,
+    /** Error al sacar el depósito (p. ej. PIN incorrecto): se muestra dentro del diálogo. */
+    val bankDepositError: String? = null
 )
+
+/** Lo que se pide al sacar dinero para el banco (a medio turno o al cerrar). */
+data class BankDepositDraft(
+    val bankName: String,
+    val carriedBy: com.bakery.erp.model.Employee?,
+    val notes: String = "",
+    /** PIN de [carriedBy]; ver [carrierMustConfirm]. No se guarda en ningún lado. */
+    val carrierPin: String = ""
+)
+
+/**
+ * En un equipo de sucursal con PIN, quien lleva el dinero al banco lo confirma con SU PIN,
+ * aunque sea la misma persona que abrió la caja: así consta que esa persona salió con el
+ * dinero (decisión del dueño). Sin PIN en la sucursal no hay con qué confirmarlo.
+ */
+fun carrierMustConfirm(currentUser: User): Boolean = currentUser.operatorEmployeeId.isNotEmpty()
+
+/** Qué falta para el PIN de quien lo lleva, o null. Solo forma: el servidor lo verifica. */
+fun carrierPinProblem(currentUser: User?, draft: BankDepositDraft): String? = when {
+    currentUser == null || !carrierMustConfirm(currentUser) || draft.carriedBy == null -> null
+    draft.carrierPin.length != com.bakery.erp.domain.PIN_LENGTH -> "Falta el PIN de ${draft.carriedBy.name}."
+    else -> null
+}
 
 /** ¿Se entró al cierre en el horario de cuadre de esta caja? */
 data class CloseGate(
@@ -126,7 +164,10 @@ class CashSessionViewModel(
     /** PIN de quien recibe la gaveta en un equipo compartido. */
     private val accessRepository: com.bakery.erp.domain.EmployeeAccessRepository,
     /** No se cierra un turno con cuentas en espera (ver [com.bakery.erp.model.HeldCart]). */
-    private val heldCartRepository: com.bakery.erp.domain.HeldCartRepository
+    private val heldCartRepository: com.bakery.erp.domain.HeldCartRepository,
+    /** Depósitos al banco desde la caja (ver [BankDeposit]). */
+    private val bankDepositRepository: com.bakery.erp.domain.BankDepositRepository,
+    private val bankSlipUploader: com.bakery.erp.domain.BankSlipImageUploader
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(CashSessionUiState())
@@ -313,15 +354,25 @@ class CashSessionViewModel(
 
     fun clearHandedOver() = _uiState.update { it.copy(handedOverSessionId = null, handedOverTo = null) }
 
-    /** Cobros con tarjeta o transferencia del turno: de cuál turno es cada voucher. */
+    /** Ventas anuladas del turno, para que el cuadre diga cuáles fueron. */
+    fun loadSessionVoidedSales(companyId: String, sessionId: String) {
+        _uiState.update { it.copy(sessionVoidedSales = emptyList()) }
+        viewModelScope.launch {
+            runCatching { saleRepository.getSalesForSession(companyId, sessionId) }
+                .onSuccess { sales ->
+                    val voided = sales.filter { it.status == com.bakery.erp.model.SaleStatus.VOIDED }
+                    _uiState.update { it.copy(sessionVoidedSales = voided) }
+                }
+        }
+    }
+
+    /** Cobros con tarjeta, transferencia o PedidosYa del turno: de cuál turno es cada voucher. */
     fun loadSessionNonCashSales(companyId: String, sessionId: String) {
         viewModelScope.launch {
             runCatching { saleRepository.getSalesForSession(companyId, sessionId) }
                 .onSuccess { sales ->
                     val nonCash = sales.filter { sale ->
-                        sale.effectivePaymentBreakdown.keys.any {
-                            it == com.bakery.erp.model.SalePaymentMethod.CARD || it == com.bakery.erp.model.SalePaymentMethod.TRANSFER
-                        }
+                        sale.effectivePaymentBreakdown.keys.any { it in com.bakery.erp.model.SalePaymentMethod.nonCashSettled }
                     }.sortedBy { it.createdAt }
                     _uiState.update { it.copy(sessionNonCashSales = nonCash) }
                 }
@@ -577,7 +628,9 @@ class CashSessionViewModel(
         /** Efectivo que se saca de la gaveta al cerrar (permiso aparte). */
         withdrawal: Double = 0.0,
         /** PIN de [receivedBy]; ver [receiverMustConfirm]. */
-        receiverPin: String? = null
+        receiverPin: String? = null,
+        /** Lo retirado va al banco: queda un depósito pendiente de boleta. Null = retiro. */
+        withdrawalToBank: BankDepositDraft? = null
     ) {
         var verifiedReceiver: com.bakery.erp.domain.VerifiedEmployee? = null
         viewModelScope.launch {
@@ -590,6 +643,13 @@ class CashSessionViewModel(
                     .getOrNull() ?: return@launch
                 verifiedReceiver = verified
             }
+            var carrierConfirmed = false
+            if (withdrawalToBank != null && withdrawal > 0.004 && currentUser != null) {
+                _uiState.update { it.copy(isLoading = true, error = null) }
+                carrierConfirmed = runCatching { verifyCarrier(companyId, withdrawalToBank, currentUser) }
+                    .onFailure { e -> _uiState.update { it.copy(isLoading = false, error = e.message ?: "No se pudo verificar el PIN") } }
+                    .getOrNull() ?: return@launch
+            }
             _uiState.update { it.copy(isLoading = true, error = null, isClosed = false, handedOverSessionId = null) }
             // Decisión del dueño: con cuentas en espera no se cierra. Se cobran o se descartan
             // (y el descarte queda en la bitácora); si no, pasarían escondidas al siguiente turno.
@@ -600,6 +660,25 @@ class CashSessionViewModel(
                         "(${held.joinToString { h -> h.label }}). Cobralas o descartalas en el punto de venta antes de cerrar.")
                 }
                 return@launch
+            }
+            // Decisión del dueño: no se cierra un turno con un depósito al banco sin boleta. Se
+            // adjunta, o se deja sin boleta con motivo (y al dueño le llega el aviso).
+            val pendingDeposits = runCatching {
+                val reg = _uiState.value.currentSession?.takeIf { it.id == sessionId }?.registerId
+                    ?: sessionRepository.getSession(companyId, sessionId)?.registerId.orEmpty()
+                bankDepositRepository.getPendingForRegister(companyId, reg)
+            }.getOrDefault(emptyList())
+            if (pendingDeposits.isNotEmpty()) {
+                _uiState.update {
+                    it.copy(isLoading = false, pendingBankDeposits = pendingDeposits,
+                        error = "Hay ${pendingDeposits.size} depósito(s) al banco sin boleta en esta caja. " +
+                            "Adjunta la boleta (o déjalo sin boleta con el motivo) antes de cerrar.")
+                }
+                return@launch
+            }
+            if (withdrawalToBank != null && withdrawal > 0.004) {
+                bankDepositProblem(withdrawal, countedCash, withdrawalToBank.bankName, withdrawalToBank.carriedBy?.id.orEmpty())
+                    ?.let { problem -> _uiState.update { it.copy(isLoading = false, error = problem) }; return@launch }
             }
             com.bakery.erp.model.closingWithdrawalProblem(countedCash, withdrawal)?.let { problem ->
                 _uiState.update { it.copy(isLoading = false, error = problem) }; return@launch
@@ -626,13 +705,22 @@ class CashSessionViewModel(
                             expected = closed.expectedCash, counted = closed.countedCash, difference = closed.difference,
                             notes = listOfNotNull(
                                 notes?.takeIf { it.isNotBlank() },
-                                "Retiró Q ${withdrawal.fmtMoney(2)}".takeIf { withdrawal > 0.004 }
+                                (if (withdrawalToBank != null) "Al banco Q ${withdrawal.fmtMoney(2)}" else "Retiró Q ${withdrawal.fmtMoney(2)}")
+                                    .takeIf { withdrawal > 0.004 }
                             ).joinToString(" · ")))
                     }
                 }
+                // Lo retirado que va al banco: el depósito nace pendiente y la boleta se adjunta
+                // al volver (bloquea el siguiente cierre de esta caja mientras no esté).
+                val bankDeposit = if (withdrawalToBank != null && withdrawal > 0.004 && currentUser != null) {
+                    runCatching {
+                        createDepositRecord(companyId, closed, withdrawal, withdrawalToBank, currentUser,
+                            atClose = true, carrierConfirmed = carrierConfirmed)
+                    }.getOrNull()
+                } else null
                 // Lo que sale de esta gaveta: al siguiente turno o, si nadie la recibe, para mañana.
                 val handover = com.bakery.erp.model.shiftHandover(closed, countedCash, withdrawal)
-                sessionRepository.recordHandover(companyId, sessionId, withdrawal, handover)
+                sessionRepository.recordHandover(companyId, sessionId, withdrawal, handover, bankDeposit?.id.orEmpty())
                 if (receivedBy != null && currentUser != null) {
                     // El siguiente turno sigue con la misma gaveta: no se vuelve a teclear el fondo.
                     val next = sessionRepository.openSession(companyId, CashSession(
@@ -756,6 +844,230 @@ class CashSessionViewModel(
             }
         }
     }
+
+    // ── Depósitos al banco ───────────────────────────────────────────────────
+
+    /** Los sin boleta de la caja: el POS los muestra y bloquean el cierre. */
+    fun loadPendingBankDeposits(companyId: String, registerId: String) {
+        if (companyId.isEmpty() || registerId.isEmpty()) return
+        viewModelScope.launch {
+            runCatching { bankDepositRepository.getPendingForRegister(companyId, registerId) }
+                .onSuccess { list -> _uiState.update { it.copy(pendingBankDeposits = list) } }
+        }
+    }
+
+    fun loadSessionBankDeposits(companyId: String, sessionId: String) {
+        _uiState.update { it.copy(sessionBankDeposits = emptyList()) }
+        viewModelScope.launch {
+            runCatching { bankDepositRepository.getForSession(companyId, sessionId) }
+                .onSuccess { list -> _uiState.update { it.copy(sessionBankDeposits = list) } }
+        }
+    }
+
+    /**
+     * Sacar efectivo de la gaveta a medio turno para llevarlo al banco. El esperado baja ya (el
+     * dinero ya no está); el depósito queda pendiente hasta que se adjunte la boleta.
+     *
+     * Encabezado antes que efecto: primero el depósito, después el movimiento de caja. Si el
+     * movimiento falla, el depósito se cancela (el dinero no salió).
+     */
+    fun createBankDeposit(companyId: String, sessionId: String, amount: Double, draft: BankDepositDraft, currentUser: User) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isBankDepositBusy = true, error = null, bankDepositError = null) }
+            runCatching {
+                val session = sessionRepository.getSession(companyId, sessionId)
+                    ?: error("No se encontró la caja.")
+                if (session.status != CashSessionStatus.OPEN) error("La caja ya está cerrada.")
+                bankDepositProblem(amount, session.expectedCashNow, draft.bankName, draft.carriedBy?.id.orEmpty())
+                    ?.let { error(it) }
+                // Antes de tocar nada: con el PIN mal no sale ni un quetzal.
+                val confirmed = verifyCarrier(companyId, draft, currentUser)
+                val deposit = createDepositRecord(companyId, session, amount, draft, currentUser,
+                    atClose = false, carrierConfirmed = confirmed)
+                val movementId = runCatching {
+                    sessionRepository.addMovement(companyId, CashMovement(
+                        sessionId = session.id,
+                        type = CashMovementType.BANK_DEPOSIT,
+                        amount = amount,
+                        reason = "${draft.bankName.trim()} · lo lleva ${draft.carriedBy?.name.orEmpty()}",
+                        createdByUserId = currentUser.id,
+                        createdByUserName = currentUser.displayName,
+                        createdByEmployeeId = currentUser.operatorEmployeeId,
+                        sourceBankDepositId = deposit.id
+                    ))
+                }.getOrElse { e ->
+                    runCatching { bankDepositRepository.cancel(companyId, deposit.id, "No se registró la salida: ${e.message}") }
+                    throw e
+                }
+                runCatching { bankDepositRepository.setMovement(companyId, deposit.id, movementId) }
+                deposit
+            }.onSuccess { d ->
+                refreshAfterBankDeposit(companyId, sessionId, d.registerId)
+                _uiState.update {
+                    it.copy(isBankDepositBusy = false,
+                        bankDepositNotice = "Salieron Q ${d.amount.fmtMoney(2)} para el banco. " +
+                            "Al volver, adjunta la foto de la boleta: sin ella no se puede cerrar la caja.")
+                }
+            }.onFailure { e ->
+                _uiState.update { it.copy(isBankDepositBusy = false, bankDepositError = e.message ?: "No se pudo registrar el depósito") }
+            }
+        }
+    }
+
+    /**
+     * Verifica el PIN de quien lleva el depósito si la sucursal usa PIN. Devuelve si quedó
+     * confirmado con PIN; lanza si el PIN no es el correcto.
+     */
+    private suspend fun verifyCarrier(companyId: String, draft: BankDepositDraft, currentUser: User): Boolean {
+        if (!carrierMustConfirm(currentUser)) return false
+        val carrier = draft.carriedBy ?: error("Escoge quién lo lleva al banco.")
+        carrierPinProblem(currentUser, draft)?.let { error(it) }
+        runCatching { accessRepository.verifyPin(companyId, carrier.id, draft.carrierPin) }
+            .getOrElse { e -> error("PIN de ${carrier.name}: ${e.message ?: "no se pudo verificar"}") }
+        return true
+    }
+
+    /** Crea el depósito pendiente y deja el aviso y la bitácora. No toca la gaveta. */
+    private suspend fun createDepositRecord(
+        companyId: String, session: CashSession, amount: Double, draft: BankDepositDraft,
+        currentUser: User, atClose: Boolean, carrierConfirmed: Boolean
+    ): BankDeposit {
+        val deposit = bankDepositRepository.create(companyId, BankDeposit(
+            branchId = session.branchId,
+            branchName = session.branchName,
+            registerId = session.registerId,
+            registerName = session.registerName,
+            sessionId = session.id,
+            atClose = atClose,
+            amount = amount,
+            bankName = draft.bankName.trim(),
+            carriedByEmployeeId = draft.carriedBy?.id.orEmpty(),
+            carriedByEmployeeName = draft.carriedBy?.name.orEmpty(),
+            carrierConfirmedWithPin = carrierConfirmed,
+            notes = draft.notes.trim(),
+            createdByUserId = currentUser.id,
+            createdByUserName = currentUser.displayName,
+            createdByEmployeeId = currentUser.operatorEmployeeId
+        ))
+        val who = deposit.carriedByEmployeeName.ifBlank { currentUser.displayName }
+        runCatching {
+            auditRepository.log(companyId, auditEvent(session, currentUser, com.bakery.erp.model.CashAuditEventType.BANK_DEPOSIT_OUT,
+                outOfSchedule = false, scheduleLabel = "", employeeName = who, expected = amount,
+                notes = "${deposit.bankName}${if (atClose) " · al cerrar" else ""}" +
+                    (deposit.notes.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "")))
+        }
+        pushBankDeposit(companyId, session, currentUser,
+            title = "Salieron Q ${amount.fmtMoney(2)} para el banco",
+            body = "${session.branchName} · ${session.registerName}: lo lleva $who a ${deposit.bankName}" +
+                (if (atClose) " (al cerrar el turno)" else "") + ". Queda pendiente la boleta.")
+        return deposit
+    }
+
+    /** Adjunta la foto de la boleta (obligatoria), su número y el monto que dice. */
+    fun attachBankSlip(
+        companyId: String, deposit: BankDeposit, photo: ByteArray, slipNumber: String, slipAmount: Double,
+        currentUser: User, viewingSessionId: String? = null
+    ) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isBankDepositBusy = true, error = null) }
+            runCatching {
+                bankSlipProblem(photo.isNotEmpty(), slipNumber, slipAmount)?.let { error(it) }
+                val url = bankSlipUploader.uploadSlipPhoto(photo, companyId, deposit.id)
+                if (url.isBlank()) error("No se pudo subir la foto de la boleta en este equipo.")
+                bankDepositRepository.attachSlip(companyId, deposit.id, url, slipNumber.trim(), slipAmount,
+                    currentUser.displayName, currentUser.operatorEmployeeId)
+                val diff = slipAmount - deposit.amount
+                val session = sessionRepository.getSession(companyId, deposit.sessionId)
+                if (session != null) {
+                    runCatching {
+                        auditRepository.log(companyId, auditEvent(session, currentUser, com.bakery.erp.model.CashAuditEventType.BANK_DEPOSIT_SLIP,
+                            outOfSchedule = false, scheduleLabel = "", employeeName = deposit.carriedByEmployeeName,
+                            expected = deposit.amount, counted = slipAmount, difference = diff,
+                            notes = "${deposit.bankName} · boleta ${slipNumber.trim()}"))
+                    }
+                    pushBankDeposit(companyId, session, currentUser,
+                        title = if (kotlin.math.abs(diff) > 0.004) "Boleta con diferencia: Q ${diff.fmtMoney(2)}"
+                                else "Boleta de depósito: Q ${slipAmount.fmtMoney(2)}",
+                        body = "${session.branchName} · ${session.registerName}: salieron Q ${deposit.amount.fmtMoney(2)}, " +
+                            "la boleta ${slipNumber.trim()} de ${deposit.bankName} dice Q ${slipAmount.fmtMoney(2)}" +
+                            (if (kotlin.math.abs(diff) > 0.004) ". Revisar la diferencia." else "."))
+                }
+                diff
+            }.onSuccess { diff ->
+                refreshAfterBankDeposit(companyId, viewingSessionId ?: deposit.sessionId, deposit.registerId)
+                _uiState.update {
+                    it.copy(isBankDepositBusy = false,
+                        bankDepositNotice = if (kotlin.math.abs(diff) > 0.004)
+                            "Boleta adjunta. No cuadra con lo que salió (diferencia Q ${diff.fmtMoney(2)}): se avisó al administrador."
+                        else "Boleta adjunta.")
+                }
+            }.onFailure { e ->
+                _uiState.update { it.copy(isBankDepositBusy = false, error = e.message ?: "No se pudo adjuntar la boleta") }
+            }
+        }
+    }
+
+    /** Dejar un depósito sin boleta, con motivo: ya no bloquea el cierre, pero el dueño se entera. */
+    fun markBankDepositNoSlip(
+        companyId: String, deposit: BankDeposit, reason: String, currentUser: User, viewingSessionId: String? = null
+    ) {
+        val clean = reason.trim()
+        if (clean.length < com.bakery.erp.model.MIN_MISSING_SLIP_REASON) {
+            _uiState.update { it.copy(error = "Escribe el motivo (mínimo ${com.bakery.erp.model.MIN_MISSING_SLIP_REASON} letras).") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isBankDepositBusy = true, error = null) }
+            runCatching {
+                bankDepositRepository.markNoSlip(companyId, deposit.id, clean, currentUser.displayName)
+                val session = sessionRepository.getSession(companyId, deposit.sessionId)
+                if (session != null) {
+                    runCatching {
+                        auditRepository.log(companyId, auditEvent(session, currentUser, com.bakery.erp.model.CashAuditEventType.BANK_DEPOSIT_NO_SLIP,
+                            outOfSchedule = false, scheduleLabel = "", employeeName = deposit.carriedByEmployeeName,
+                            expected = deposit.amount, notes = "${deposit.bankName} · $clean"))
+                    }
+                    pushBankDeposit(companyId, session, currentUser,
+                        title = "Depósito sin boleta: Q ${deposit.amount.fmtMoney(2)}",
+                        body = "${session.branchName} · ${session.registerName}: ${currentUser.displayName} lo dejó sin boleta. " +
+                            "Lo llevó ${deposit.carriedByEmployeeName.ifBlank { "—" }} a ${deposit.bankName}. Motivo: $clean")
+                }
+            }.onSuccess {
+                refreshAfterBankDeposit(companyId, viewingSessionId ?: deposit.sessionId, deposit.registerId)
+                _uiState.update { it.copy(isBankDepositBusy = false, bankDepositNotice = "Quedó sin boleta; se avisó al administrador.") }
+            }.onFailure { e ->
+                _uiState.update { it.copy(isBankDepositBusy = false, error = e.message ?: "No se pudo guardar") }
+            }
+        }
+    }
+
+    private suspend fun refreshAfterBankDeposit(companyId: String, sessionId: String, registerId: String) {
+        runCatching { bankDepositRepository.getPendingForRegister(companyId, registerId) }
+            .onSuccess { list -> _uiState.update { it.copy(pendingBankDeposits = list) } }
+        runCatching { bankDepositRepository.getForSession(companyId, sessionId) }
+            .onSuccess { list -> _uiState.update { it.copy(sessionBankDeposits = list) } }
+        runCatching { sessionRepository.listMovements(companyId, sessionId) }
+            .onSuccess { movs -> _uiState.update { it.copy(movements = movs) } }
+    }
+
+    private suspend fun pushBankDeposit(companyId: String, session: CashSession, currentUser: User, title: String, body: String) {
+        runCatching {
+            notificationRepository.push(companyId, com.bakery.erp.model.AppNotification(
+                type = com.bakery.erp.model.NotificationType.BANK_DEPOSIT,
+                title = title,
+                body = body,
+                targetBranchIds = listOf(session.branchId),
+                requiredPermission = com.bakery.erp.model.Permission.VIEW_CASH_AUDIT.name,
+                targetScreen = com.bakery.erp.model.NotificationTarget.CASH_AUDIT,
+                targetId = session.branchId,
+                createdByUserId = currentUser.id,
+                createdByUserName = currentUser.displayName
+            ))
+        }
+    }
+
+    fun clearBankDepositNotice() = _uiState.update { it.copy(bankDepositNotice = null) }
+    fun clearBankDepositError() = _uiState.update { it.copy(bankDepositError = null) }
 
     fun clearOpenedSessionId() { _uiState.update { it.copy(openedSessionId = null) } }
     fun clearClosed() { _uiState.update { it.copy(isClosed = false) } }

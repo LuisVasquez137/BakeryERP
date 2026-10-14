@@ -125,6 +125,8 @@ object CreditMovementType {
     const val PAYROLL_DEDUCTION = "PAYROLL_DEDUCTION"
     /** Corrección o saldo anterior (lo que ya debía en el cuaderno). */
     const val ADJUSTMENT        = "ADJUSTMENT"
+    /** Producto que se le cayó o arruinó en el mostrador, a costo. Perdonarlo = ADJUSTMENT negativo. */
+    const val ACCIDENT          = "ACCIDENT"
 
     fun label(type: String) = when (type) {
         SALE              -> "Compra a crédito"
@@ -132,6 +134,7 @@ object CreditMovementType {
         PAYMENT           -> "Pago"
         PAYROLL_DEDUCTION -> "Descuento en planilla"
         ADJUSTMENT        -> "Ajuste"
+        ACCIDENT          -> "Accidente en mostrador"
         else              -> type
     }
 }

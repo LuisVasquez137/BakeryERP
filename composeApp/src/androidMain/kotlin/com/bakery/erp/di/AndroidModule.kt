@@ -38,6 +38,8 @@ val androidModule = module {
     single<SpecialOrderImageUploader> { AndroidSpecialOrderImageUploader(get()) }
     single<AttendanceSelfieUploader> { AndroidAttendanceSelfieUploader(get()) }
     single<PurchaseInvoiceImageUploader> { AndroidPurchaseInvoiceImageUploader(get()) }
+    single<com.bakery.erp.domain.BankSlipImageUploader> { com.bakery.erp.data.AndroidBankSlipImageUploader(get()) }
+    single<com.bakery.erp.domain.CounterRemovalPhotoUploader> { com.bakery.erp.data.AndroidCounterRemovalPhotoUploader(get()) }
     single<EmployeeDocumentRepository> { FirebaseEmployeeDocumentRepository(get(), get()) }
     single<BluetoothPrinterManager> { AndroidBluetoothPrinterManager(androidContext()) }
     single<ReceiptPrinter> { AndroidReceiptPrinter(androidContext(), get()) }

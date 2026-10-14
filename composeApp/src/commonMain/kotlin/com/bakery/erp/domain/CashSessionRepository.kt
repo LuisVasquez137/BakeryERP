@@ -46,7 +46,14 @@ interface CashSessionRepository {
         amount: Double
     )
 
-    suspend fun addMovement(companyId: String, movement: CashMovement)
+    /**
+     * Saca de los totales de la sesión una venta anulada (ver `CashSession.withSaleVoided`).
+     * Mismo leer-reescribir que [incrementSaleTotals].
+     */
+    suspend fun applySaleVoid(companyId: String, sessionId: String, sale: com.bakery.erp.model.Sale)
+
+    /** Devuelve el id del movimiento guardado. */
+    suspend fun addMovement(companyId: String, movement: CashMovement): String
     suspend fun listMovements(companyId: String, sessionId: String): List<CashMovement>
 
     /** Cierra la sesión: calcula expectedCash, persiste countedCash + difference + closedAt + status=CLOSED. */
@@ -85,7 +92,9 @@ interface CashSessionRepository {
         companyId: String,
         sessionId: String,
         withdrawal: Double,
-        handover: com.bakery.erp.model.ShiftHandover
+        handover: com.bakery.erp.model.ShiftHandover,
+        /** Si lo retirado fue al banco, el depósito pendiente de boleta. */
+        bankDepositId: String = ""
     )
 
     suspend fun autoCloseStaleSessions(companyId: String, todayStartMillis: Long): Int

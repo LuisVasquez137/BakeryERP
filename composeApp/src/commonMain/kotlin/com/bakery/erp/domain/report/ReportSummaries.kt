@@ -166,6 +166,14 @@ data class StockMovementSummary(
     val mermaUnits: Double = 0.0,
     val mermaValue: Double = 0.0,
     val adjustmentUnits: Double = 0.0,
+    /**
+     * Sacado del mostrador con la caja abierta (ver `CounterRemoval`), a costo. Va aparte de
+     * [mermaValue] porque el reporte financiero toma la merma del CONTEO de cierre: esto ya no
+     * llega al conteo como faltante, y sin sumarlo aparte desaparecería de la utilidad.
+     */
+    val counterDamagedValue: Double = 0.0,
+    /** Regalos desde la caja, a costo. */
+    val courtesyValue: Double = 0.0,
     val byProduct: List<ProductMovementStat> = emptyList(),
     val byMermaReason: Map<String, MermaReasonStat> = emptyMap()
 )

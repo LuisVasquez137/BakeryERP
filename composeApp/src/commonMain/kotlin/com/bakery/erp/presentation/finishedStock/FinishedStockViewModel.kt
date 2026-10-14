@@ -26,6 +26,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import com.bakery.erp.model.isPortion
+import com.bakery.erp.model.PortioningRequest
 
 data class FinishedStockUiState(
     val branches: List<Branch> = emptyList(),
@@ -43,7 +45,12 @@ data class FinishedStockUiState(
     val isLoading: Boolean = false,
     val isMovementsLoading: Boolean = false,
     val error: String? = null,
-    val isSaved: Boolean = false
+    val isSaved: Boolean = false,
+    /** Productos porción activos ("Porción de selva negra"), para "Porcionar pastel". */
+    val portionProducts: List<Product> = emptyList(),
+    val isPortioning: Boolean = false,
+    /** Aviso de un corte que salió bien, para el snackbar. */
+    val notice: String? = null
 )
 
 class FinishedStockViewModel(
@@ -137,6 +144,7 @@ class FinishedStockViewModel(
                         it.copy(
                             isLoading = false,
                             stocks = (list + zeros).sortedBy { s -> s.productName },
+                            portionProducts = products.filter { p -> p.active && p.isPortion },
                             rows = buildStoreInventoryRows(list, products, ingredientStock)
                         )
                     }
@@ -198,6 +206,41 @@ class FinishedStockViewModel(
         }
     }
 
+    /** Corta enteros en porciones. Ver `FinishedStockRepository.applyPortioning`. */
+    fun cutIntoPortions(
+        companyId: String,
+        portion: Product,
+        wholes: Int,
+        portionsPerWhole: Int,
+        currentUser: User
+    ) {
+        val st = _uiState.value
+        if (st.isPortioning) return
+        val branch = st.branches.firstOrNull { it.id == st.selectedBranchId } ?: return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isPortioning = true, error = null) }
+            runCatching {
+                repository.applyPortioning(
+                    companyId,
+                    PortioningRequest(
+                        branchId = branch.id,
+                        branchName = branch.name,
+                        portion = portion,
+                        wholes = wholes,
+                        portionsPerWhole = portionsPerWhole,
+                        userId = currentUser.id,
+                        userName = currentUser.displayName
+                    )
+                )
+            }.onSuccess { n ->
+                _uiState.update {
+                    it.copy(isPortioning = false, notice = "$n × ${portion.name} al inventario")
+                }
+            }.onFailure { err -> _uiState.update { it.copy(isPortioning = false, error = err.message) } }
+        }
+    }
+
+    fun clearNotice() { _uiState.update { it.copy(notice = null) } }
     fun clearSaved() { _uiState.update { it.copy(isSaved = false) } }
     fun clearError() { _uiState.update { it.copy(error = null) } }
 }

@@ -111,6 +111,11 @@ data class Branch(
      * planta saldría sin renta y se vería mejor que las tiendas que sí pagan local.
      */
     val storeSharePercent: Double = 0.0,
+    /**
+     * Cuánto se puede regalar al día desde las cajas de esta sucursal, en quetzales a precio de
+     * venta. Pasarse BLOQUEA el regalo. 0 = no se regala. Solo el dueño lo cambia. Ver `CounterRemoval`.
+     */
+    val dailyCourtesyQuota: Double = 0.0,
     val active: Boolean = true,
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L

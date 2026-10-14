@@ -21,6 +21,24 @@ interface SaleRepository {
      */
     suspend fun createSale(companyId: String, sale: Sale, lines: List<SaleLine>): Sale
 
+    /**
+     * Anula una venta cobrada (ver `SaleVoid.kt`). Orden, con la regla "encabezado antes que
+     * stock": un reintento choca con la guarda en vez de devolver dos veces.
+     *  1. En transacción: la venta tiene que estar COMPLETED; pasa a VOIDED con motivo, quién y
+     *     cuánto se devuelve por banco. Escritura PARCIAL: el servidor de FEL guarda en la venta
+     *     campos que la app no conoce (versión de factura, fecha de emisión).
+     *  2. Devuelve al inventario lo que el cobro descontó (DEVOLUCION en el Kardex).
+     *  3. Saca la venta de los totales de su caja (`CashSessionRepository.applySaleVoid`).
+     *  4. La resta del resumen del día (falla contenida, igual que al cobrar).
+     *
+     * No toca la factura: eso lo hace quien llama, ANTES, porque si la SAT no la anula la venta
+     * no debe quedar anulada con una factura viva.
+     */
+    suspend fun voidSale(companyId: String, saleId: String, request: com.bakery.erp.model.SaleVoidRequest): Sale
+
+    /** La parte de tarjeta/transferencia de una venta anulada ya se le devolvió al cliente. */
+    suspend fun markBankRefunded(companyId: String, saleId: String, userName: String)
+
     suspend fun getSale(companyId: String, saleId: String): Sale?
     suspend fun getSaleLines(companyId: String, saleId: String): List<SaleLine>
 

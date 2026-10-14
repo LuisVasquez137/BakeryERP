@@ -238,7 +238,7 @@ service cloud.firestore {
       return collection in ['sales', 'salesDaily', 'cashSessions', 'cashTransfers',
                             'cashAuditEvents', 'dailyCashCloses', 'spotCashChecks',
                             'customerDeposits', 'dtes', 'finishedMovements',
-                            'creditAccounts', 'counters'];
+                            'creditAccounts', 'counters', 'bankDeposits', 'counterRemovals'];
     }
 
     // Subcolecciones que también son historial (el resto, p. ej. los billetes contados de

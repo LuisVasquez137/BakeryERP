@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.PackagingFilter
 import com.bakery.erp.model.OrderInvoiceFilter
 import com.bakery.erp.model.SaleOrder
+import com.bakery.erp.model.bankRefundPending
 import com.bakery.erp.model.matches
 import com.bakery.erp.model.ordersFromSales
 import androidx.compose.material.icons.filled.Close
@@ -335,6 +336,7 @@ private fun OrderCard(order: SaleOrder, canSeeValue: Boolean, showRegister: Bool
                     Spacer(Modifier.height(4.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         if (order.voided) BrandChip(text = "Anulada", tone = ChipTone.DANGER)
+                        if (order.sales.any { it.bankRefundPending }) BrandChip(text = "Devolver por banco", tone = ChipTone.DANGER)
                         if (invoiceSale != null) SaleInvoiceChip(invoiceSale)
                         if (packaging.isNotEmpty()) {
                             BrandChip(

@@ -16,6 +16,7 @@ data class DailyCashCloseDraft(
     val totalCashSales: Double,
     val totalCardSales: Double,
     val totalTransferSales: Double,
+    val totalPedidosYaSales: Double = 0.0,
     val totalSales: Double,
     val totalMovementsIn: Double,
     val totalMovementsOut: Double,

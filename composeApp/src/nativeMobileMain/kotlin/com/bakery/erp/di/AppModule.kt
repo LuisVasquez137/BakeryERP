@@ -176,6 +176,10 @@ val appModule = module {
     single<com.bakery.erp.domain.PackagingItemRepository> { com.bakery.erp.data.FirebasePackagingItemRepository(get()) }
     single<com.bakery.erp.domain.PaymentRulesRepository> { com.bakery.erp.data.FirebasePaymentRulesRepository(get()) }
     single<com.bakery.erp.domain.HeldCartRepository> { com.bakery.erp.data.FirebaseHeldCartRepository(get()) }
+    single<com.bakery.erp.domain.BankDepositRepository> { com.bakery.erp.data.FirebaseBankDepositRepository(get()) }
+    single<com.bakery.erp.domain.CounterRemovalRepository> { com.bakery.erp.data.FirebaseCounterRemovalRepository(get(), get(), get()) }
+    // Android lo sobreescribe con AndroidCounterRemovalPhotoUploader.
+    single<com.bakery.erp.domain.CounterRemovalPhotoUploader> { com.bakery.erp.domain.NoOpCounterRemovalPhotoUploader() }
     single<CashRegisterRepository> { FirebaseCashRegisterRepository(get()) }
     single<CashSessionRepository> { FirebaseCashSessionRepository(get()) }
     single<SaleRepository> { FirebaseSaleRepository(get(), get(), get(), get()) }
@@ -194,6 +198,8 @@ val appModule = module {
     // Android lo sobreescribe con AndroidAttendanceSelfieUploader (selfie del kiosko).
     single<com.bakery.erp.domain.AttendanceSelfieUploader> { com.bakery.erp.domain.NoOpAttendanceSelfieUploader() }
     single<PurchaseInvoiceImageUploader> { NoOpPurchaseInvoiceImageUploader() }
+    // Android lo sobreescribe con AndroidBankSlipImageUploader.
+    single<com.bakery.erp.domain.BankSlipImageUploader> { com.bakery.erp.domain.NoOpBankSlipImageUploader() }
     single<EmployeeDocumentRepository> { NoOpEmployeeDocumentRepository() }
     single<ReceiptPrinter> { NoOpReceiptPrinter() }
     // Android lo sobreescribe con AndroidDocumentPrinter; iOS con IosDocumentPrinter.
@@ -225,8 +231,9 @@ val appModule = module {
     single { FixedAssetViewModel(get(), get(), get()) }
     single { POSViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single<com.bakery.erp.domain.CashAuditRepository> { com.bakery.erp.data.FirebaseCashAuditRepository(get()) }
-    single { CashSessionViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
-    single { SaleHistoryViewModel(get(), get(), get(), get(), get(), get()) }
+    single { CashSessionViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    single { SaleHistoryViewModel(get(), get(), get(), get(), get(), get(), get(), get()) }
+    single { com.bakery.erp.presentation.pos.CounterRemovalViewModel(get(), get(), get(), get(), get(), get()) }
     single { CashRegisterAdminViewModel(get(), get(), get()) }
     single { POSCategoryAdminViewModel(get(), get(), get()) }
     single { com.bakery.erp.presentation.pos.admin.PackagingAdminViewModel(get()) }

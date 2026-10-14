@@ -23,6 +23,7 @@ import com.bakery.erp.model.isRestaurantSale
 import com.bakery.erp.model.ordersFromSales
 import com.bakery.erp.model.paymentPartsLabel
 import com.bakery.erp.model.restaurantSaleLabel
+import com.bakery.erp.model.saleVoidBlocker
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.ui.AdaptiveContainer
 import com.bakery.erp.ui.theme.BrandColors
@@ -57,6 +58,10 @@ fun SaleOrderDetailScreen(
     LaunchedEffect(companyId, saleIds) {
         if (companyId.isNotEmpty() && saleIds.isNotEmpty()) viewModel.loadOrderLines(companyId, saleIds)
     }
+    val orderSessionId = order?.primary?.sessionId.orEmpty()
+    LaunchedEffect(companyId, orderSessionId) {
+        if (companyId.isNotEmpty()) viewModel.loadOrderSession(companyId, orderSessionId)
+    }
     LaunchedEffect(state.error) { state.error?.let { snackbar.showSnackbar(it); viewModel.clearError() } }
     LaunchedEffect(state.notice) { state.notice?.let { snackbar.showSnackbar(it); viewModel.clearNotice() } }
 
@@ -72,6 +77,11 @@ fun SaleOrderDetailScreen(
     var voidOpen by remember { mutableStateOf(false) }
     var reissueOpen by remember { mutableStateOf(false) }
     var btPickerOpen by remember { mutableStateOf(false) }
+    var saleVoidOpen by remember { mutableStateOf(false) }
+    // Anular la venta: mismo permiso que anular la factura (el servidor lo pide para la SAT).
+    val canVoidSale = user?.hasPermission(Permission.VOID_SALE) == true
+    // La caja se lee al abrir el detalle; mientras llega, el bloqueo dice que no se encontró.
+    val voidBlocker = order?.let { saleVoidBlocker(it, state.orderSession) }
 
     fun print() {
         val o = order ?: return
@@ -117,6 +127,14 @@ fun SaleOrderDetailScreen(
         AdaptiveContainer(modifier = Modifier.padding(padding)) {
             LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 item { OrderHeaderCard(order, canSeeValue) }
+                if (order.voided) item {
+                    VoidedOrderCard(
+                        order = order,
+                        canMarkRefund = canVoidSale,
+                        busy = state.isVoidBusy,
+                        onMarkRefunded = { user?.let { viewModel.markBankRefunded(companyId, order, it) } }
+                    )
+                }
                 if (canInvoiceLater) item {
                     Button(
                         onClick = { invoiceOpen = true },
@@ -126,7 +144,7 @@ fun SaleOrderDetailScreen(
                         Text(if (order.hasInvoice) "Facturar lo que falta" else "Facturar este cobro")
                     }
                 }
-                if (canFixInvoice && invoicedSale != null) {
+                if (canFixInvoice && invoicedSale != null && !order.voided) {
                     when (invoicedSale.invoiceStatus) {
                         FelInvoiceStatus.CERTIFICADO -> item {
                             OutlinedButton(
@@ -144,6 +162,20 @@ fun SaleOrderDetailScreen(
                             ) { Text("Facturar de nuevo") }
                         }
                         else -> Unit
+                    }
+                }
+                if (canVoidSale && !order.voided) item {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        OutlinedButton(
+                            onClick = { saleVoidOpen = true },
+                            enabled = voidBlocker == null && !state.isVoidBusy && !state.isInvoiceBusy,
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("Anular venta (devolución)") }
+                        if (voidBlocker != null) {
+                            Text(voidBlocker, style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 }
                 order.sales.forEach { sale ->
@@ -178,6 +210,7 @@ fun SaleOrderDetailScreen(
             }
         }
         com.bakery.erp.ui.LoadingOverlay(visible = state.isInvoiceBusy, message = "Hablando con la SAT…")
+        com.bakery.erp.ui.LoadingOverlay(visible = state.isVoidBusy, message = "Anulando la venta…")
     }
 
     val lookup: suspend (String) -> Result<String?> = { nit -> viewModel.lookupNit(companyId, order?.primary?.branchId.orEmpty(), nit) }
@@ -220,6 +253,16 @@ fun SaleOrderDetailScreen(
                 reissueOpen = false
                 // El servidor vuelve a juntar todas las ventas que cubría la factura anterior.
                 viewModel.reissueInvoice(companyId, invoicedSale, to)
+            }
+        )
+    }
+    if (saleVoidOpen && order != null) {
+        VoidSaleDialog(
+            order = order,
+            onDismiss = { saleVoidOpen = false },
+            onConfirm = { reason ->
+                saleVoidOpen = false
+                user?.let { viewModel.voidOrder(companyId, order, reason, it) }
             }
         )
     }

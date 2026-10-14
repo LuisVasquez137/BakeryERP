@@ -180,7 +180,7 @@ Plano `companies/{c}/finishedStocks/{branchId}_{productId}` con `currentStock` +
 - Ingreso (qty>0): `avg = (stockPrev × avgPrev + qty × unitPrice) / (stockPrev + qty)`.
 - Salida (qty<0): stock baja, avg se mantiene.
 
-**Tipos**: RECEPCION (auto), VENTA, MERMA, AJUSTE, TRANSFERENCIA.
+**Tipos**: RECEPCION (auto), VENTA, MERMA, AJUSTE, TRANSFERENCIA, DEVOLUCION, PORCIONADO.
 
 **La lista no sale solo de los documentos de stock** (`model/StoreInventory.kt::buildStoreInventoryRows`,
 tests en `StoreInventoryTest`). Un `FinishedProductStock` nace con el primer movimiento, así que
@@ -197,6 +197,34 @@ solo lectura de compras de reventa vs. `finishedStocks`.
 Form `FinishedStockAdjustScreen` con 4 opciones (Merma, Ajuste menor/mayor, Venta directa), valida no negativo, razón obligatoria, preview "Nuevo stock: X".
 
 KPIs ocultan valor de inventario sin `VIEW_DISPATCH_VALUE`. Permiso: `MANAGE_FINISHED_STOCK`.
+
+### Porcionar pasteles (oct 2026)
+
+El pastel que no se vendió entero se corta en la tienda y se vende por porción a otro precio.
+Es una **transformación**, no venta ni merma: `−1` del entero y `+N` de la porción, tipo
+`PORCIONADO`, referencia `PORTIONING` con el mismo `referenceId` en las dos puntas.
+
+- La porción es un producto normal (precio e inventario propios) con
+  `portionOfProductId/Name` + `portionsPerWhole` (se configura en el form del producto,
+  "Es porción de un pastel"). Siempre se corta en tienda: se excluye del pedido a planta,
+  del ajuste de pedido y del pedido del revendedor.
+- **El costo pasa del entero a las porciones**: el entero sale a su `avgUnitCost` y cada
+  porción entra a ese costo ÷ porciones, así el valor del inventario no cambia y el margen
+  de la porción sale bien. Lógica pura en `model/Portioning.kt` (`PortioningTest`).
+- `FinishedStockRepository.applyPortioning` lee el stock ACTUAL del entero, valida
+  (`portioningError`: no deja cortar más enteros de los que hay; si están en el estante y no
+  en el sistema, primero se ajusta el entero) y aplica en serie: primero sale el entero.
+- Porciones por pastel se precargan pero se cambian al cortar (un día salen 10).
+- Lo puede hacer cualquiera del mostrador (`OPERATE_POS`, `COUNT_FINISHED_STOCK` o
+  `MANAGE_FINISHED_STOCK`): "Porcionar pastel" en el menú ⋮ del POS y botón de tijera en
+  Inventario de tienda. Diálogo compartido `PortioningDialog` con vista previa de cómo queda
+  el estante.
+- No se deshace; un error se corrige con ajuste.
+- **Al cobrar**: si la porción que se mete al carrito supera las porciones del inventario y
+  hay enteros (`shouldOfferPortioning`), el POS abre el mismo diálogo ya con ese pastel. La
+  venta no se bloquea: "Ahora no" deja la línea (con el aviso de sobreventa) y no vuelve a
+  preguntar por esa porción hasta que el carrito quede vacío (`declinedPortionPrompts`).
+- Pendiente: reporte de porcionado (lo que habrían dado enteros vs. porcionados).
 
 ## Precio por escalón en las listas (oct 2026)
 

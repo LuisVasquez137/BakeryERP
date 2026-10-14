@@ -43,12 +43,29 @@ object CashAuditEventType {
      * en [CashAuditEvent.expectedCash] y lo que llevaba en [CashAuditEvent.notes].
      */
     const val HELD_CART_DISCARDED = "HELD_CART_DISCARDED"
+    /**
+     * Anuló una venta ya cobrada. Monto en [CashAuditEvent.expectedCash] (lo que salió de la
+     * gaveta va en [CashAuditEvent.countedCash]) y el motivo en [CashAuditEvent.notes].
+     */
+    const val SALE_VOID = "SALE_VOID"
+    /**
+     * Depósito al banco ([BankDeposit]): salió de la gaveta, se adjuntó la boleta o se dejó sin
+     * ella. Monto en [CashAuditEvent.expectedCash]; con boleta, lo que dice la boleta en
+     * [CashAuditEvent.countedCash] y la diferencia en [CashAuditEvent.difference].
+     */
+    const val BANK_DEPOSIT_OUT = "BANK_DEPOSIT_OUT"
+    const val BANK_DEPOSIT_SLIP = "BANK_DEPOSIT_SLIP"
+    const val BANK_DEPOSIT_NO_SLIP = "BANK_DEPOSIT_NO_SLIP"
 
     fun label(type: String) = when (type) {
         OPEN -> "Abrió caja"
         CLOSE_SCREEN -> "Entró al cierre"
         CLOSE -> "Cerró caja"
         HELD_CART_DISCARDED -> "Descartó cuenta en espera"
+        SALE_VOID -> "Anuló una venta"
+        BANK_DEPOSIT_OUT -> "Sacó dinero para el banco"
+        BANK_DEPOSIT_SLIP -> "Adjuntó boleta de depósito"
+        BANK_DEPOSIT_NO_SLIP -> "Depósito sin boleta"
         else -> type
     }
 }

@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CallSplit
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.DeliveryDining
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Payments
@@ -32,6 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -147,7 +149,7 @@ fun PaymentDialog(
     val change = if (needsCash) (tendered - cashTarget).coerceAtLeast(0.0) else 0.0
     val isCashShort = needsCash && tenderedText.isNotEmpty() && tendered < cashTarget - 0.004
 
-    val methods = SalePaymentMethod.all + listOfNotNull(SalePaymentMethod.CREDIT.takeIf { creditAccounts != null })
+    val methods = SalePaymentMethod.checkout + listOfNotNull(SalePaymentMethod.CREDIT.takeIf { creditAccounts != null })
     // Lo facturable (pan + restaurante no facturado en ComandaYa), con el descuento de colaborador.
     // El recargo va en la venta de pan, que siempre es facturable: cuenta para el tope de CF.
     val invoicedTotal = ((invoiceOptions?.invoiceableTotal ?: 0.0) - discountAmount).coerceAtLeast(0.0) + cardSurcharge
@@ -235,8 +237,9 @@ fun PaymentDialog(
         }
     }
 
-    // Sin fiado combinado, y no hace falta si el anticipo ya cubre todo.
-    val canSplit = !isCredit && !coveredByDeposit
+    // Sin fiado combinado, y no hace falta si el anticipo ya cubre todo. Un pedido de PedidosYa
+    // lo paga entero la app: no se divide.
+    val canSplit = !isCredit && !coveredByDeposit && method != SalePaymentMethod.PEDIDOS_YA
     fun startSplit() {
         splitMode = true; method = SalePaymentMethod.CASH
         tenderedText = ""; bills = emptyMap()
@@ -350,6 +353,9 @@ fun PaymentDialog(
                             "Pasá Q ${chargeTotal.fmtMoney(2)} en la terminal (incluye recargo de " +
                                 "Q ${cardSurcharge.fmtMoney(2)}: ${cardRules.surchargeDescription()})."
                         method == SalePaymentMethod.CARD -> "Pasá la tarjeta y confirmá cuando el voucher salga aprobado."
+                        method == SalePaymentMethod.PEDIDOS_YA ->
+                            "Pedido de PedidosYa: no entra dinero a la gaveta, PedidosYa lo liquida. " +
+                                "Queda aparte en el cuadre y en los reportes."
                         else -> "Confirmá que la transferencia ya se acreditó antes de cobrar."
                     }
                 )
@@ -613,6 +619,7 @@ private fun methodIcon(method: String): ImageVector = when (method) {
     SalePaymentMethod.CASH -> Icons.Default.Payments
     SalePaymentMethod.CARD -> Icons.Default.CreditCard
     SalePaymentMethod.TRANSFER -> Icons.Default.AccountBalance
+    SalePaymentMethod.PEDIDOS_YA -> Icons.Default.DeliveryDining
     else -> Icons.Default.PersonOutline
 }
 
@@ -657,7 +664,7 @@ private fun MethodCard(
             ) {
                 Icon(icon, null, tint = if (selected) BrandColors.Primary else MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(4.dp))
-                Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1,
+                Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                     color = if (selected) BrandColors.Primary else MaterialTheme.colorScheme.onSurface,
                     textAlign = TextAlign.Center)

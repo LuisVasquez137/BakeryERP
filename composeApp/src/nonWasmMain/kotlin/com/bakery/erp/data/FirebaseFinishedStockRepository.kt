@@ -4,10 +4,14 @@ import com.bakery.erp.domain.FinishedStockRepository
 import com.bakery.erp.domain.report.MermaReasonStat
 import com.bakery.erp.domain.report.ProductMovementStat
 import com.bakery.erp.domain.report.StockMovementSummary
+import com.bakery.erp.model.FinishedMovementReference
 import com.bakery.erp.model.FinishedMovementType
 import com.bakery.erp.model.FinishedProductStock
 import com.bakery.erp.model.FinishedStockMovement
+import com.bakery.erp.model.PortioningRequest
 import com.bakery.erp.model.finishedStockDocId
+import com.bakery.erp.model.portioningError
+import com.bakery.erp.model.portioningMovements
 import dev.gitlive.firebase.firestore.DocumentSnapshot
 import dev.gitlive.firebase.firestore.FirebaseFirestore
 import dev.gitlive.firebase.firestore.Timestamp
@@ -97,6 +101,16 @@ class FirebaseFinishedStockRepository(
         moveRef.set(finalMove.toMap())
     }
 
+    override suspend fun applyPortioning(companyId: String, request: PortioningRequest): Int {
+        val wholeStock = getStock(companyId, request.branchId, request.portion.portionOfProductId)
+        portioningError(request, wholeStock)?.let { throw IllegalStateException(it) }
+        // El id de un documento nuevo solo como llave común de las dos puntas del corte.
+        val referenceId = movementsCol(companyId).document.id
+        // En serie: applyMovement lee-modifica-escribe, y el orden importa (ver portioningMovements).
+        portioningMovements(request, wholeStock!!, referenceId).forEach { applyMovement(companyId, it) }
+        return request.totalPortions
+    }
+
     override suspend fun aggregateMovementsInRange(
         companyId: String,
         branchId: String,
@@ -160,6 +174,11 @@ class FirebaseFinishedStockRepository(
             mermaUnits = mermaUnits,
             mermaValue = mermaValue,
             adjustmentUnits = adjustmentUnits,
+            counterDamagedValue = merma
+                .filter { it.referenceType == FinishedMovementReference.COUNTER_REMOVAL }
+                .sumOf { -it.quantity * it.unitPriceAtMovement },
+            courtesyValue = moves.filter { it.type == FinishedMovementType.CORTESIA }
+                .sumOf { -it.quantity * it.unitPriceAtMovement },
             byProduct = byProduct,
             byMermaReason = byReason
         )

@@ -30,6 +30,7 @@ import com.bakery.erp.model.groupDisplayName
 import com.bakery.erp.model.PriceList
 import com.bakery.erp.model.PriceListType
 import com.bakery.erp.model.Product
+import com.bakery.erp.model.shouldOfferPortioning
 import com.bakery.erp.model.ReceiptData
 import com.bakery.erp.model.ReceiptLine
 import com.bakery.erp.model.Sale
@@ -130,6 +131,13 @@ data class POSUiState(
     val heldCarts: List<com.bakery.erp.model.HeldCart> = emptyList(),
     /** Guardando, retomando o descartando una cuenta en espera. */
     val isHoldBusy: Boolean = false,
+    /** Cortando un pastel en porciones ("Porcionar pastel"). */
+    val isPortioning: Boolean = false,
+    /**
+     * Porción recién metida al carrito sin existencias suficientes pero con enteros en la
+     * tienda: el POS pregunta si se corta uno. Ver `shouldOfferPortioning`.
+     */
+    val portionPrompt: Product? = null,
     /** Total de categorías que existen en la empresa (sin filtrar por sucursal) — para diagnóstico. */
     val totalCategoriesCount: Int = 0,
     val cart: List<CartLine> = emptyList(),
@@ -366,6 +374,9 @@ class POSViewModel(
             }
         }
     }
+
+    /** Porciones a las que la cajera ya contestó "ahora no" en la cuenta actual. */
+    private val declinedPortionPrompts = mutableSetOf<String>()
 
     /** Orden de "Todos" ya leído hoy, por empresa|sucursal|fecha. */
     private val popularityCache = mutableMapOf<String, Map<String, Double>>()
@@ -709,6 +720,8 @@ class POSViewModel(
             return
         }
         val unitPrice = resolveProductPrice(product)
+        // Carrito nuevo = cliente nuevo: lo que se contestó "ahora no" se vuelve a preguntar.
+        if (_uiState.value.cart.isEmpty()) declinedPortionPrompts.clear()
         val existing = _uiState.value.cart.find { it.productId == product.id }
         val newCart = if (existing != null) {
             _uiState.value.cart.map {
@@ -725,7 +738,17 @@ class POSViewModel(
                 priceSource = unitPrice.second
             )
         }
-        _uiState.update { it.copy(cart = newCart) }
+        val inCart = newCart.filter { it.productId == product.id }.sumOf { it.quantity }
+        val offer = product.id !in declinedPortionPrompts && shouldOfferPortioning(
+            product, inCart, stockOf(product.id), stockOf(product.portionOfProductId)
+        )
+        _uiState.update { it.copy(cart = newCart, portionPrompt = if (offer) product else it.portionPrompt) }
+    }
+
+    /** "Ahora no": la venta sigue (queda el aviso de sobreventa) y no se insiste en esta cuenta. */
+    fun dismissPortionPrompt() {
+        _uiState.value.portionPrompt?.let { declinedPortionPrompts += it.id }
+        _uiState.update { it.copy(portionPrompt = null) }
     }
 
     /**
@@ -1654,6 +1677,39 @@ class POSViewModel(
                         notice = "Adelanto de Q ${amount.fmtMoney(2)} a ${account.name}. Se descuenta en su planilla.")
                 }
             }.onFailure { e -> _uiState.update { it.copy(isCreditBusy = false, error = e.message) } }
+        }
+    }
+
+    /**
+     * La cajera corta enteros en porciones sin salir de la venta. El stock llega solo por el
+     * listener de `observeStocks`; acá solo se avisa. Ver `FinishedStockRepository.applyPortioning`.
+     */
+    fun cutIntoPortions(companyId: String, portion: Product, wholes: Int, portionsPerWhole: Int, currentUser: User) {
+        val st = _uiState.value
+        val branch = st.branch ?: return
+        if (st.isPortioning) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isPortioning = true) }
+            runCatching {
+                finishedStockRepository.applyPortioning(
+                    companyId,
+                    com.bakery.erp.model.PortioningRequest(
+                        branchId = branch.id,
+                        branchName = branch.name,
+                        portion = portion,
+                        wholes = wholes,
+                        portionsPerWhole = portionsPerWhole,
+                        userId = currentUser.id,
+                        userName = currentUser.displayName
+                    )
+                )
+            }.onSuccess { n ->
+                _uiState.update {
+                    it.copy(isPortioning = false, portionPrompt = null, notice = "$n × ${portion.name} al inventario")
+                }
+            }.onFailure { e ->
+                _uiState.update { it.copy(isPortioning = false, error = e.message ?: "No se pudo porcionar") }
+            }
         }
     }
 

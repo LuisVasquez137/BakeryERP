@@ -3,6 +3,7 @@ package com.bakery.erp.domain
 import com.bakery.erp.domain.report.StockMovementSummary
 import com.bakery.erp.model.FinishedProductStock
 import com.bakery.erp.model.FinishedStockMovement
+import com.bakery.erp.model.PortioningRequest
 import kotlinx.coroutines.flow.Flow
 
 interface FinishedStockRepository {
@@ -29,6 +30,14 @@ interface FinishedStockRepository {
      *  - Escribe el movimiento en el Kardex.
      */
     suspend fun applyMovement(companyId: String, movement: FinishedStockMovement)
+
+    /**
+     * Corta enteros en porciones (ver `model/Portioning.kt`): lee el stock ACTUAL del entero
+     * (no el de la pantalla, que puede venir atrasado), valida con `portioningError` —lanza
+     * `IllegalStateException` con el mensaje— y aplica la salida del entero y la entrada de
+     * porciones, en serie. Devuelve las porciones que entraron.
+     */
+    suspend fun applyPortioning(companyId: String, request: PortioningRequest): Int
 
     /**
      * Agrega los movimientos del Kardex de terminado en rango. Si [branchId] está vacío,

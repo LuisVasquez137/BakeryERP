@@ -301,6 +301,9 @@ private fun SummaryCard(draft: com.bakery.erp.domain.DailyCashCloseDraft) {
             kv("Ventas efectivo", "Q ${draft.totalCashSales.fmtMoney(2)}")
             kv("Ventas tarjeta", "Q ${draft.totalCardSales.fmtMoney(2)}")
             kv("Ventas transferencia", "Q ${draft.totalTransferSales.fmtMoney(2)}")
+            if (draft.totalPedidosYaSales > 0.004) {
+                kv("Ventas PedidosYa (las liquida PedidosYa)", "Q ${draft.totalPedidosYaSales.fmtMoney(2)}")
+            }
             kv("Depósitos a caja", "Q ${draft.totalMovementsIn.fmtMoney(2)}")
             kv("Retiros / gastos", "Q ${draft.totalMovementsOut.fmtMoney(2)}")
             HorizontalDivider(Modifier.padding(vertical = 6.dp))

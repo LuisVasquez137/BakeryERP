@@ -61,6 +61,7 @@ import com.bakery.erp.model.DISPATCH_TRIP_BOTH
 import com.bakery.erp.model.DISPATCH_TRIP_FIRST
 import com.bakery.erp.model.DISPATCH_TRIP_SECOND
 import com.bakery.erp.model.BranchCapability
+import com.bakery.erp.model.UserRole
 import com.bakery.erp.model.isoWeekdayName
 import com.bakery.erp.model.PriceList
 import com.bakery.erp.model.PriceListType
@@ -124,6 +125,12 @@ fun BranchFormScreen(
         mutableStateOf(existing?.storeSharePercent?.takeIf { it > 0.0 }?.fmtTrim(1) ?: "")
     }
 
+    // Cuota diaria de regalos desde las cajas (Q a precio de venta). Solo la cambia el dueño.
+    val canSetCourtesyQuota = authState.user?.role == UserRole.OWNER
+    var courtesyQuotaText by rememberSaveable(existing?.id) {
+        mutableStateOf(existing?.dailyCourtesyQuota?.takeIf { it > 0.0 }?.fmtTrim(2) ?: "")
+    }
+
     var nameError by remember { mutableStateOf(false) }
     var locationError by remember { mutableStateOf(false) }
 
@@ -177,6 +184,9 @@ fun BranchFormScreen(
         storeSharePercent = if (BranchCapability.CAN_PRODUCE in capabilities && BranchCapability.CAN_SELL in capabilities)
             storeShareText.replace(',', '.').toDoubleOrNull()?.coerceIn(0.0, 100.0) ?: 0.0
         else existing?.storeSharePercent ?: 0.0,
+        dailyCourtesyQuota = if (canSetCourtesyQuota)
+            courtesyQuotaText.replace(',', '.').toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
+        else existing?.dailyCourtesyQuota ?: 0.0,
         active = active
     )
 
@@ -355,6 +365,30 @@ fun BranchFormScreen(
                             Text("Ej: renta de Q5,000 → Q${(5000 * pct / 100).fmtMoney(0)} a la tienda y " +
                                 "Q${(5000 * (100 - pct) / 100).fmtMoney(0)} al costo del pan.")
                         },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                    )
+                }
+
+                // ── Regalos desde la caja ─────────────────────────────────────
+                if (BranchCapability.CAN_SELL in capabilities) {
+                    SectionDivider()
+                    SectionHeader("Regalos desde la caja")
+                    Text(
+                        text = "Cuánto pueden regalar al día las cajas de esta sucursal, a precio de venta. " +
+                            "Al llegar al límite la caja ya no deja registrar más regalos. Vacío = no se regala.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = courtesyQuotaText,
+                        onValueChange = { v -> courtesyQuotaText = v.filter { it.isDigit() || it == '.' || it == ',' }.take(8) },
+                        label = { Text("Cuota diaria de regalos") },
+                        placeholder = { Text("Ej: 15") },
+                        prefix = { Text("Q ") },
+                        enabled = canSetCourtesyQuota,
+                        supportingText = if (!canSetCourtesyQuota) ({ Text("Solo el dueño la cambia.") }) else null,
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)

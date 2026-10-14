@@ -128,6 +128,18 @@ data class Product(
      * [linkedIngredientId]; 0 o 1 = uno a uno.
      */
     val ingredientUnitsPerSale: Double = 1.0,
+    /**
+     * Producto entero del que sale esta porción ("Porción de selva negra" ← "Selva negra").
+     * El pastel que no se vendió entero se corta en la tienda: sale 1 del entero y entran
+     * N porciones con el costo del pastel repartido (ver `portioningMovements`). La porción
+     * lleva su propio precio y su propio inventario; nunca viene de planta.
+     *
+     * Vacío = producto normal.
+     */
+    val portionOfProductId: String = "",
+    val portionOfProductName: String = "",
+    /** Porciones que salen normalmente de un entero. Se puede cambiar al cortar. */
+    val portionsPerWhole: Int = 0,
     val notes: String? = null,
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L
@@ -139,6 +151,10 @@ data class Product(
  */
 val Product.isIngredientBacked: Boolean
     get() = linkedIngredientId.isNotEmpty()
+
+/** `true` si el producto es la porción de otro (ver [Product.portionOfProductId]). */
+val Product.isPortion: Boolean
+    get() = portionOfProductId.isNotEmpty()
 
 /** Unidades del insumo que consume una venta de N piezas. Nunca cero. */
 fun Product.ingredientUnitsFor(quantity: Double): Double =

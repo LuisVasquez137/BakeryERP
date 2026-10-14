@@ -81,12 +81,14 @@ fun ordersFromSales(sales: List<Sale>): List<SaleOrder> =
 enum class OrderInvoiceFilter(val label: String) {
     ALL("Todas"),
     NOT_INVOICED("Sin factura"),
-    INVOICED("Con factura");
+    INVOICED("Con factura"),
+    VOIDED("Anuladas");
 
     fun accepts(order: SaleOrder): Boolean = when (this) {
         ALL -> true
         NOT_INVOICED -> !order.voided && order.uninvoicedSales.isNotEmpty()
         INVOICED -> order.hasInvoice
+        VOIDED -> order.voided
     }
 }
 

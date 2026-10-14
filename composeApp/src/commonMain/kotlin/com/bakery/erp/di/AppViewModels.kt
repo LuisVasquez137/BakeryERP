@@ -73,6 +73,8 @@ data class AppViewModels(
     val pos: POSViewModel,
     val cashSession: CashSessionViewModel,
     val saleHistory: SaleHistoryViewModel,
+    /** Sacar del mostrador sin venta: merma, accidente, regalo. */
+    val counterRemoval: com.bakery.erp.presentation.pos.CounterRemovalViewModel,
     val cashRegisterAdmin: CashRegisterAdminViewModel,
     val posCategoryAdmin: POSCategoryAdminViewModel,
     /** Empaques que se cobran en caja (la bolsa). */

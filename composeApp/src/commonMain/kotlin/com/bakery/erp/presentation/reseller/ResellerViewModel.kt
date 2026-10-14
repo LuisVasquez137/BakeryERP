@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import com.bakery.erp.model.isPortion
 
 data class ResellerUiState(
     /** Perfil del revendedor cargado del User actual. */
@@ -70,8 +71,9 @@ class ResellerViewModel(
             runCatching {
                 val customer = customerRepo.getCustomerByLinkedUser(companyId, userId)
                     ?: error("Tu perfil de revendedor no se encontró. Pídele a la encargada que te apruebe.")
+                // La porción de pastel solo existe cortada en la tienda: no se pide a planta.
                 val products = productRepo.getProducts(companyId)
-                    .filter { it.active }
+                    .filter { it.active && !it.isPortion }
                     .sortedBy { it.name.lowercase() }
                 val prices = resolvePrices(companyId, customer.priceListId, products)
                 val recentOrders = orderRepo.getOrdersForCustomer(companyId, customer.id)

@@ -112,8 +112,8 @@ frases, certificador (`FEL_CERTIFIER_NAME`/`NIT`) y el QR.
 
 **Fase 3c (hecha, sin probar en dispositivo): anular y volver a facturar.** Desde el detalle
 de la venta, con `VOID_SALE` (`pos/InvoiceVoidDialogs.kt`). **Anular la factura no anula la
-venta**: no devuelve dinero ni inventario, y el diálogo lo dice. BakeOS todavía no tiene
-"anular venta" (`SaleStatus.VOIDED` existe sin flujo).
+venta**: no devuelve dinero ni inventario, y el diálogo lo dice. Para eso está "Anular venta"
+(`pos-ventas.md`), que anula la factura primero y después la venta.
 - **"Anular y facturar"** en un paso y **"Facturar de nuevo"** para anuladas o rechazadas. El
   caso común de anular es el NIT equivocado; sin reemisión, esa venta quedaba sin factura porque
   el id del DTE sale de las ventas y la segunda chocaba con la primera.

@@ -67,6 +67,7 @@ import com.bakery.erp.ui.theme.BrandColors.Primary as DeepSeaBlue
 import com.bakery.erp.ui.theme.BrandColors.Ivory as WarmIvory
 import com.bakery.erp.ui.theme.BrandColors.Accent as BurntOrange
 import com.bakery.erp.ui.theme.BrandColors
+import androidx.compose.material.icons.filled.ContentCut
 
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -84,6 +85,12 @@ fun FinishedProductStockListScreen(
     val companyId = user?.orgId ?: ""
     val canSeeValue = user?.hasPermission(Permission.VIEW_DISPATCH_VALUE) == true
     val canAdjust = user?.hasPermission(Permission.MANAGE_FINISHED_STOCK) == true
+    // Cortar un pastel lo hace cualquiera del mostrador, no solo la encargada.
+    val canPortion = user?.let {
+        it.hasPermission(Permission.MANAGE_FINISHED_STOCK) || it.hasPermission(Permission.OPERATE_POS) ||
+            it.hasPermission(Permission.COUNT_FINISHED_STOCK)
+    } == true
+    var portioningOpen by rememberSaveable { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     var search by rememberSaveable { mutableStateOf("") }
     // "" = todos, "PAN" = producido en planta, "REVENTA". Solo se ofrece si hay reventa: un
@@ -95,6 +102,13 @@ fun FinishedProductStockListScreen(
     }
     LaunchedEffect(state.error) {
         state.error?.let { snackbarHostState.showSnackbar(it); viewModel.clearError() }
+    }
+    LaunchedEffect(state.notice) {
+        state.notice?.let {
+            portioningOpen = false
+            viewModel.clearNotice()
+            snackbarHostState.showSnackbar(it)
+        }
     }
 
     val hasResale = state.rows.any { it.isResale }
@@ -126,10 +140,18 @@ fun FinishedProductStockListScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
                     }
                 },
+                actions = {
+                    if (canPortion && state.portionProducts.isNotEmpty()) {
+                        IconButton(onClick = { portioningOpen = true }) {
+                            Icon(Icons.Default.ContentCut, contentDescription = "Porcionar pastel")
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = DeepSeaBlue,
                     titleContentColor = Color.White,
-                    navigationIconContentColor = Color.White
+                    navigationIconContentColor = Color.White,
+                    actionIconContentColor = Color.White
                 )
             )
         },
@@ -261,6 +283,19 @@ fun FinishedProductStockListScreen(
         }
     }
     LoadingOverlay(visible = state.isLoading)
+    }
+
+    if (portioningOpen && user != null) {
+        val stockById = remember(state.rows) { state.rows.associate { it.productId to it.currentStock } }
+        PortioningDialog(
+            products = state.portionProducts,
+            stockOf = { stockById[it] ?: 0.0 },
+            isBusy = state.isPortioning,
+            onDismiss = { portioningOpen = false },
+            onConfirm = { portion, wholes, perWhole ->
+                viewModel.cutIntoPortions(companyId, portion, wholes, perWhole, user)
+            }
+        )
     }
 }
 
