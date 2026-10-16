@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.reseller
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -182,7 +184,7 @@ fun ResellerQuickOrderScreen(
     Scaffold(
         containerColor = WarmIvory,
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Nuevo pedido", fontWeight = FontWeight.SemiBold, color = Color.White) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {

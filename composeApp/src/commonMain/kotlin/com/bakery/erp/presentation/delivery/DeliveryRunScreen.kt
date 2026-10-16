@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.delivery
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -103,7 +105,7 @@ fun DeliveryRunScreen(
     Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Hoja de reparto", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {

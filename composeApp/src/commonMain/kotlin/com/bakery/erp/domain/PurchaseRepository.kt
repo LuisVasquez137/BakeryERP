@@ -4,9 +4,13 @@ import com.bakery.erp.domain.report.PurchaseSummary
 import com.bakery.erp.model.Purchase
 import com.bakery.erp.model.PurchaseLine
 import com.bakery.erp.model.PurchasePayment
+import kotlinx.coroutines.flow.Flow
 
 interface PurchaseRepository {
     suspend fun getPurchases(companyId: String): List<Purchase>
+
+    /** Lista de compras en vivo: otro equipo registra una y aparece sin reiniciar. */
+    fun observePurchases(companyId: String): Flow<List<Purchase>>
 
     /**
      * Compras del rango, agregadas para el reporte financiero. Ver [aggregatePurchases]:

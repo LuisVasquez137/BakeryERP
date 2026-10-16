@@ -1,5 +1,7 @@
 ﻿package com.bakery.erp.presentation.ingredients
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import com.bakery.erp.util.fmt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -124,7 +126,7 @@ fun IngredientListScreen(
     Box(Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Materias Primas", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {

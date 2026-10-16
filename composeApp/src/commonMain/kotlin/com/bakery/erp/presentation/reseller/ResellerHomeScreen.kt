@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.reseller
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -92,7 +94,7 @@ fun ResellerHomeScreen(
     Scaffold(
         containerColor = WarmIvory,
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = {
                     Text("Mi cuenta", fontWeight = FontWeight.SemiBold, color = Color.White)
                 },

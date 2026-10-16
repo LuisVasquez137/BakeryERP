@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.pos
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -80,7 +82,7 @@ fun CashSessionOpenScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Abrir caja", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {

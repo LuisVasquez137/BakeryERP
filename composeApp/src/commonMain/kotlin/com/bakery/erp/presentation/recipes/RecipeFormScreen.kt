@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.recipes
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import com.bakery.erp.util.fmt
 import com.bakery.erp.util.formatBakerWeight
 import com.bakery.erp.presentation.ingredients.IngredientPickerDialog
@@ -500,7 +502,7 @@ private fun RecipeFormContent(
     Box(Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = {
                     Text(
                         if (recipeId == null) "Nueva Receta" else "Editar Receta",

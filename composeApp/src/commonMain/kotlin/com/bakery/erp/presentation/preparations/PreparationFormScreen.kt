@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.preparations
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -237,7 +239,7 @@ private fun PreparationFormContent(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = {
                     Text(
                         if (existing == null) "Nueva preparación" else "Editar preparación",

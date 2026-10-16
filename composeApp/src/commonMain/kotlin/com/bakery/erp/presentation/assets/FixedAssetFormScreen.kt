@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.assets
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -189,7 +191,7 @@ private fun FixedAssetFormContent(
     Scaffold(
         containerColor = WarmIvory,
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text(if (isNew) "Nuevo activo" else "Editar activo", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {

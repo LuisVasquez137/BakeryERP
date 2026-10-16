@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.pos
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.animation.core.tween
@@ -349,7 +351,7 @@ fun POSScreen(
 
         Scaffold(
             topBar = {
-                TopAppBar(
+                BrandTopAppBar(
                     title = {
                         // `maxLines = 1` no es cosmético: el TopAppBar le cede el ancho a las
                         // acciones, y en teléfono vertical el título quedaba con espacio para

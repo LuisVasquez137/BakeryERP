@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.auth
 
+import com.bakery.erp.ui.StatusBarIcons
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,6 +44,8 @@ fun JoinOrgScreen(
     onNavigateBack: () -> Unit,
     viewModel: AuthViewModel
 ) {
+    // Fondo claro arriba: íconos del sistema oscuros (al salir se vuelven blancos).
+    StatusBarIcons(darkIcons = true)
     val state by viewModel.uiState.collectAsState()
     val isGoogleUser = state.user != null
 

@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.employees
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -180,7 +182,7 @@ fun ShiftClockInScreen(
     Scaffold(
         topBar = {
             if (kioskStep == KioskStep.LIST) {
-                TopAppBar(
+                BrandTopAppBar(
                     title = { Text("Asistencia", fontWeight = FontWeight.SemiBold) },
                     navigationIcon = {
                         IconButton(onClick = onNavigateBack) {

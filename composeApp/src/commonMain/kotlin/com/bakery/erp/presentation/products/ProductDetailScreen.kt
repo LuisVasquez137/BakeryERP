@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.products
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import com.bakery.erp.util.fmt
 import com.bakery.erp.util.gramsToOz
 import androidx.compose.foundation.background
@@ -125,7 +127,7 @@ fun ProductDetailScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = {
                     Text(
                         text = product?.name ?: "Detalle",

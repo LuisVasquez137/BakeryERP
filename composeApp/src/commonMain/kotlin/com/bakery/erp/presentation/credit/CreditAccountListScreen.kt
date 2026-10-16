@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.credit
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -105,7 +107,7 @@ fun CreditAccountListScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Créditos", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Volver") }

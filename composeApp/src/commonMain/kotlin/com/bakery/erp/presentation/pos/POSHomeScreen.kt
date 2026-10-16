@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.pos
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -55,7 +57,7 @@ fun POSHomeScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Punto de Venta", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {

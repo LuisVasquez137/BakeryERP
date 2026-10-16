@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.pricing
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -112,7 +114,7 @@ fun PriceListAdminScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Listas de precios", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {

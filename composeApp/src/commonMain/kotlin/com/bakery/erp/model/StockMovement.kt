@@ -10,5 +10,9 @@ data class StockMovement(
     val branchName: String = "",
     val reference: String = "",       // purchaseId u otra referencia
     val date: Long = 0L,
-    val notes: String? = null
+    val notes: String? = null,
+    /** Quién lo movió (el colaborador del PIN en un equipo de sucursal). Vacío = movimiento viejo. */
+    val createdByUserId: String = "",
+    val createdByUserName: String = "",
+    val createdByEmployeeId: String = ""
 )

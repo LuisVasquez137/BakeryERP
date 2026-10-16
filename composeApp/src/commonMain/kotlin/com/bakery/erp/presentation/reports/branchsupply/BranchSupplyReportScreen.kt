@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.reports.branchsupply
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
@@ -64,7 +66,7 @@ fun BranchSupplyReportScreen(
     Scaffold(
         containerColor = ReportSurface,
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Pedido vs. recibido", color = Color.White, fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {

@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.reports.production
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -60,7 +62,7 @@ fun ProductionReportScreen(
     Scaffold(
         containerColor = ReportSurface,
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Reporte de producción", color = Color.White, fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {

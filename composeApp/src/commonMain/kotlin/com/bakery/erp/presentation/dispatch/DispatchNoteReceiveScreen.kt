@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.dispatch
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import com.bakery.erp.model.isCompleteReason
 
 import com.bakery.erp.model.ReceptionReason
@@ -159,7 +161,7 @@ fun DispatchNoteReceiveScreen(
     Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Recibir despacho", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {

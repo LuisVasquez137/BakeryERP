@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.delivery
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -104,7 +106,7 @@ fun DeliveryHistoryScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Historial de entregas", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {

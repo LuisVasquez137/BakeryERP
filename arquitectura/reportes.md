@@ -70,8 +70,82 @@ Helpers compartidos en `presentation/reports/shared/ReportComponents.kt`: `Repor
 
 ### HomeScreen renovado
 - `HomeViewModel` combina sales/production/stock/dispatch/cash flows. KPIs vivos, gráfica de ventas reales de los últimos 7 días, banner de alertas filtrado por permisos del user.
-- Sección "Reportes" — chips a Ventas / Producción / Financiero, visibles solo según `VIEW_*_REPORT`.
-- Refresh manual vía `HomeViewModel.refresh(user)`; `ensureLoadedFor(user)` carga una vez al login.
+- Refresh manual vía `HomeViewModel.refresh(user)`; `ensureLoadedFor(user)` carga una vez por
+  llave `id|operatorEmployeeId|permisos` (no solo el id: en un equipo de sucursal el id es el de
+  la cuenta y no cambia al pasar de una persona a otra).
+
+### Home por persona (oct 2026)
+- **Gráficas**: solo con `VIEW_OPERATIONS_REPORT` (etiqueta "Ver gráficas del inicio"). Sin él
+  tampoco se piden las agregaciones. "Ver reporte" solo con `VIEW_SALES_REPORT`. Recordar: en un
+  equipo, el permiso efectivo = cuenta ∩ colaborador. Detalle en "Gráficas del inicio" abajo.
+- **Reportes** salieron del Home a un módulo propio (Administración → "Reportes",
+  `ReportsHubScreen`, ruta `reports`). Aparece si ve al menos uno (`User.canSeeAnyReport()`);
+  cada reporte conserva su `RequirePermission`.
+- **Accesos directos**: donde estaba la fila de reportes. Por PERSONA, no por cuenta:
+  `companies/{c}/homeShortcuts/{ownerKey}` con `ownerKey` = `emp_{employeeId}` (PIN o ficha ligada
+  por `Employee.userId`) o `user_{uid}` si no tiene ficha. Se guardan títulos de módulo y al pintar
+  se filtran por `hasModuleAccess`: quitar un permiso esconde el acceso sin limpiar nada. Ojo: los
+  títulos del lanzador son la llave; renombrar un módulo deja huérfanos los accesos guardados.
+  Cae en la regla general de colecciones (no hubo que tocar `firestore.rules`).
+- **Buscador de módulos**: arriba, bajo el saludo. Al escribir se esconden alertas, gráficas,
+  accesos y los módulos que no coinciden. Busca en título, subtítulo, sección y `ModuleItem.keywords`
+  (sinónimos sin tilde: "fiado" → Créditos); cada palabra debe aparecer, sin tildes ni stopwords.
+  Al agregar un módulo nuevo, ponerle sus palabras clave.
+- **Perfil**: tocar la foto (de la ficha del colaborador primero, luego la de la cuenta) abre nombre,
+  puesto y sucursal; puede corregir nombre, teléfono, teléfono adicional y correo
+  (`EmployeeRepository.updateEmployeeContact`, escritura parcial). El nombre nuevo pasa a la
+  sesión del equipo con `AuthViewModel.renameOperator` sin pedir PIN.
+
+### Gráficas del inicio (oct 2026)
+Reemplazan los KPIs y las 7 barras (que se veían todas iguales). Código: `home/HomeDashboard.kt`
+(modelo + cálculos puros) y `home/DashboardCharts.kt` (dibujo). Carga aparte de las alertas
+(`HomeViewModel.loadDashboard`, su propio job): ni unas esperan a las otras.
+- **Qué tablero ve cada quien lo decide el alcance, no una configuración**: quien ve UNA sola
+  sucursal recibe `HomeDashboard.Branch`; quien ve varias o todas, `HomeDashboard.Owner` filtrado a
+  sus sucursales. Una sucursal nueva tiene sus gráficas sin configurar nada.
+- **Dueño**: Hoy/Semana/Mes (cada período se pide una vez y se guarda). Línea actual vs. período
+  anterior; dona por sucursal con cambio por sucursal; dona de forma de pago + barra pan/restaurante.
+  Montos solo con `VIEW_SALES_VALUE`; sin él, porcentajes.
+- **Sucursal: nunca montos**, solo % y unidades (decisión del dueño). Anillo "hoy vs. el mismo día
+  de la semana pasada a esta hora", horas fuertes (hoy vs. promedio de los últimos 4 días iguales),
+  top 5 en unidades, pedido a planta de hoy (notas por destino, con líneas) y pedidos de clientes
+  de hoy/mañana. Consultas por sucursal: `getNotesForDestination`, `getOrdersForDeliveryBranch`.
+- **Comparar a la misma hora**: el último día del período anterior se recorta con su histograma por
+  hora (`salesUpTo`); sin eso, cada mañana el inicio diría que se vende menos. El cambio por sucursal
+  usa el mismo recorte repartido en proporción (los resúmenes no traen horas por sucursal).
+- **Espacio**: teléfono = carrusel de tarjetas del mismo alto (la siguiente se asoma); ≥600dp =
+  cuadrícula con todo a la vista.
+  El carrusel avanza solo cada 8 s (las alertas rotan cada 6, a propósito distinto), siempre hacia la
+  izquierda (páginas "infinitas"); se detiene 20 s al tocarlo o arrastrarlo y no avanza mientras se
+  desplaza el Home.
+- **Animación**: el Home no la espera; mientras cargan hay una tarjeta vacía del mismo alto. Cada
+  tarjeta se dibuja una vez (`rememberEntryProgress`, llaves guardadas con `rememberSaveable`): al
+  volver de otra pantalla no se repite; cambiar de período sí.
+
+### Pendientes, actualizar y cumpleaños (oct 2026)
+Código: `home/HomePersonal.kt` (cálculos puros) y `home/HomePersonalUi.kt`.
+- **"Pendientes para ti"**: no repite las alertas; es lo que le toca a LA PERSONA, con botón al
+  módulo (sin permiso al módulo se muestra sin botón). Fuentes: asistencia (si hoy está en
+  `workDays`, ya pasó `startTime` y no hay marca → "Marcar" solo con `MANAGE_EMPLOYEES`, si no "en el
+  kiosko"); pedido de planta ARRIVED ("Recibir") o IN_TRANSIT; su caja abierta desde otro día
+  (`openedByEmployeeId` con PIN, `cashierId` sin PIN); pedidos de clientes de hoy. Pedido de planta y
+  de clientes solo para quien NO ve todas las sucursales (al dueño le llegan como alertas).
+- **Deslizar para actualizar** (`PullToRefreshBox` → `HomeViewModel.pullToRefresh`) recarga alertas,
+  gráficas, pendientes y cumpleaños. "Actualizado hace X min" bajo el saludo; también se toca.
+- **Cumpleaños**: tarjeta "Esta semana cumplen años" (lunes a domingo, fotos encimadas, "¡Hoy cumple
+  años…!" si toca); al tocarla, diálogo con todos los del mes por día. Sin cumpleaños en la semana
+  queda una línea "Cumpleaños de octubre · N"; sin ninguno no ocupa espacio. `birthDate` se lee en
+  UTC (el selector guarda medianoche UTC); 29 feb se celebra el 28 en años no bisiestos. Solo
+  colaboradores activos.
+  Son de TODA la empresa y los ve cualquiera (sin permiso), con la sucursal de cada quien. Módulo
+  "Cumpleaños" (Administración, ruta `birthdays`, `BirthdaysScreen`): el año mes a mes, abre en el
+  mes en curso; usa `Birthdays.allYear` ya cargado por el Home. Si el mes está vacío, la línea del
+  Home lleva a esa pantalla; el diálogo del mes también tiene "Ver todo el año".
+
+### Barra de estado (oct 2026)
+Íconos del sistema blancos por defecto (`enableEdgeToEdge(SystemBarStyle.dark(...))`); las pantallas
+de auth piden oscuros con `StatusBarIcons(darkIcons = true)` y al salir vuelven a blancos
+(`DisposableEffect`). Antes el splash los dejaba negros toda la sesión.
 
 ### Banner de alertas (`presentation/home/AlertsBanner.kt`)
 Banner rotatorio cada 6s entre alertas. Tap → navega a módulo correspondiente. Pager dots si hay >1. Color de borde por severity. Si `alerts.isEmpty()` no se renderiza.

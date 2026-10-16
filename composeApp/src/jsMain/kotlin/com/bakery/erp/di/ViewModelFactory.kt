@@ -221,7 +221,9 @@ actual fun createAppViewModels(): AppViewModels {
         spotCashCheck = SpotCashCheckViewModel(spotCheckRepo, cashSessionRepo, branchRepo),
         home = HomeViewModel(
             authRepo, saleRepo, productionRepo, branchRepo,
-            ingredientRepo, fixedAssetRepo, dispatchRepo, cashSessionRepo, purchaseRepo, creditRepo
+            ingredientRepo, fixedAssetRepo, dispatchRepo, cashSessionRepo, purchaseRepo, creditRepo,
+            employeeRepo, com.bakery.erp.data.FirebaseHomeShortcutRepository(firestore),
+            customerOrderRepo, attendanceRepo
         ),
         salesReport = SalesReportViewModel(saleRepo, branchRepo),
         productionReport = ProductionReportViewModel(productionRepo, dispatchRepo, branchRepo, plantIssueRepo),

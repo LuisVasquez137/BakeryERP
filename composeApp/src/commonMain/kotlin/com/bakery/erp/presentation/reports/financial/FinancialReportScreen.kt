@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.reports.financial
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -57,7 +59,7 @@ fun FinancialReportScreen(
     Scaffold(
         containerColor = ReportSurface,
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Estado financiero", color = Color.White, fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {

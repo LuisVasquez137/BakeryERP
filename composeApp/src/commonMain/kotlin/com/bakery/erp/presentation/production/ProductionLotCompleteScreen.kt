@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.production
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -161,7 +163,7 @@ fun ProductionLotCompleteScreen(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = {
                     Column {
                         Text(

@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.production
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -432,7 +434,7 @@ fun ProductionLotDetailScreen(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = {
                     // Compactamos toda la info del lote en el header (sucursal,
                     // turno y estado) para no gastar espacio en una card encima
@@ -594,6 +596,20 @@ fun ProductionLotDetailScreen(
             // Cronómetro del turno: visible mientras el lote esté en producción.
             if (lot.status == ProductionLotStatus.IN_PROGRESS && lot.startedAt != null) {
                 ElapsedTimeBanner(startedAtMillis = lot.startedAt)
+            }
+            // Quién armó, inició y cerró el lote (en la planta, el panadero que entró con su PIN).
+            val lotPeople = listOfNotNull(
+                lot.createdByUserName.takeIf { it.isNotBlank() }?.let { "Armó: $it" },
+                lot.startedByUserName.takeIf { it.isNotBlank() }?.let { "Inició: $it" },
+                lot.completedByUserName.takeIf { it.isNotBlank() }?.let { "Cerró: $it" }
+            )
+            if (lotPeople.isNotEmpty()) {
+                Text(
+                    lotPeople.joinToString(" · "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
+                )
             }
             // Fijo arriba (no dentro del scroll): si el panadero está viendo otra
             // masa cuando suena, igual sabe cuál es sin tener que buscarla.
@@ -903,14 +919,16 @@ fun ProductionLotDetailScreen(
                                 lotId = lot.id,
                                 wasteByLine = adjustment.quantityByLineId,
                                 wasteReason = adjustment.reason,
-                                wasteNotes = adjustment.notes
+                                wasteNotes = adjustment.notes,
+                                actorName = user?.displayName.orEmpty()
                             )
                             AdjustmentKind.EXTRA -> viewModel.registerProductionAdjustment(
                                 companyId = companyId,
                                 lotId = lot.id,
                                 extraByLine = adjustment.quantityByLineId,
                                 extraReason = adjustment.reason,
-                                extraNotes = adjustment.notes
+                                extraNotes = adjustment.notes,
+                                actorName = user?.displayName.orEmpty()
                             )
                         }
                         adjustSheetTarget = null
@@ -2396,6 +2414,13 @@ private fun RegisterProductionSheet(
                                             style = MaterialTheme.typography.labelSmall,
                                             color = Color.Gray
                                         )
+                                        // Qué se anotó y quién lo anotó (la nota lleva el nombre).
+                                        if (line.extraQuantity > 0.0 && line.extraNotes.isNotBlank()) {
+                                            Text("De más: ${line.extraNotes}", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                        }
+                                        if (line.wasteQuantity > 0.0 && line.wasteNotes.isNotBlank()) {
+                                            Text("Pérdida: ${line.wasteNotes}", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                        }
                                     }
                                     if (perTray <= 0) {
                                         Column(horizontalAlignment = Alignment.End) {

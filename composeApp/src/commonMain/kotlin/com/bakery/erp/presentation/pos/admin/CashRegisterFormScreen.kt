@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.pos.admin
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -76,7 +78,7 @@ fun CashRegisterFormScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text(if (isEdit) "Editar caja" else "Nueva caja", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {

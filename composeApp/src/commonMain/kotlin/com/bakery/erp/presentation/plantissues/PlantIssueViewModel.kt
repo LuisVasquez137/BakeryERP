@@ -317,7 +317,9 @@ class PlantIssueViewModel(
                     "Salida anulada: ${issue.kardexNote}" +
                         (if (actorName.isNotBlank()) " · $actorName" else "")
                 else issue.kardexNote +
-                    (if (issue.issuedByUserName.isNotBlank()) " · ${issue.issuedByUserName}" else "")
+                    (if (issue.issuedByUserName.isNotBlank()) " · ${issue.issuedByUserName}" else ""),
+                createdByUserName = if (isReversal) actorName else issue.issuedByUserName,
+                createdByUserId = if (isReversal) "" else issue.issuedByUserId
             )
         )
     }

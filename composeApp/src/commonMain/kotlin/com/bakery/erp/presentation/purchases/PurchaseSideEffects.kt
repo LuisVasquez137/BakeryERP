@@ -85,6 +85,9 @@ internal fun expensesForPurchase(
                 // A quién le corresponde, que no es lo mismo que la sucursal donde se anotó:
                 // la gasolina del camión se paga en la planta y es de Reparto.
                 costCenter = line.costCenter,
+                // Lo anotó quien registró la compra (el colaborador, en un equipo de sucursal).
+                createdByUserId = purchase.receivedById,
+                createdByUserName = purchase.receivedByName,
                 createdAt = purchase.date
             )
         }

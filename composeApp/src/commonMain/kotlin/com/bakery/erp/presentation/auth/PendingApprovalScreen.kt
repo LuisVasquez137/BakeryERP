@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.auth
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -44,7 +46,7 @@ fun PendingApprovalScreen(viewModel: AuthViewModel) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = {
                     Text(
                         if (deactivated) "Acceso desactivado" else "Esperando aprobación",

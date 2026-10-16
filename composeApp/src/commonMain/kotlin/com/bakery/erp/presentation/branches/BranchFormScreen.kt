@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.branches
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import com.bakery.erp.util.fmtMoney
 import com.bakery.erp.util.fmtTrim
 import androidx.compose.foundation.clickable
@@ -192,7 +194,7 @@ fun BranchFormScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = {
                     Text(
                         if (branchId == null) "Nueva Sucursal" else "Editar Sucursal",

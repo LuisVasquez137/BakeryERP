@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.production
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import com.bakery.erp.util.fmt
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -169,7 +171,7 @@ fun ProductionOrderListScreen(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Pedidos de Producción", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {

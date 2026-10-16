@@ -125,6 +125,26 @@ Auditoría de partida: `functions/tools/inspect-users-employees.js` (solo lectur
   cierre (`receiverMustConfirm`; no se pide si se la entrega a sí misma).
 - Sin cambiar todavía (solo el nombre es de la persona): producción, despacho, compras,
   conteos de pan, cuadres sorpresa, activos, pagos y anticipos de pedidos. 
+
+### Quién lo hizo — auditoría (oct 2026)
+Regla: el nombre de autor sale SIEMPRE de `authState.user` (el efectivo): con PIN es el
+colaborador; sin PIN, la cuenta. Nunca de `accountUser` ni de Firebase Auth. Revisado módulo por
+módulo; lo que faltaba:
+- Guardar: `Expense.createdBy*` (form y gastos que nacen de una compra), `StockMovement.createdBy*`
+  (Kardex de insumos, los 7 caminos), `ProductionLot.startedBy*`/`completedBy*`
+  (`updateLotStatus`/`completeLot` reciben `by`), merma/pan de más firman la nota con el nombre.
+- Mostrar (ya se guardaba): pedido de cliente (lista + detalle + quién recibió cada pago),
+  compras (lista + quién hizo cada abono), lotes de preparación, historial de activos, conteos de
+  pan, Kardex de insumos, armó/inició/cerró en el detalle del lote.
+- Arreglo de paso: editar un gasto borraba los campos que el form no muestra (set() sin arrastrar).
+- Sin autor todavía: ediciones de catálogo (productos, recetas, insumos, precios, proveedores)
+  y cambios de estado del pedido de cliente.
+
+### Bienvenida (oct 2026)
+Primera entrada con PIN del día → `WelcomeOverlay` encima del Home ("¡Bienvenida!"/"¡Bienvenido!"
+según `Employee.gender`; neutro si no hay). El día se marca en la ficha (`lastWelcomeDay`, vía
+`markFirstEntryOfDay`) para que no se repita al cambiar de tablet; consulta con tope de 1.5 s y,
+sin red, se entra sin saludo.
 - Caja ajena: quien tiene `MANAGE_DAILY_CASH_CLOSE` ve "Cerrar caja" (en vez de "En uso") en
   la caja que otra persona dejó abierta, y la cierra o la entrega.
 - Tras entregar la gaveta en un equipo, el equipo pasa directo a quien la recibió (ya puso

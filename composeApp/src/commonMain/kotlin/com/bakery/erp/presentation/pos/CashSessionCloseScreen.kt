@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.pos
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import com.bakery.erp.domain.PIN_LENGTH
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -144,7 +146,7 @@ fun CashSessionCloseScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Cerrar caja", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {

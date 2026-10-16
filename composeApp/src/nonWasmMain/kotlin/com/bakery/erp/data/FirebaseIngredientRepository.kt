@@ -483,7 +483,10 @@ class FirebaseIngredientRepository(
         "branchName" to branchName,
         "reference" to reference,
         "date" to date,
-        "notes" to notes
+        "notes" to notes,
+        "createdByUserId" to createdByUserId,
+        "createdByUserName" to createdByUserName,
+        "createdByEmployeeId" to createdByEmployeeId
     )
 
     private fun DocumentSnapshot.toStockMovement() = StockMovement(
@@ -496,6 +499,9 @@ class FirebaseIngredientRepository(
         branchName = get<String?>("branchName") ?: "",
         reference = get<String?>("reference") ?: "",
         date = readTimestampAsMillis("date"),
-        notes = get<String?>("notes")
+        notes = get<String?>("notes"),
+        createdByUserId = runCatching { get<String?>("createdByUserId") }.getOrNull() ?: "",
+        createdByUserName = runCatching { get<String?>("createdByUserName") }.getOrNull() ?: "",
+        createdByEmployeeId = runCatching { get<String?>("createdByEmployeeId") }.getOrNull() ?: ""
     )
 }

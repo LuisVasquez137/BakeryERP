@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.products
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import com.bakery.erp.util.fmt
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -123,7 +125,7 @@ fun ProductListScreen(
     Box(Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Productos Terminados", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {

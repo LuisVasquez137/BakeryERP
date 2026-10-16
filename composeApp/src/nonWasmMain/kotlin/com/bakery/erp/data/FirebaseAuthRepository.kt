@@ -17,8 +17,9 @@ import dev.gitlive.firebase.firestore.FieldValue
 import dev.gitlive.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 
 class FirebaseAuthRepository(
@@ -40,27 +41,33 @@ class FirebaseAuthRepository(
             if (firebaseUser == null) {
                 flowOf(AuthState.Unauthenticated)
             } else {
-                flow<AuthState> {
-                    val uid = firebaseUser.uid
-                    val doc = usersCol().document(uid).get()
+                // Se ESCUCHA el perfil, no se lee una vez: los equipos de sucursal pasan días
+                // con la app abierta, y desactivar una cuenta (o cambiarle permisos) no les
+                // llegaba hasta reiniciar. El propio perfil siempre se puede leer (reglas),
+                // así que la desactivación sí llega y la app pasa a "cuenta desactivada".
+                val uid = firebaseUser.uid
+                usersCol().document(uid).snapshots.map<_, AuthState> { doc ->
                     if (doc.exists) {
-                        emit(AuthState.Authenticated(backfillGooglePhoto(uid, doc.toDomain(), firebaseUser.photoURL)))
+                        AuthState.Authenticated(backfillGooglePhoto(uid, doc.toDomain(), firebaseUser.photoURL))
                     } else {
                         // Usuario autenticado en Firebase Auth pero sin perfil Firestore aún.
                         // Puede ser un nuevo usuario Google en mitad del onboarding, o una
                         // condición de carrera donde authStateChanged se disparó antes de
                         // que se escribiera el doc. Emitir Authenticated(minimal) para que
                         // needsOnboarding=true en lugar de desloguear al usuario.
-                        emit(AuthState.Authenticated(User(
+                        AuthState.Authenticated(User(
                             id = uid, orgId = "",
                             email = firebaseUser.email ?: "",
                             displayName = firebaseUser.displayName ?: "",
                             role = UserRole.OWNER, branchIds = emptyList(),
                             isActive = true, isApproved = true,
                             photoUrl = firebaseUser.photoURL
-                        )))
+                        ))
                     }
-                }.catch { e -> emit(AuthState.Error(e.message ?: "Error desconocido")) }
+                }
+                    // Cambios que no tocan al usuario (metadatos del caché) no re-emiten.
+                    .distinctUntilChanged()
+                    .catch { e -> emit(AuthState.Error(e.message ?: "Error desconocido")) }
             }
         }
 

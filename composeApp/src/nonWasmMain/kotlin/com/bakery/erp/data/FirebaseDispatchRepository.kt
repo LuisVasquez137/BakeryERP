@@ -74,6 +74,20 @@ class FirebaseDispatchRepository(
             .filter { it.productionDate in fromMillis..untilMillis }
             .sortedByDescending { it.productionDate }
 
+    override suspend fun getNotesForDestination(
+        companyId: String, destinationBranchId: String, fromMillis: Long, untilMillis: Long
+    ): List<DispatchNote> = coroutineScope {
+        notesCol(companyId).where { "destinationBranchId" equalTo destinationBranchId }.get().documents
+            .map { it.toNote() }
+            .filter { it.productionDate >= fromMillis && it.productionDate < untilMillis }
+            .map { note ->
+                async {
+                    val lines = linesCol(companyId, note.id).get().documents.map { it.toLine() }
+                    note.copy(lines = lines, lineCount = lines.size)
+                }
+            }.awaitAll()
+    }
+
     override fun observeNotes(
         companyId: String, fromMillis: Long, untilMillis: Long
     ): Flow<List<DispatchNote>> =

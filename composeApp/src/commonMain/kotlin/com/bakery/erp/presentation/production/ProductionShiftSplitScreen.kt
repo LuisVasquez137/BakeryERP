@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.production
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -185,7 +187,7 @@ fun ProductionShiftSplitScreen(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Repartir turnos", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {

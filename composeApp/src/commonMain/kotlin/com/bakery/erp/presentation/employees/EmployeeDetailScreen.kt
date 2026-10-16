@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.employees
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.model.Permission
 import androidx.compose.material3.ScrollableTabRow
@@ -189,7 +191,7 @@ fun EmployeeDetailScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = {
                     Text(
                         employee?.name ?: "Colaborador",

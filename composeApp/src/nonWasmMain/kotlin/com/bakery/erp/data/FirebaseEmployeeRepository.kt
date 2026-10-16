@@ -53,6 +53,33 @@ class FirebaseEmployeeRepository(
         )
     }
 
+    override suspend fun markFirstEntryOfDay(companyId: String, employeeId: String, day: String): Boolean {
+        val ref = col(companyId).document(employeeId)
+        val last = runCatching { ref.get().get<String?>("lastWelcomeDay") }.getOrNull()
+        if (last == day) return false
+        ref.update(firestoreSafeOf("lastWelcomeDay" to day))
+        return true
+    }
+
+    override suspend fun updateEmployeeContact(
+        companyId: String,
+        employeeId: String,
+        name: String,
+        phone: String,
+        phoneAux: String,
+        email: String
+    ) {
+        col(companyId).document(employeeId).update(
+            firestoreSafeOf(
+                "name" to name,
+                "phone" to phone,
+                "phoneAux" to phoneAux,
+                "email" to email,
+                "updatedAt" to Clock.System.now().toEpochMilliseconds()
+            )
+        )
+    }
+
     override suspend fun deleteEmployee(companyId: String, employeeId: String) {
         col(companyId).document(employeeId).update(mapOf(
             "active" to false,

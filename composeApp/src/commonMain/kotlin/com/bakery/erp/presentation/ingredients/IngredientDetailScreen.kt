@@ -1,5 +1,7 @@
 ﻿package com.bakery.erp.presentation.ingredients
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import com.bakery.erp.util.fmt
 import com.bakery.erp.util.fmtPercentage
 import com.bakery.erp.util.gramsToOz
@@ -148,7 +150,7 @@ fun IngredientDetailScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = {
                     Text(
                         text = ingredient?.name ?: "Detalle",
@@ -848,6 +850,16 @@ private fun KardexRow(mov: StockMovement, ingredient: Ingredient) {
         if (!mov.notes.isNullOrBlank()) {
             Text(
                 text = mov.notes,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                modifier = Modifier.padding(top = 2.dp)
+            )
+        }
+        // Los vales de planta ya traen el nombre en la nota; no repetirlo.
+        if (mov.createdByUserName.isNotBlank() && mov.notes?.contains(mov.createdByUserName) != true) {
+            Text(
+                text = "Por ${mov.createdByUserName}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,

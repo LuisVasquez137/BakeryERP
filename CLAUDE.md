@@ -165,7 +165,7 @@ CRUD perfil + documentos + historial + nómina. Modo kiosko con selfie automáti
 
 ## Paleta (resumen — detalle en `arquitectura/decisiones-y-paleta.md`)
 
-`ui/theme/AppTheme.kt::BrandColors` es la **única** fuente de color; nada de `Color(0xFF...)` en pantallas. `Primary` #005B8D (estructura), `Accent` #FE7F03 (estado/atención, **siempre relleno, nunca texto**; encima va `OnAccent`), `AccentDeep` #A85200 (único naranja admisible como texto, o relleno con letra blanca), verde = hecho, rojo = roto. Chips de estado con `BrandChip(text, tone)`; ningún par baja de 4.5:1 (`BrandChipContrastTest`).
+`ui/theme/AppTheme.kt::BrandColors` es la **única** fuente de color; nada de `Color(0xFF...)` en pantallas. `Primary` #005B8D (estructura), `Accent` #FE7F03 (estado/atención, **siempre relleno, nunca texto**; encima va `OnAccent`), `AccentDeep` #A85200 (único naranja admisible como texto, o relleno con letra blanca), verde = hecho, rojo = roto. Chips de estado con `BrandChip(text, tone)`; ningún par baja de 4.5:1 (`BrandChipContrastTest`). Barra superior siempre `ui/BrandTopAppBar` (degradado de marca), nunca `TopAppBar` directo.
 
 ---
 

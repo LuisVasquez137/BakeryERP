@@ -117,6 +117,14 @@ data class Expense(
      * sucursal de [branchId], que es lo que significaban todos los gastos anteriores al campo.
      */
     val costCenter: String = CostCenter.BRANCH,
+    /**
+     * Quién lo anotó. En un equipo de sucursal el nombre es el del colaborador que entró
+     * con su PIN (la cuenta es la misma para todas). Vacío = gasto anterior al campo o
+     * generado por el sistema (costos fijos del mes).
+     */
+    val createdByUserId: String = "",
+    val createdByUserName: String = "",
+    val createdByEmployeeId: String = "",
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L
 )

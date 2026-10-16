@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.cashaudit
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -91,7 +93,7 @@ fun CashAuditScreen(
     Scaffold(
         containerColor = BrandColors.Ivory,
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Bitácora de cajas", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Volver") }

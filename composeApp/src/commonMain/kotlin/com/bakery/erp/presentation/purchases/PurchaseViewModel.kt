@@ -85,7 +85,9 @@ import com.bakery.erp.util.fmt
 import com.bakery.erp.util.fmtMoney
 import kotlin.random.Random
 import kotlin.time.Clock
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -223,21 +225,35 @@ class PurchaseViewModel(
     private val _uiState = MutableStateFlow(PurchaseUiState())
     val uiState: StateFlow<PurchaseUiState> = _uiState.asStateFlow()
 
+    private var purchasesJob: Job? = null
+
+    /**
+     * Escucha la lista mientras la pantalla está abierta: una compra registrada (o abonada,
+     * o borrada) en otro equipo aparece sola. Antes era una lectura única y el otro equipo
+     * no la veía hasta reiniciar la app. Lo suelta [stopObservingPurchases].
+     */
     fun loadPurchases(companyId: String, currentUser: User) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, error = null) }
-            runCatching { purchaseRepository.getPurchases(companyId) }
-                .onSuccess { all ->
+        purchasesJob?.cancel()
+        // Solo el primer llenado muestra el spinner; si ya hay lista, se refresca encima.
+        _uiState.update { it.copy(isLoading = it.purchases.isEmpty(), error = null) }
+        purchasesJob = viewModelScope.launch {
+            purchaseRepository.observePurchases(companyId)
+                .catch { e -> _uiState.update { s -> s.copy(isLoading = false, error = e.message) } }
+                .collect { all ->
                     val filtered = all.filter { currentUser.canAccessBranch(it.branchId) }
                     _uiState.update { it.copy(purchases = filtered, isLoading = false) }
                 }
-                .onFailure { _uiState.update { s -> s.copy(isLoading = false, error = it.message) } }
         }
         // Los proveedores alimentan el filtro por proveedor de la lista, no solo el formulario.
         viewModelScope.launch {
             val suppliers = runCatching { supplierRepository.getSuppliers(companyId) }.getOrElse { emptyList() }
             _uiState.update { if (it.suppliers.isEmpty()) it.copy(suppliers = suppliers) else it }
         }
+    }
+
+    fun stopObservingPurchases() {
+        purchasesJob?.cancel()
+        purchasesJob = null
     }
 
     fun loadPurchaseDetail(companyId: String, purchaseId: String) {
@@ -695,7 +711,10 @@ class PurchaseViewModel(
                     reference = purchase.id,
                     date = Clock.System.now().toEpochMilliseconds(),
                     notes = "Corrección de la compra " +
-                        (purchase.invoiceNumber?.let { "Nº $it" } ?: "a ${purchase.supplierName}")
+                        (purchase.invoiceNumber?.let { "Nº $it" } ?: "a ${purchase.supplierName}"),
+                        createdByUserId = currentUser.id,
+                        createdByUserName = currentUser.displayName.ifBlank { currentUser.email },
+                        createdByEmployeeId = currentUser.operatorEmployeeId
                 )
             )
         }
@@ -2097,7 +2116,10 @@ class PurchaseViewModel(
                     branchId = branchId,
                     branchName = branchName,
                     reference = purchase.id,
-                    date = purchase.date
+                    date = purchase.date,
+                        createdByUserId = currentUser.id,
+                        createdByUserName = currentUser.displayName.ifBlank { currentUser.email },
+                        createdByEmployeeId = currentUser.operatorEmployeeId
                 )
             )
         }

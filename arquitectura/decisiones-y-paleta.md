@@ -49,6 +49,13 @@ implementación propia (activos, empleados, productos, recetas, insumos, prepara
 patrón "color al 15% de fondo + color pleno de texto", que es legible; migrarlos es limpieza
 pendiente, no un bug.
 
+### Encabezado degradado: `ui/BrandTopAppBar.kt` (oct 2026)
+Todas las pantallas usan `BrandTopAppBar` (misma firma que `TopAppBar`). Si piden el azul de marca
+se pinta degradado `PrimaryDark → Primary → HeaderBright` con un brillo `ChartSky` leve en la
+esquina derecha; cualquier otro color se respeta. Los tonos son oscuros a propósito: el título y
+los iconos son blancos y un celeste claro los dejaría sin contraste. Pantalla nueva = usar
+`BrandTopAppBar`, nunca `TopAppBar` directo; el tono se ajusta solo en `BrandHeaderBrush`.
+
 ### Color por sección en el lanzador del Home
 
 `ModuleSection` lleva `ink` + `container` y **cada `ModuleItem` los hereda** — el color vive en la

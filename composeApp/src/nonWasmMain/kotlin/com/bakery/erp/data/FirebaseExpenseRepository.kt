@@ -111,6 +111,9 @@ class FirebaseExpenseRepository(
         "cashRegisterName" to cashRegisterName,
         "photoUrl" to photoUrl,
         "costCenter" to costCenter,
+        "createdByUserId" to createdByUserId,
+        "createdByUserName" to createdByUserName,
+        "createdByEmployeeId" to createdByEmployeeId,
         "createdAt" to if (createdAt == 0L) Clock.System.now().toEpochMilliseconds() else createdAt,
         "updatedAt" to Clock.System.now().toEpochMilliseconds()
     )
@@ -134,6 +137,9 @@ class FirebaseExpenseRepository(
         costCenter = CostCenter.normalize(runCatching { get<String?>("costCenter") }.getOrNull()),
         sourcePurchaseId = runCatching { get<String?>("sourcePurchaseId") }.getOrNull() ?: "",
         sourcePurchaseLineId = runCatching { get<String?>("sourcePurchaseLineId") }.getOrNull() ?: "",
+        createdByUserId = runCatching { get<String?>("createdByUserId") }.getOrNull() ?: "",
+        createdByUserName = runCatching { get<String?>("createdByUserName") }.getOrNull() ?: "",
+        createdByEmployeeId = runCatching { get<String?>("createdByEmployeeId") }.getOrNull() ?: "",
         createdAt = readTimestampAsMillis("createdAt"),
         updatedAt = readTimestampAsMillis("updatedAt")
     )

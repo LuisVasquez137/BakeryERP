@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.expenses
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import com.bakery.erp.util.fmt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -107,7 +109,7 @@ fun ExpenseListScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Gastos", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
@@ -352,7 +354,7 @@ private fun ExpenseListCard(expense: Expense, onClick: () -> Unit) {
                 Text(
                     // Generales y Reparto se nombran en vez de la sucursal donde se anotaron:
                     // es lo que decide en qué renglón del resultado cae.
-                    text = listOf(costCenterReportName(expense.costCenter, expense.branchName), origen)
+                    text = listOf(costCenterReportName(expense.costCenter, expense.branchName), origen, expense.createdByUserName)
                         .filter { it.isNotEmpty() }
                         .joinToString(" · "),
                     style = MaterialTheme.typography.labelSmall,

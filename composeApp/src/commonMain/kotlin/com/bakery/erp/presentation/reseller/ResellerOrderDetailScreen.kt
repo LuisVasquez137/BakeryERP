@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.reseller
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -85,7 +87,7 @@ fun ResellerOrderDetailScreen(
     Scaffold(
         containerColor = WarmIvory,
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = {
                     Text("Detalle de pedido", fontWeight = FontWeight.SemiBold, color = Color.White)
                 },

@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.employees
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -86,7 +88,7 @@ fun JobPositionFormScreen(
     if (!isNew && state.isDetailLoading) {
         Scaffold(
             topBar = {
-                TopAppBar(
+                BrandTopAppBar(
                     title = { Text("Editar Puesto", fontWeight = FontWeight.SemiBold) },
                     navigationIcon = {
                         IconButton(onClick = onNavigateBack) {
@@ -161,7 +163,7 @@ private fun JobPositionFormContent(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = {
                     Text(
                         if (isNew) "Nuevo Puesto" else "Editar Puesto",

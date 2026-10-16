@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.preparationbatches
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -119,7 +121,7 @@ fun PreparationBatchListScreen(
     Box(Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Lotes de Preparación", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
@@ -213,7 +215,8 @@ private fun BatchCard(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = "${batch.branchName} · ${formatPurchaseDate(batch.producedAt)}",
+                    text = "${batch.branchName} · ${formatPurchaseDate(batch.producedAt)}" +
+                        batch.producedByUserName.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty(),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1

@@ -58,6 +58,16 @@ object BrandColors {
     val SuccessSoft = Color(0xFFE8F5E9)
     val Danger      = Color(0xFFC62828)
     val DangerSoft  = Color(0xFFFDECEA)
+
+    // ── Gráficas del inicio ──────────────────────────────────────────────────
+    // Rebanadas de dona después de Primary, Accent y Teal: un azul cielo que se distingue
+    // del primario sin pelear con él, y un gris azulado para "Otras".
+    val ChartSky   = Color(0xFF7FB3D5)
+    val ChartMuted = Color(0xFFB8C4CD)
+    val ChartTrack = Color(0xFFEEF1F4) // fondo de anillos y barras
+
+    // Extremo vivo del degradado del encabezado (ver ui/BrandTopAppBar.kt). Blanco encima: 5.4:1.
+    val HeaderBright = Color(0xFF0A6FA6)
 }
 
 private val BakeryLightColorScheme = lightColorScheme(

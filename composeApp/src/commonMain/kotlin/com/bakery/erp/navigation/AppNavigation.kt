@@ -489,6 +489,8 @@ sealed class Screen(val route: String) {
     }
 
     // Reportes
+    object ReportsHub       : Screen("reports")
+    object Birthdays        : Screen("birthdays")
     object SalesReport      : Screen("reports/sales")
     object ProductionReport : Screen("reports/production")
     object FinancialReport  : Screen("reports/financial")
@@ -872,13 +874,9 @@ fun AppNavigation(
                 onNavigateToDailyCashClose = { navController.navigate(Screen.DailyCashCloseList.route) },
                 onNavigateToSpotCashCheck = { navController.navigate(Screen.SpotCashCheckList.route) },
                 onNavigateToSalesReport = { navController.navigate(Screen.SalesReport.route) },
-                onNavigateToProductionReport = { navController.navigate(Screen.ProductionReport.route) },
-                onNavigateToFinancialReport = { navController.navigate(Screen.FinancialReport.route) },
-                onNavigateToBranchSupplyReport = { navController.navigate(Screen.BranchSupplyReport.route) },
-                onNavigateToProductCostReport = { navController.navigate(Screen.ProductCostReport.route) },
-                onNavigateToStandardCostReport = { navController.navigate(Screen.StandardCostReport.route) },
-                onNavigateToDeliveryCostReport = { navController.navigate(Screen.DeliveryCostReport.route) },
-                onNavigateToBranchResultReport = { navController.navigate(Screen.BranchResultReport.route) },
+                onNavigateToReports = { navController.navigate(Screen.ReportsHub.route) },
+                onNavigateToBirthdays = { navController.navigate(Screen.Birthdays.route) },
+                onOperatorRenamed = viewModel::renameOperator,
                 onNavigateToCustomerOrders = { navController.navigate(Screen.CustomerOrderList.route) },
                 onNavigateToOrganizationSettings = { navController.navigate(Screen.OrganizationSettings.route) },
                 onNavigateToFelSetup = { navController.navigate(Screen.FelSetup.route) },
@@ -2440,7 +2438,41 @@ fun AppNavigation(
             }
         }
 
+        // ── Cumpleaños (todos lo ven: es del equipo, no un dato sensible) ─────
+        composable(Screen.Birthdays.route) {
+            com.bakery.erp.presentation.home.BirthdaysScreen(
+                homeViewModel = homeViewModel,
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+
         // ── Reportes ─────────────────────────────────────────────────────────
+        composable(Screen.ReportsHub.route) {
+            RequirePermission(
+                state.user,
+                Permission.VIEW_SALES_REPORT, Permission.VIEW_PRODUCTION_REPORT,
+                Permission.VIEW_FINANCIAL_REPORT, Permission.VIEW_BRANCH_SUPPLY_REPORT,
+                onBack = { navController.popBackStack() }
+            ) {
+                com.bakery.erp.presentation.reports.ReportsHubScreen(
+                    user = state.user,
+                    onNavigateBack = { navController.popBackStack() },
+                    onOpenReport = { key ->
+                        val route = when (key) {
+                            com.bakery.erp.presentation.reports.ReportKey.SALES -> Screen.SalesReport.route
+                            com.bakery.erp.presentation.reports.ReportKey.PRODUCTION -> Screen.ProductionReport.route
+                            com.bakery.erp.presentation.reports.ReportKey.BRANCH_SUPPLY -> Screen.BranchSupplyReport.route
+                            com.bakery.erp.presentation.reports.ReportKey.FINANCIAL -> Screen.FinancialReport.route
+                            com.bakery.erp.presentation.reports.ReportKey.BRANCH_RESULT -> Screen.BranchResultReport.route
+                            com.bakery.erp.presentation.reports.ReportKey.PRODUCT_COST -> Screen.ProductCostReport.route
+                            com.bakery.erp.presentation.reports.ReportKey.STANDARD_COST -> Screen.StandardCostReport.route
+                            com.bakery.erp.presentation.reports.ReportKey.DELIVERY_COST -> Screen.DeliveryCostReport.route
+                        }
+                        navController.navigate(route)
+                    }
+                )
+            }
+        }
         composable(Screen.SalesReport.route) {
             RequirePermission(state.user, Permission.VIEW_SALES_REPORT,
                 onBack = { navController.popBackStack() }) {
@@ -2767,6 +2799,14 @@ fun AppNavigation(
                 viewModel = vms.operatorLock,
                 onSession = viewModel::startOperatorSession,
                 onSignOutDevice = viewModel::signOut
+            )
+        }
+        // Primera entrada del día con PIN: saludo encima del Home.
+        val welcome by vms.operatorLock.welcome.collectAsState()
+        welcome?.let { session ->
+            com.bakery.erp.presentation.operator.WelcomeOverlay(
+                session = session,
+                onFinished = vms.operatorLock::dismissWelcome
             )
         }
 

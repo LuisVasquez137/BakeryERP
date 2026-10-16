@@ -7,6 +7,7 @@ import com.bakery.erp.model.ProductionLotLine
 import com.bakery.erp.model.ProductionOrder
 import com.bakery.erp.model.ProductionOrderLine
 import com.bakery.erp.model.ProductionShift
+import com.bakery.erp.model.User
 import kotlinx.coroutines.flow.Flow
 
 interface ProductionRepository {
@@ -266,14 +267,16 @@ interface ProductionRepository {
         lot: ProductionLot,
         lines: List<ProductionLotLine>
     )
-    suspend fun updateLotStatus(companyId: String, lotId: String, newStatus: String)
+    /** [by]: quién hace el cambio; al pasar a IN_PROGRESS queda como quien lo inició. */
+    suspend fun updateLotStatus(companyId: String, lotId: String, newStatus: String, by: User? = null)
     suspend fun saveLotLine(companyId: String, lotId: String, line: ProductionLotLine)
     /** Elimina una línea del lote. Falla si el lote no está OPEN. */
     suspend fun deleteLotLine(companyId: String, lotId: String, lineId: String)
     suspend fun completeLot(
         companyId: String,
         lotId: String,
-        producedLines: List<ProductionLotLine>
+        producedLines: List<ProductionLotLine>,
+        by: User? = null
     )
     suspend fun markStockDeducted(companyId: String, lotId: String)
 

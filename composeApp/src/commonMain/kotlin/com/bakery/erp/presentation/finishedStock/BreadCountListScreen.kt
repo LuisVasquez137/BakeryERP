@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.finishedStock
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -87,7 +89,7 @@ fun BreadCountListScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Conteo de pan", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
@@ -208,8 +210,11 @@ private fun CountCard(count: BreadCount, canSeeValue: Boolean, onClick: () -> Un
                 )
             }
             Spacer(Modifier.height(4.dp))
-            Text(count.branchName, style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                count.branchName + count.countedByUserName.takeIf { it.isNotBlank() }?.let { " · Contó $it" }.orEmpty(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             HorizontalDivider(Modifier.padding(vertical = 6.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column {

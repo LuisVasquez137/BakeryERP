@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.recipes
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import com.bakery.erp.util.fmt
 import com.bakery.erp.util.fmtPercentage
 import androidx.compose.foundation.background
@@ -122,7 +124,7 @@ fun RecipeDetailScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = {
                     Text(
                         text = recipe?.name ?: "Detalle",

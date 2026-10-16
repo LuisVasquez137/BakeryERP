@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.auth
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -104,7 +106,7 @@ fun ResellerSetupScreen(
     Scaffold(
         containerColor = WarmIvory,
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Configurar mi cuenta", fontWeight = FontWeight.SemiBold) },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = PrimaryBlue,

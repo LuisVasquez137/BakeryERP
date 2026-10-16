@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.users
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -98,7 +100,7 @@ fun UserPermissionsScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = {
                     Text(
                         user?.displayName?.ifEmpty { user.email } ?: "Permisos",

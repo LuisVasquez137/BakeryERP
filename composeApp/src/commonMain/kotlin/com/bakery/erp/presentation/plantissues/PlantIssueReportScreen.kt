@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.plantissues
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -175,7 +177,7 @@ fun PlantIssueReportScreen(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Consumo de planta", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {

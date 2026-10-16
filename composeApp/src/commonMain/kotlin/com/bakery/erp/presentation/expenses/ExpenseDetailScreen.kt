@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.expenses
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import com.bakery.erp.util.fmt
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -98,7 +100,7 @@ fun ExpenseDetailScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text(expense?.name ?: "Detalle", fontWeight = FontWeight.SemiBold, maxLines = 1) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
@@ -201,6 +203,9 @@ private fun ExpenseDetailContent(expense: Expense) {
                 if (expense.cashRegisterName.isNotEmpty()) expense.cashRegisterName
                 else ExpensePaidFrom.label(expense.paidFrom)
             )
+        }
+        if (expense.createdByUserName.isNotEmpty()) {
+            DetailRow("Anotó", expense.createdByUserName)
         }
 
         if (!expense.notes.isNullOrEmpty()) {

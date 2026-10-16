@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.purchases
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -50,6 +52,7 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -110,10 +113,12 @@ fun PurchaseListScreen(
     // y mezcladas en una sola lista los KPIs de cuentas por pagar dejan de significar algo.
     var showQuickPurchases by rememberSaveable { mutableStateOf(false) }
 
-    LaunchedEffect(companyId, currentUser) {
+    // Escucha en vivo mientras la lista está en pantalla; al salir se suelta.
+    DisposableEffect(companyId, currentUser) {
         if (companyId.isNotEmpty() && currentUser != null) {
             viewModel.loadPurchases(companyId, currentUser)
         }
+        onDispose { viewModel.stopObservingPurchases() }
     }
     LaunchedEffect(state.error) {
         state.error?.let { snackbarHostState.showSnackbar(it); viewModel.clearError() }
@@ -151,7 +156,7 @@ fun PurchaseListScreen(
     Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Compras", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
@@ -568,7 +573,8 @@ private fun PurchaseCard(purchase: Purchase, now: Long, onClick: () -> Unit, onP
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = formatPurchaseDate(purchase.date),
+                        text = formatPurchaseDate(purchase.date) +
+                            purchase.receivedByName.takeIf { it.isNotBlank() }?.let { " · Registró $it" }.orEmpty(),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.outline
                     )

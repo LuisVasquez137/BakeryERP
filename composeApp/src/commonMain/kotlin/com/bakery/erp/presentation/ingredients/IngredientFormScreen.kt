@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.ingredients
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import com.bakery.erp.util.fmt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -230,7 +232,7 @@ fun IngredientFormScreen(
     Box(Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = {
                     Text(
                         // El formulario habla el idioma de lo que se está dando de alta: un

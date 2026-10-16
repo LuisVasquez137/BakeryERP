@@ -283,7 +283,10 @@ class IngredientViewModel(
                         branchId = branchId,
                         branchName = branchName,
                         date = Clock.System.now().toEpochMilliseconds(),
-                        notes = notes
+                        notes = notes,
+                        createdByUserId = currentUser.id,
+                        createdByUserName = currentUser.displayName.ifBlank { currentUser.email },
+                        createdByEmployeeId = currentUser.operatorEmployeeId
                     )
                 )
             }.onSuccess {

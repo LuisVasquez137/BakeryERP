@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.customerOrders
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -112,7 +114,7 @@ fun CustomerOrderDetailScreen(
     Scaffold(
         containerColor = WarmIvory,
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Detalle de pedido", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
@@ -302,6 +304,8 @@ private fun DetailContent(
                 "Fecha",
                 "${formatDate(order.deliveryDate)}${if (order.deliveryTime.isNotEmpty()) " · ${order.deliveryTime}" else ""}"
             )
+            // Quién lo tomó: en un equipo de sucursal es el colaborador que entró con su PIN.
+            DetailRow("Tomó el pedido", order.createdByUserName.ifBlank { "—" })
         }
 
         if (order.producingBranchName.isNotEmpty()) {
@@ -405,6 +409,9 @@ private fun DetailContent(
                         ).filter { it.isNotBlank() }.joinToString(" · "),
                         (if (p.amount < 0) "−" else "") + "Q ${formatMoney(kotlin.math.abs(p.amount))}"
                     )
+                    if (p.receivedByUserName.isNotBlank()) {
+                        Text("Recibió: ${p.receivedByUserName}", style = MaterialTheme.typography.bodySmall, color = MutedText)
+                    }
                     if (p.notes.isNotBlank() && p.depositFolio.isBlank()) {
                         Text(p.notes, style = MaterialTheme.typography.bodySmall, color = MutedText)
                     }

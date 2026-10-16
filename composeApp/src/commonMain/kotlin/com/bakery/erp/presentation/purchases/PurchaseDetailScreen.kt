@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.purchases
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -118,7 +120,7 @@ fun PurchaseDetailScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Detalle de Compra", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
@@ -949,6 +951,7 @@ private fun PaymentRow(payment: PurchasePayment, onDelete: (() -> Unit)?) {
                     append(" · ")
                     append(PurchasePaymentMethod.label(payment.method))
                     if (payment.reference.isNotBlank()) append(" ${payment.reference}")
+                    if (payment.createdByName.isNotBlank()) append(" · ${payment.createdByName}")
                 },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant

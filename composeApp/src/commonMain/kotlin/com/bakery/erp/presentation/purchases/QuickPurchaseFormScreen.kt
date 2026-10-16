@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.purchases
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import com.bakery.erp.model.splitsStore
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -275,7 +277,7 @@ fun QuickPurchaseFormScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = {
                     Text(
                         if (purchaseId == null) "Anotar gasto" else "Corregir",

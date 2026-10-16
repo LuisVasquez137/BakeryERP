@@ -16,6 +16,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
+import kotlin.time.Clock
 
 enum class LockStep {
     /** Escoger quién es. */
@@ -51,6 +55,15 @@ class OperatorLockViewModel(
 
     private val _uiState = MutableStateFlow(OperatorLockUiState())
     val uiState: StateFlow<OperatorLockUiState> = _uiState.asStateFlow()
+
+    /**
+     * Saludo de la primera entrada del día. Vive aparte del estado de la pantalla de PIN
+     * porque esa pantalla desaparece justo al entrar, y el saludo se pinta encima del Home.
+     */
+    private val _welcome = MutableStateFlow<OperatorSession?>(null)
+    val welcome: StateFlow<OperatorSession?> = _welcome.asStateFlow()
+
+    fun dismissWelcome() { _welcome.value = null }
 
     // El PIN temporal ya verificado y el nuevo escogido: solo en memoria, mientras dura
     // el cambio. No van al estado para que nada los pinte ni los guarde.
@@ -115,7 +128,7 @@ class OperatorLockViewModel(
                         currentPin = pin
                         _uiState.update { it.copy(isWorking = false, step = LockStep.NEW_PIN) }
                     } else {
-                        _uiState.update { it.copy(isWorking = false, session = v.toSession(accountId)) }
+                        enter(companyId, v.toSession(accountId, employee.gender))
                     }
                 }
                 .onFailure { e -> _uiState.update { it.copy(isWorking = false, error = e.message ?: "No se pudo verificar el PIN") } }
@@ -129,13 +142,27 @@ class OperatorLockViewModel(
             runCatching { accessRepository.changePin(companyId, employee.id, currentPin, newPin) }
                 .onSuccess {
                     clearSecrets()
-                    _uiState.update { it.copy(isWorking = false, session = v.toSession(accountId)) }
+                    enter(companyId, v.toSession(accountId, employee.gender))
                 }
                 .onFailure { e ->
                     newPin = ""
                     _uiState.update { it.copy(isWorking = false, step = LockStep.NEW_PIN, error = e.message ?: "No se pudo cambiar el PIN") }
                 }
         }
+    }
+
+    /**
+     * Entra, y si es su primera vez hoy, deja listo el saludo. La consulta tiene tope corto:
+     * sin red se entra igual, sin saludo — nunca se hace esperar a nadie por una animación.
+     */
+    private suspend fun enter(companyId: String, session: OperatorSession) {
+        val today = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date.toString()
+        val first = withTimeoutOrNull(1500) {
+            runCatching { employeeRepository.markFirstEntryOfDay(companyId, session.employeeId, today) }
+                .getOrDefault(false)
+        } ?: false
+        if (first) _welcome.value = session
+        _uiState.update { it.copy(isWorking = false, session = session) }
     }
 
     /** La sesión ya pasó a AuthViewModel: la próxima vez la pantalla arranca de cero. */
@@ -159,12 +186,13 @@ class OperatorLockViewModel(
         newPin = ""
     }
 
-    private fun VerifiedEmployee.toSession(accountId: String) = OperatorSession(
+    private fun VerifiedEmployee.toSession(accountId: String, gender: String) = OperatorSession(
         employeeId = employeeId,
         name = name,
         photoUrl = photoUrl,
         branchId = branchId,
         permissions = permissions,
-        accountId = accountId
+        accountId = accountId,
+        gender = gender
     )
 }

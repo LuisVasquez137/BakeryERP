@@ -481,3 +481,12 @@ Fila de KPIs (Facturas · Comprado · Por pagar · Vencido · Por recibir) calcu
 CRUD simple (nombre, contacto, teléfono, email, dirección, notas) **+ historial de compras**:
 totales, qué se le compra ya sumado y las últimas facturas, cada una tocable. Ver "La ficha
 del proveedor contesta..." en el módulo de Compras.
+
+## Lista en vivo (16 oct 2026)
+
+La lista de compras ya no es una lectura única: `PurchaseRepository.observePurchases` escucha
+la colección y `PurchaseViewModel.loadPurchases` la colecciona en un `Job` propio mientras
+`PurchaseListScreen` está en pantalla (`DisposableEffect` → `stopObservingPurchases` al salir).
+Antes una compra registrada en otro equipo no aparecía hasta reiniciar la app. El detalle de
+una compra sigue siendo lectura al abrirlo (un abono hecho en otro equipo con el detalle
+abierto se ve al volver a entrar). Reportes y ficha del proveedor siguen con `getPurchases`.

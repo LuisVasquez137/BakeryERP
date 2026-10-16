@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.products
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -176,7 +178,7 @@ fun ProductWeightsScreen(
         Scaffold(
             snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
-                TopAppBar(
+                BrandTopAppBar(
                     title = {
                         Column {
                             Text("Pesos en crudo", fontWeight = FontWeight.SemiBold)

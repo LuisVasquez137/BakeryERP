@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.fel
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -163,7 +165,7 @@ private fun FelProfileFormContent(
     Scaffold(
         containerColor = BrandColors.Ivory,
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text(if (existing == null) "Nuevo NIT" else "NIT emisor", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {

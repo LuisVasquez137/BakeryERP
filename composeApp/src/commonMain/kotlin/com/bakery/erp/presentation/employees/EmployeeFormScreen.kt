@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.employees
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import com.bakery.erp.model.splitsStore
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
@@ -168,7 +170,7 @@ fun EmployeeFormScreen(
     if (!isNew && state.isDetailLoading) {
         Scaffold(
             topBar = {
-                TopAppBar(
+                BrandTopAppBar(
                     title = { Text("Editar Colaborador", fontWeight = FontWeight.SemiBold) },
                     navigationIcon = {
                         IconButton(onClick = onNavigateBack) {
@@ -514,7 +516,7 @@ private fun EmployeeFormContent(
     Box(Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text(if (isNew) "Nuevo Colaborador" else "Editar Colaborador", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {

@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.employees
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.model.canAccessBranch
 import androidx.compose.foundation.background
@@ -92,7 +94,7 @@ fun JobPositionDetailScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = {
                     Text(
                         position?.title ?: "Descriptor de Puesto",

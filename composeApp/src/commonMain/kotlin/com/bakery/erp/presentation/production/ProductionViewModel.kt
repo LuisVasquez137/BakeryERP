@@ -785,8 +785,15 @@ class ProductionViewModel(
         wasteNotes: String = "",
         extraByLine: Map<String, Double> = emptyMap(),
         extraReason: String = "",
-        extraNotes: String = ""
+        extraNotes: String = "",
+        /** Quien lo anota (el panadero del PIN): queda en la nota, junto a lo que dijo. */
+        actorName: String = ""
     ) {
+        fun signed(note: String): String = when {
+            actorName.isBlank() -> note
+            note.isBlank() -> "Anotó $actorName"
+            else -> "${note.trim()} ($actorName)"
+        }
         val touched = (wasteByLine.filterValues { it > 0.0 }.keys +
             extraByLine.filterValues { it > 0.0 }.keys)
         if (touched.isEmpty()) return
@@ -804,12 +811,12 @@ class ProductionViewModel(
                         // no puede borrar el motivo de lo que se quemó hace dos horas.
                         wasteReason = if (addedWaste > 0.0 && wasteReason.isNotBlank()) wasteReason
                                       else line.wasteReason,
-                        wasteNotes = if (addedWaste > 0.0) mergeNote(line.wasteNotes, wasteNotes)
+                        wasteNotes = if (addedWaste > 0.0) mergeNote(line.wasteNotes, signed(wasteNotes))
                                      else line.wasteNotes,
                         extraQuantity = line.extraQuantity + addedExtra,
                         extraReason = if (addedExtra > 0.0 && extraReason.isNotBlank()) extraReason
                                       else line.extraReason,
-                        extraNotes = if (addedExtra > 0.0) mergeNote(line.extraNotes, extraNotes)
+                        extraNotes = if (addedExtra > 0.0) mergeNote(line.extraNotes, signed(extraNotes))
                                      else line.extraNotes,
                         // Lo que se hace de más cambia cuánto pan va a haber, así que el
                         // conteo anterior dejó de valer y hay que volver a confirmarlo.
@@ -3966,7 +3973,7 @@ class ProductionViewModel(
                 _uiState.value.editableLotLines.forEach { line ->
                     runCatching { productionRepository.saveLotLine(companyId, lotId, line) }
                 }
-                productionRepository.updateLotStatus(companyId, lotId, ProductionLotStatus.IN_PROGRESS)
+                productionRepository.updateLotStatus(companyId, lotId, ProductionLotStatus.IN_PROGRESS, currentUser)
 
                 // Crear las notas de despacho DRAFT desde ya, para que despacho pueda empezar
                 // a contar mientras los panaderos siguen produciendo. Idempotente por
@@ -4577,7 +4584,7 @@ class ProductionViewModel(
                 val lines = _uiState.value.editableLotLines.map { it.withSurplusAsExtra() }
 
                 // 1. Marcar lote como COMPLETADO
-                productionRepository.completeLot(companyId, lot.id, lines)
+                productionRepository.completeLot(companyId, lot.id, lines, currentUser)
 
                 // 2. Marcar pedidos fuente como CONFIRMADOS — pero solo si ningún lote
                 //    hermano (mismo producingBranch+día, otro turno) que también los
@@ -4767,7 +4774,10 @@ class ProductionViewModel(
                                         branchId = lot.producingBranchId,
                                         branchName = lot.producingBranchName,
                                         reference = lot.id,
-                                        date = now
+                                        date = now,
+                        createdByUserId = currentUser.id,
+                        createdByUserName = currentUser.displayName.ifBlank { currentUser.email },
+                        createdByEmployeeId = currentUser.operatorEmployeeId
                                     )
                                 )
                             }

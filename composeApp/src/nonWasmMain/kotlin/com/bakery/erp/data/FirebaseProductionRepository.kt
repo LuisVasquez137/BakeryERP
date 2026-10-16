@@ -8,6 +8,7 @@ import com.bakery.erp.domain.report.ShiftProductionStat
 import com.bakery.erp.model.CustomerLineSpec
 import com.bakery.erp.model.DoughFilling
 import com.bakery.erp.model.OrderPattern
+import com.bakery.erp.model.User
 import com.bakery.erp.model.SourceOrderAllocation
 import com.bakery.erp.model.isoWeekdayOf
 import com.bakery.erp.model.orderPatternId
@@ -786,7 +787,7 @@ class FirebaseProductionRepository(
         }
     }
 
-    override suspend fun updateLotStatus(companyId: String, lotId: String, newStatus: String) {
+    override suspend fun updateLotStatus(companyId: String, lotId: String, newStatus: String, by: User?) {
         val lot = getLot(companyId, lotId) ?: return
         val now = Clock.System.now().toEpochMilliseconds()
         // Cuando un lote pasa a IN_PROGRESS por primera vez, registramos la hora real
@@ -794,8 +795,14 @@ class FirebaseProductionRepository(
         // tiempo trabajado quede como dato auditable para reportes de producción.
         val startedAt = if (newStatus == ProductionLotStatus.IN_PROGRESS && lot.startedAt == null) now
                         else lot.startedAt
+        val firstStart = newStatus == ProductionLotStatus.IN_PROGRESS && lot.startedAt == null && by != null
         lotsCol(companyId).document(lotId).set(
-            lot.copy(status = newStatus, updatedAt = now, startedAt = startedAt).toLotMap()
+            lot.copy(
+                status = newStatus, updatedAt = now, startedAt = startedAt,
+                startedByUserId = if (firstStart) by!!.id else lot.startedByUserId,
+                startedByUserName = if (firstStart) by!!.displayName.ifBlank { by.email } else lot.startedByUserName,
+                startedByEmployeeId = if (firstStart) by!!.operatorEmployeeId else lot.startedByEmployeeId
+            ).toLotMap()
         )
     }
 
@@ -821,7 +828,8 @@ class FirebaseProductionRepository(
     override suspend fun completeLot(
         companyId: String,
         lotId: String,
-        producedLines: List<ProductionLotLine>
+        producedLines: List<ProductionLotLine>,
+        by: User?
     ) {
         val lot = getLot(companyId, lotId) ?: return
         val now = Clock.System.now().toEpochMilliseconds()
@@ -829,7 +837,10 @@ class FirebaseProductionRepository(
             lot.copy(
                 status = ProductionLotStatus.COMPLETED,
                 completedAt = now,
-                updatedAt = now
+                updatedAt = now,
+                completedByUserId = by?.id ?: lot.completedByUserId,
+                completedByUserName = by?.let { it.displayName.ifBlank { it.email } } ?: lot.completedByUserName,
+                completedByEmployeeId = by?.operatorEmployeeId ?: lot.completedByEmployeeId
             ).toLotMap()
         )
         // Guardar la línea completa (no solo producedQuantity) para persistir cualquier cambio
@@ -1107,6 +1118,12 @@ class FirebaseProductionRepository(
         "updatedAt" to updatedAt,
         "startedAt" to startedAt,
         "completedAt" to completedAt,
+        "startedByUserId" to startedByUserId,
+        "startedByUserName" to startedByUserName,
+        "startedByEmployeeId" to startedByEmployeeId,
+        "completedByUserId" to completedByUserId,
+        "completedByUserName" to completedByUserName,
+        "completedByEmployeeId" to completedByEmployeeId,
         "stockDeducted" to stockDeducted,
         "lineCount" to lineCount,
         "sourceOrderIds" to sourceOrderIds,
@@ -1181,6 +1198,12 @@ class FirebaseProductionRepository(
         updatedAt = readMillis("updatedAt"),
         startedAt = runCatching { get<Long?>("startedAt") }.getOrNull(),
         completedAt = runCatching { get<Long?>("completedAt") }.getOrNull(),
+        startedByUserId = runCatching { get<String?>("startedByUserId") }.getOrNull() ?: "",
+        startedByUserName = runCatching { get<String?>("startedByUserName") }.getOrNull() ?: "",
+        startedByEmployeeId = runCatching { get<String?>("startedByEmployeeId") }.getOrNull() ?: "",
+        completedByUserId = runCatching { get<String?>("completedByUserId") }.getOrNull() ?: "",
+        completedByUserName = runCatching { get<String?>("completedByUserName") }.getOrNull() ?: "",
+        completedByEmployeeId = runCatching { get<String?>("completedByEmployeeId") }.getOrNull() ?: "",
         stockDeducted = runCatching { get<Boolean?>("stockDeducted") }.getOrNull() ?: false,
         lineCount = runCatching { get<Long?>("lineCount")?.toInt() }.getOrNull() ?: 0,
         sourceOrderIds = runCatching { get<List<String>?>("sourceOrderIds") }.getOrNull() ?: emptyList(),

@@ -20,6 +20,18 @@ interface DispatchRepository {
     fun observeNotes(companyId: String, fromMillis: Long, untilMillis: Long): Flow<List<DispatchNote>>
 
     /**
+     * Notas que van a [destinationBranchId] con `productionDate` en `[fromMillis, untilMillis)`,
+     * con sus líneas. Para el inicio de una sucursal: consulta por destino en vez de leer
+     * la colección entera.
+     */
+    suspend fun getNotesForDestination(
+        companyId: String,
+        destinationBranchId: String,
+        fromMillis: Long,
+        untilMillis: Long
+    ): List<DispatchNote>
+
+    /**
      * Hook llamado tras `completeLot`/`startLot`. Crea una `DispatchNote` DRAFT por cada `sourceOrderId`.
      * Cada línea se rellena con la cantidad que le corresponde a esa sucursal EN ESTE LOTE —
      * normalmente `requestedQuantity` (del pedido fuente) completo, salvo que [lines] traiga

@@ -24,6 +24,8 @@ import dev.gitlive.firebase.firestore.FirebaseFirestore
 import dev.gitlive.firebase.firestore.Timestamp
 import dev.gitlive.firebase.firestore.toMilliseconds
 import kotlin.time.Clock
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 
 class FirebasePurchaseRepository(
     private val firestore: FirebaseFirestore
@@ -51,6 +53,11 @@ class FirebasePurchaseRepository(
      */
     override suspend fun getPurchases(companyId: String): List<Purchase> =
         col(companyId).get().documents.map { it.toPurchase() }.sortedByDescending { it.date }
+
+    override fun observePurchases(companyId: String): Flow<List<Purchase>> =
+        col(companyId).snapshots.map { snap ->
+            snap.documents.map { it.toPurchase() }.sortedByDescending { it.date }
+        }
 
     override suspend fun aggregatePurchasesInRange(
         companyId: String,

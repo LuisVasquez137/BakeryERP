@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.reports.productcost
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -76,7 +78,7 @@ fun ProductCostScreen(
     Scaffold(
         containerColor = ReportSurface,
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Costo por producto", color = Color.White, fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {

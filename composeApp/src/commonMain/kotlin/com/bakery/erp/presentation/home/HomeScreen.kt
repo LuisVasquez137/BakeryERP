@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.home
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -11,6 +13,8 @@ import bakeryerp.composeapp.generated.resources.bakeos_logo_light
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -32,8 +36,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.domain.report.AlertTarget
-import com.bakery.erp.domain.report.DailySalesPoint
 import com.bakery.erp.domain.report.HomeAlert
+import com.bakery.erp.model.Employee
+import com.bakery.erp.model.dayGreeting
+import kotlin.time.Clock
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 import com.bakery.erp.model.Permission
 import com.bakery.erp.model.User
 import com.bakery.erp.model.UserRole
@@ -41,6 +49,15 @@ import com.bakery.erp.model.hasPermission
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.presentation.notifications.NotificationViewModel
 import com.bakery.erp.presentation.notifications.NotificationsSheet
+import com.bakery.erp.presentation.reports.canSeeAnyReport
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.ui.platform.LocalFocusManager
 import com.bakery.erp.ui.ProductImage
 import com.bakery.erp.ui.shareText
 import com.bakery.erp.util.fmtMoney
@@ -52,7 +69,16 @@ import com.bakery.erp.ui.theme.BrandColors
 private val CoffeeBrown = Color(0xFF2E4A6E)
 private val MutedText   = Color(0xFF607585)
 
-data class ModuleItem(val title: String, val subtitle: String, val icon: ImageVector)
+/**
+ * [keywords]: palabras con las que alguien buscaría el módulo sin saber cómo se llama
+ * ("fiado" → Créditos, "empleados" → Colaboradores). Sin tildes; la búsqueda las quita igual.
+ */
+data class ModuleItem(
+    val title: String,
+    val subtitle: String,
+    val icon: ImageVector,
+    val keywords: String = ""
+)
 
 /**
  * El color vive en la SECCION, no en el modulo: son 26 fichas y leerlas una por una para
@@ -81,58 +107,145 @@ private data class ModuleSection(
 private val ALL_SECTIONS = listOf(
     // Operaciones = donde pasa el dia -> naranja.
     ModuleSection("Operaciones", Icons.Default.Factory, BrandColors.AccentIcon, BrandColors.AccentSoft, listOf(
-        ModuleItem("Recetas",         "Fórmulas y procesos",   Icons.AutoMirrored.Filled.MenuBook),
-        ModuleItem("Pedidos",         "Enviar a producción",   Icons.AutoMirrored.Filled.Assignment),
-        ModuleItem("Producción",      "Lotes por turno",       Icons.Default.Factory),
-        ModuleItem("Preparaciones",   "Adornos y rellenos",    Icons.Default.Blender),
-        ModuleItem("Lotes de preparación", "Preparar lotes",   Icons.Default.SoupKitchen),
-        ModuleItem("Anotar material", "Harina de mesa, manteca, limpieza", Icons.Default.Scale),
-        ModuleItem("Asistencia", "Marcar entrada y salida",     Icons.Default.Fingerprint),
-        ModuleItem("Anotar gasto",    "Compras y gastos del día", Icons.Default.Payments),
+        ModuleItem("Recetas",         "Fórmulas y procesos",   Icons.AutoMirrored.Filled.MenuBook,
+            "formula masa ingredientes porcentaje harina pasos hornear elaborar"),
+        ModuleItem("Pedidos",         "Enviar a producción",   Icons.AutoMirrored.Filled.Assignment,
+            "orden de produccion pedir pan sucursal encargar planta"),
+        ModuleItem("Producción",      "Lotes por turno",       Icons.Default.Factory,
+            "lote hornear panadero amasar turno planta fabricar"),
+        ModuleItem("Preparaciones",   "Adornos y rellenos",    Icons.Default.Blender,
+            "relleno adorno crema betun glaseado esponja"),
+        ModuleItem("Lotes de preparación", "Preparar lotes",   Icons.Default.SoupKitchen,
+            "preparar relleno crema betun esponja"),
+        ModuleItem("Anotar material", "Harina de mesa, manteca, limpieza", Icons.Default.Scale,
+            "harina de mesa manteca limpieza vale salida material planta saco"),
+        ModuleItem("Asistencia", "Marcar entrada y salida",     Icons.Default.Fingerprint,
+            "marcar entrada salida reloj kiosko selfie llegada horario"),
+        ModuleItem("Anotar gasto",    "Compras y gastos del día", Icons.Default.Payments,
+            "gasto compra rapida pagar caja chica mercado recibo"),
     )),
     // Inventario = el azul de estructura.
     ModuleSection("Inventario", Icons.Default.Inventory, BrandColors.Primary, BrandColors.PrimaryContainer, listOf(
-        ModuleItem("Insumos",    "Costos y stock",       Icons.Default.Kitchen),
-        ModuleItem("Compras",    "Facturas de proveedor",     Icons.Default.ShoppingCart),
-        ModuleItem("Despacho",   "Empaque de la planta", Icons.Default.AllInbox),
-        ModuleItem("Reparto",    "Cómo va el pan del día", Icons.Default.LocalShipping),
-        ModuleItem("Inventario tienda", "Stock terminado y mermas", Icons.Default.Inventory),
-        ModuleItem("Traslados", "Entre sucursales", Icons.Default.SyncAlt),
-        ModuleItem("Conteo de pan", "Cierre de día con merma",   Icons.Default.Checklist),
+        ModuleItem("Insumos",    "Costos y stock",       Icons.Default.Kitchen,
+            "ingredientes materia prima harina azucar huevo levadura stock kardex existencias bodega"),
+        ModuleItem("Compras",    "Facturas de proveedor",     Icons.Default.ShoppingCart,
+            "factura proveedor pagar cuentas por pagar abonos recibir mercaderia"),
+        ModuleItem("Despacho",   "Empaque de la planta", Icons.Default.AllInbox,
+            "empacar enviar pan sucursales canastas notas de despacho"),
+        ModuleItem("Reparto",    "Cómo va el pan del día", Icons.Default.LocalShipping,
+            "entregas piloto camion ruta viaje llegada recibir pan"),
+        ModuleItem("Inventario tienda", "Stock terminado y mermas", Icons.Default.Inventory,
+            "existencias pan terminado stock mostrador merma"),
+        ModuleItem("Traslados", "Entre sucursales", Icons.Default.SyncAlt,
+            "mover enviar pasar producto otra sucursal transferencia"),
+        ModuleItem("Conteo de pan", "Cierre de día con merma",   Icons.Default.Checklist,
+            "contar sobrante merma cierre inventario fisico"),
     )),
     // Ventas = el teal que la app ya usa en las categorias del POS.
     ModuleSection("Ventas", Icons.Default.PointOfSale, Color(0xFF0D7A8C), Color(0xFFD4EFF3), listOf(
-        ModuleItem("Productos",       "Catálogo y precios",   Icons.Default.BakeryDining),
-        ModuleItem("Listas de precios", "Canales y mayoreo",  Icons.Default.Sell),
-        ModuleItem("Pedidos de clientes", "Revendedores y encargos", Icons.Default.ShoppingBag),
-        ModuleItem("Revendedores", "Validar nuevos registros", Icons.Default.Handshake),
-        ModuleItem("Punto de venta",  "Caja y cobro rápido",  Icons.Default.PointOfSale),
-        ModuleItem("Historial de ventas", "Transacciones del día", Icons.Default.Receipt),
-        ModuleItem("Cierre del día",      "Consolidado por sucursal", Icons.Default.LockClock),
-        ModuleItem("Cuadre sorpresa",     "Auditoría a cajas abiertas", Icons.Default.Policy),
-        ModuleItem("Salidas del mostrador", "Merma, accidentes y regalos", Icons.Default.DeleteSweep),
-        ModuleItem("Créditos",            "Cuentas por cobrar y adelantos", Icons.Default.CreditScore),
+        ModuleItem("Productos",       "Catálogo y precios",   Icons.Default.BakeryDining,
+            "pan catalogo precio foto articulo reventa pastel"),
+        ModuleItem("Listas de precios", "Canales y mayoreo",  Icons.Default.Sell,
+            "precio mayoreo menudeo revendedor tarifa"),
+        ModuleItem("Pedidos de clientes", "Revendedores y encargos", Icons.Default.ShoppingBag,
+            "encargo pastel cumpleanos revendedor anticipo cliente"),
+        ModuleItem("Revendedores", "Validar nuevos registros", Icons.Default.Handshake,
+            "tiendas clientes externos aprobar registro mayorista"),
+        ModuleItem("Punto de venta",  "Caja y cobro rápido",  Icons.Default.PointOfSale,
+            "vender cobrar caja pos ticket factura cajera mostrador"),
+        ModuleItem("Historial de ventas", "Transacciones del día", Icons.Default.Receipt,
+            "ventas tickets cobros anular venta transacciones"),
+        ModuleItem("Cierre del día",      "Consolidado por sucursal", Icons.Default.LockClock,
+            "cuadre corte de caja efectivo deposito banco"),
+        ModuleItem("Cuadre sorpresa",     "Auditoría a cajas abiertas", Icons.Default.Policy,
+            "arqueo auditoria revisar caja efectivo"),
+        ModuleItem("Salidas del mostrador", "Merma, accidentes y regalos", Icons.Default.DeleteSweep,
+            "merma accidente regalo botar se cayo quebrado"),
+        ModuleItem("Créditos",            "Cuentas por cobrar y adelantos", Icons.Default.CreditScore,
+            "fiado cuentas por cobrar deudas adelanto empleado cobrar"),
     )),
     // Administracion = se toca una vez al mes; que se apague es correcto.
     ModuleSection("Administración", Icons.Default.Settings, BrandColors.MutedSlate, BrandColors.Sand, listOf(
-        ModuleItem("Configuración",        "Código de invitación y entregas", Icons.Default.Settings),
-        ModuleItem("Facturación",          "NIT y sucursales que facturan", Icons.AutoMirrored.Filled.ReceiptLong),
-        ModuleItem("Bitácora de cajas",    "Aperturas, cierres y fuera de horario", Icons.Default.History),
-        ModuleItem("Proveedores",          "Gestión externa",      Icons.Default.Business),
-        ModuleItem("Gastos",               "Lo gastado del mes",   Icons.Default.AccountBalanceWallet),
-        ModuleItem("Costos fijos",         "Renta, luz, internet", Icons.Default.EventRepeat),
-        ModuleItem("Sucursales",           "Gestión de locales",   Icons.Default.Store),
-        ModuleItem("Usuarios",             "Accesos y permisos",   Icons.Default.ManageAccounts),
-        ModuleItem("Colaboradores",        "Equipo de trabajo",    Icons.Default.Badge),
-        ModuleItem("Puestos", "Perfiles y funciones", Icons.Default.WorkOutline),
-        ModuleItem("Turnos",               "Configurar jornadas",  Icons.Default.Schedule),
-        ModuleItem("Activos fijos",        "Patrimonio y mantenimiento", Icons.Default.Construction),
-        ModuleItem("Cajas",  "Configurar cajas POS",       Icons.Default.Calculate),
-        ModuleItem("Categorías POS",       "Agrupar productos para venta", Icons.Default.Category),
-        ModuleItem("Empaques",             "Bolsa y cajas que se cobran", Icons.Default.LocalMall),
-        ModuleItem("Pago con tarjeta",     "Mínimo y recargo",           Icons.Default.CreditCard),
+        // Antes eran una fila de botones debajo de la gráfica; ese lugar ahora es de los
+        // accesos directos de cada persona, y los reportes viven juntos en su propio módulo.
+        ModuleItem("Reportes",             "Ventas, producción y costos", Icons.Default.Assessment,
+            "estadisticas graficas ganancias utilidad informe resultados costos"),
+        ModuleItem("Cumpleaños",           "Los del equipo, mes a mes", Icons.Default.Cake,
+            "cumpleanos cumpleaneros nacimiento fiesta celebrar equipo pastel"),
+        ModuleItem("Configuración",        "Código de invitación y entregas", Icons.Default.Settings,
+            "ajustes codigo invitacion empresa"),
+        ModuleItem("Facturación",          "NIT y sucursales que facturan", Icons.AutoMirrored.Filled.ReceiptLong,
+            "fel factura electronica sat nit digifact"),
+        ModuleItem("Bitácora de cajas",    "Aperturas, cierres y fuera de horario", Icons.Default.History,
+            "historial aperturas cierres cajas auditoria horario"),
+        ModuleItem("Proveedores",          "Gestión externa",      Icons.Default.Business,
+            "suplidor distribuidor contacto"),
+        ModuleItem("Gastos",               "Lo gastado del mes",   Icons.Default.AccountBalanceWallet,
+            "egresos pagos luz agua salidas de dinero"),
+        ModuleItem("Costos fijos",         "Renta, luz, internet", Icons.Default.EventRepeat,
+            "renta alquiler luz internet presupuesto mensual"),
+        ModuleItem("Sucursales",           "Gestión de locales",   Icons.Default.Store,
+            "tiendas locales direccion"),
+        ModuleItem("Usuarios",             "Accesos y permisos",   Icons.Default.ManageAccounts,
+            "cuentas permisos acceso roles login"),
+        ModuleItem("Colaboradores",        "Equipo de trabajo",    Icons.Default.Badge,
+            "empleados personal trabajadores planilla nomina salario pin"),
+        ModuleItem("Puestos", "Perfiles y funciones", Icons.Default.WorkOutline,
+            "cargos funciones perfiles"),
+        ModuleItem("Turnos",               "Configurar jornadas",  Icons.Default.Schedule,
+            "horarios jornadas manana tarde noche"),
+        ModuleItem("Activos fijos",        "Patrimonio y mantenimiento", Icons.Default.Construction,
+            "maquinas horno equipo mantenimiento patrimonio vehiculo"),
+        ModuleItem("Cajas",  "Configurar cajas POS",       Icons.Default.Calculate,
+            "caja registradora pos gaveta configurar"),
+        ModuleItem("Categorías POS",       "Agrupar productos para venta", Icons.Default.Category,
+            "botones grupos venta categorias"),
+        ModuleItem("Empaques",             "Bolsa y cajas que se cobran", Icons.Default.LocalMall,
+            "bolsa caja cobrar empaque"),
+        ModuleItem("Pago con tarjeta",     "Mínimo y recargo",           Icons.Default.CreditCard,
+            "tarjeta pos recargo comision visa minimo"),
     ))
 )
+
+/** Minúsculas y sin tildes: "producción", "Produccion" y "PRODUCCIÓN" buscan lo mismo. */
+internal fun normalizeForSearch(text: String): String = buildString(text.length) {
+    text.lowercase().forEach { c ->
+        append(
+            when (c) {
+                'á', 'à', 'ä', 'â' -> 'a'
+                'é', 'è', 'ë', 'ê' -> 'e'
+                'í', 'ì', 'ï', 'î' -> 'i'
+                'ó', 'ò', 'ö', 'ô' -> 'o'
+                'ú', 'ù', 'ü', 'û' -> 'u'
+                'ñ' -> 'n'
+                else -> c
+            }
+        )
+    }
+}
+
+/**
+ * Cada palabra escrita tiene que aparecer en el nombre, la descripción o las palabras clave
+ * del módulo ("pan merma" encuentra Conteo de pan). Null = no coincide; si coincide, el
+ * número ordena: primero los que coinciden por nombre, después por descripción o clave.
+ */
+private fun moduleSearchRank(module: ModuleItem, sectionTitle: String, query: String): Int? {
+    val words = normalizeForSearch(query).split(' ', ',')
+        .filter { it.isNotBlank() && it !in SEARCH_STOPWORDS }
+    if (words.isEmpty()) return null
+    val title = normalizeForSearch(module.title)
+    val haystack = "$title ${normalizeForSearch(module.subtitle)} ${normalizeForSearch(module.keywords)} " +
+        normalizeForSearch(sectionTitle)
+    if (!words.all { it in haystack }) return null
+    return when {
+        title.startsWith(words.first()) -> 0
+        words.all { it in title } -> 1
+        else -> 2
+    }
+}
+
+/** "Pedidos de clientes": el "de" no debe hacer que coincida todo. */
+private val SEARCH_STOPWORDS = setOf("de", "del", "la", "el", "los", "las", "y", "a", "en", "para", "por", "con", "al")
 
 private fun hasModuleAccess(title: String, user: User) = with(user) {
     when (title) {
@@ -203,6 +316,7 @@ private fun hasModuleAccess(title: String, user: User) = with(user) {
                                    hasPermission(Permission.MANAGE_FINISHED_STOCK)
         "Revendedores" -> hasPermission(Permission.MANAGE_EXTERNAL_CUSTOMERS)
         "Créditos"          -> hasPermission(Permission.MANAGE_CREDIT_ACCOUNTS)
+        "Reportes"          -> canSeeAnyReport()
         else                      -> true
     }
 }
@@ -245,13 +359,10 @@ fun HomeScreen(
     onNavigateToDailyCashClose: () -> Unit = {},
     onNavigateToSpotCashCheck: () -> Unit = {},
     onNavigateToSalesReport: () -> Unit = {},
-    onNavigateToProductionReport: () -> Unit = {},
-    onNavigateToFinancialReport: () -> Unit = {},
-    onNavigateToBranchSupplyReport: () -> Unit = {},
-    onNavigateToProductCostReport: () -> Unit = {},
-    onNavigateToStandardCostReport: () -> Unit = {},
-    onNavigateToDeliveryCostReport: () -> Unit = {},
-    onNavigateToBranchResultReport: () -> Unit = {},
+    onNavigateToReports: () -> Unit = {},
+    onNavigateToBirthdays: () -> Unit = {},
+    /** (employeeId, nombre nuevo): la persona del equipo corrigió su nombre en su perfil. */
+    onOperatorRenamed: (String, String) -> Unit = { _, _ -> },
     onNavigateToCustomerOrders: () -> Unit = {},
     onNavigateToOrganizationSettings: () -> Unit = {},
     onNavigateToFelSetup: () -> Unit = {},
@@ -271,8 +382,16 @@ fun HomeScreen(
     var menuExpanded by remember { mutableStateOf(false) }
     var showNotifications by remember { mutableStateOf(false) }
     var showInviteCodeDialog by remember { mutableStateOf(false) }
+    var showProfile by remember { mutableStateOf(false) }
+    var showBirthdays by remember { mutableStateOf(false) }
+    var showShortcutEditor by remember { mutableStateOf(false) }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    val focusManager = LocalFocusManager.current
 
-    LaunchedEffect(user?.id) {
+    // En un equipo de sucursal el Home ya está compuesto debajo de la pantalla de PIN y el
+    // id es el de la cuenta: con solo `user?.id` de llave se quedaba con lo cargado SIN
+    // persona (cero permisos, sin gráficas) aunque luego entrara alguien con su PIN.
+    LaunchedEffect(user?.id, user?.operatorEmployeeId, user?.permissions) {
         user?.let { homeViewModel.ensureLoadedFor(it) }
     }
     // La campana se suscribe desde Home porque es la pantalla que siempre está
@@ -348,6 +467,8 @@ fun HomeScreen(
             "Traslados"               -> onNavigateToStockTransfers()
             "Revendedores"    -> onNavigateToResellerApproval()
             "Créditos"                -> onNavigateToCredit()
+            "Reportes"                -> onNavigateToReports()
+            "Cumpleaños"              -> onNavigateToBirthdays()
         }
     }
 
@@ -358,11 +479,72 @@ fun HomeScreen(
             if (visible.isNotEmpty()) section.copy(modules = visible) else null
         }
     }
+    val isSearching = searchQuery.isNotBlank()
+    // Mientras se busca, el lanzador se reduce a lo que coincide, en sus mismas secciones
+    // (así el color sigue diciendo de dónde es cada módulo).
+    val searchSections = remember(visibleSections, searchQuery) {
+        if (!isSearching) emptyList()
+        else visibleSections.mapNotNull { section ->
+            val hits = section.modules
+                .mapNotNull { m -> moduleSearchRank(m, section.title, searchQuery)?.let { m to it } }
+                .sortedBy { it.second }
+                .map { it.first }
+            if (hits.isNotEmpty()) section.copy(modules = hits) else null
+        }
+    }
+    val showDashboard = user?.hasPermission(Permission.VIEW_OPERATIONS_REPORT) == true
+    // Los accesos directos solo pueden ser módulos que la persona ve hoy en el lanzador:
+    // si le quitan un permiso, el acceso guardado deja de pintarse sin tocar lo guardado.
+    val visibleTitles = remember(visibleSections) {
+        visibleSections.flatMap { sec -> sec.modules.map { it.title } }.toSet()
+    }
+    val shortcutItems = remember(homeState.shortcuts, visibleTitles) {
+        homeState.shortcuts.filter { it in visibleTitles }.mapNotNull { title -> shortcutFor(title) }
+    }
+    val avatarUrl = homeState.profileEmployee?.photoUrl?.takeIf { it.isNotBlank() }
+        ?: state.operator?.photoUrl?.takeIf { it.isNotBlank() }
+        ?: user?.photoUrl?.takeIf { it.isNotBlank() }
 
+    if (showProfile && user != null) {
+        ProfileDialog(
+            user = user,
+            orgName = state.orgName,
+            employee = homeState.profileEmployee,
+            photoUrl = avatarUrl,
+            isSaving = homeState.isSavingProfile,
+            error = homeState.profileError,
+            savedVersion = homeState.profileSavedVersion,
+            onSave = { name, phone, phoneAux, email ->
+                val employeeId = homeState.profileEmployee?.id.orEmpty()
+                homeViewModel.saveProfile(name, phone, phoneAux, email) { saved ->
+                    onOperatorRenamed(employeeId, saved)
+                }
+            },
+            onDismiss = { showProfile = false; homeViewModel.clearProfileError() }
+        )
+    }
+
+    if (showShortcutEditor) {
+        ShortcutEditorDialog(
+            sections = visibleSections,
+            selected = homeState.shortcuts.filter { it in visibleTitles },
+            onSave = { homeViewModel.saveShortcuts(it); showShortcutEditor = false },
+            onDismiss = { showShortcutEditor = false }
+        )
+    }
+
+    val homeListState = rememberLazyListState()
+    homeState.birthdays?.let { b ->
+        if (showBirthdays) BirthdaysMonthDialog(
+            b,
+            onDismiss = { showBirthdays = false },
+            onOpenYear = { showBirthdays = false; onNavigateToBirthdays() }
+        )
+    }
     Scaffold(
         containerColor = BrandColors.Ivory,
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = {
                     // Variante invertida del wordmark: el azul va en blanco para resaltar sobre el
                     // header azul, pero el naranja del croissant se conserva. Un ColorFilter.tint
@@ -417,15 +599,35 @@ fun HomeScreen(
             )
         }
     ) { padding ->
+        // Deslizar hacia abajo desde arriba vuelve a pedir todo: alertas, gráficas,
+        // pendientes y cumpleaños. Sin esto el Home se quedaba con lo de la mañana.
+        PullToRefreshBox(
+            isRefreshing = homeState.isRefreshing,
+            onRefresh = { user?.let { homeViewModel.pullToRefresh(it) } },
+            modifier = Modifier.fillMaxSize().padding(padding)
+        ) {
         LazyColumn(
+            state = homeListState,
             modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
+                .fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 20.dp)
         ) {
             item {
-                GreetingHeader(user, state.orgName)
-                Spacer(Modifier.height(16.dp))
+                GreetingHeader(
+                    user = user,
+                    orgName = state.orgName,
+                    positionTitle = homeState.profileEmployee?.positionTitle.orEmpty(),
+                    photoUrl = avatarUrl,
+                    onAvatarClick = { showProfile = true }
+                )
+                Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.End) {
+                    UpdatedAgo(
+                        lastUpdatedAt = homeState.lastUpdatedAt,
+                        refreshing = homeState.isRefreshing,
+                        onRefresh = { user?.let { homeViewModel.pullToRefresh(it) } }
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
                 state.operator?.let { op ->
                     OperatorBar(
                         name = op.name,
@@ -435,8 +637,78 @@ fun HomeScreen(
                     Spacer(Modifier.height(16.dp))
                 }
             }
-            if (homeState.alerts.isNotEmpty()) {
-                item {
+            if (visibleSections.isNotEmpty()) {
+                item(key = "search") {
+                    ModuleSearchBar(
+                        query = searchQuery,
+                        onQueryChange = { searchQuery = it },
+                        onDone = { focusManager.clearFocus() }
+                    )
+                    Spacer(Modifier.height(16.dp))
+                }
+            }
+            if (isSearching) {
+                if (searchSections.isEmpty()) {
+                    item(key = "search_empty") {
+                        Text(
+                            "Ningún módulo coincide con \"${searchQuery.trim()}\". Prueba con otra palabra, " +
+                                "por ejemplo lo que quieres hacer: \"vender\", \"fiado\", \"horno\".",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MutedText,
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+                    }
+                }
+                searchSections.forEach { section ->
+                    item(key = "s_hdr_${section.title}") {
+                        SectionHeader(section)
+                        Spacer(Modifier.height(12.dp))
+                    }
+                    item(key = "s_grid_${section.title}") {
+                        ResponsiveGrid(
+                            items = section.modules,
+                            onClick = { focusManager.clearFocus(); searchQuery = ""; navigate(it.title) }
+                        ) { module, modifier, onClick ->
+                            ModuleCard(
+                                module = module,
+                                iconTint = section.iconColor,
+                                iconBg = section.container,
+                                modifier = modifier,
+                                onClick = onClick
+                            )
+                        }
+                        Spacer(Modifier.height(28.dp))
+                    }
+                }
+            }
+            if (!isSearching && homeState.pendingTasks.isNotEmpty()) {
+                item(key = "pending") {
+                    PendingTasksSection(
+                        tasks = homeState.pendingTasks,
+                        canOpen = { title -> visibleTitles.contains(title) },
+                        onOpen = { navigate(it) }
+                    )
+                    Spacer(Modifier.height(16.dp))
+                }
+            }
+            if (!isSearching && showDashboard) {
+                item(key = "dashboard") {
+                    HomeDashboardSection(
+                        dashboard = homeState.dashboard,
+                        loading = homeState.dashboardLoading,
+                        onSelectPeriod = homeViewModel::selectDashboardPeriod,
+                        onOpenSalesReport = onNavigateToSalesReport.takeIf {
+                            user?.hasPermission(Permission.VIEW_SALES_REPORT) == true
+                        },
+                        isHomeScrolling = { homeListState.isScrollInProgress }
+                    )
+                    Spacer(Modifier.height(24.dp))
+                }
+            }
+            // Los avisos van después de las gráficas: con varios avisos arriba, las gráficas
+            // quedaban fuera de la primera pantalla.
+            if (!isSearching && homeState.alerts.isNotEmpty()) {
+                item(key = "alerts") {
                     AlertsBanner(
                         alerts = homeState.alerts,
                         onAlertClick = { alert -> navigateAlert(alert, ::navigate) }
@@ -444,128 +716,134 @@ fun HomeScreen(
                     Spacer(Modifier.height(16.dp))
                 }
             }
-            item {
-                KpiRow(
-                    salesToday = homeState.salesTodayTotal,
-                    salesCount = homeState.salesTodayCount,
-                    lotsToday = homeState.lotsTodayCount,
-                    lowStockCount = homeState.lowStockCount,
-                    showSalesValue = user?.let { it.hasPermission(Permission.VIEW_SALES_VALUE) } == true ||
-                        user?.role == UserRole.OWNER
-                )
-                Spacer(Modifier.height(20.dp))
-            }
-            item {
-                WeeklySalesChart(
-                    points = homeState.weeklySales,
-                    showValue = user?.let { it.hasPermission(Permission.VIEW_SALES_VALUE) } == true ||
-                        user?.role == UserRole.OWNER,
-                    onSeeDetail = onNavigateToSalesReport
-                )
-                Spacer(Modifier.height(20.dp))
-            }
-            user?.let { u ->
-                val visibleReports = buildList {
-                    if (u.hasPermission(Permission.VIEW_SALES_REPORT))
-                        add(Triple("Ventas", Icons.AutoMirrored.Filled.TrendingUp, onNavigateToSalesReport))
-                    if (u.hasPermission(Permission.VIEW_PRODUCTION_REPORT))
-                        add(Triple("Producción", Icons.Default.Factory, onNavigateToProductionReport))
-                    if (u.hasPermission(Permission.VIEW_FINANCIAL_REPORT))
-                        add(Triple("Financiero", Icons.Default.PointOfSale, onNavigateToFinancialReport))
-                    if (u.hasPermission(Permission.VIEW_FINANCIAL_REPORT))
-                        add(Triple("Por sucursal", Icons.Default.Storefront, onNavigateToBranchResultReport))
-                    if (u.hasPermission(Permission.VIEW_FINANCIAL_REPORT))
-                        add(Triple("Costo por producto", Icons.Default.Calculate, onNavigateToProductCostReport))
-                    if (u.hasPermission(Permission.VIEW_FINANCIAL_REPORT))
-                        add(Triple("Costo estándar", Icons.Default.Factory, onNavigateToStandardCostReport))
-                    if (u.hasPermission(Permission.VIEW_FINANCIAL_REPORT))
-                        add(Triple("Costo de reparto", Icons.Default.LocalShipping, onNavigateToDeliveryCostReport))
-                    if (u.hasPermission(Permission.VIEW_BRANCH_SUPPLY_REPORT))
-                        add(Triple("Pedido vs. recibido", Icons.Default.LocalShipping, onNavigateToBranchSupplyReport))
-                }
-                if (visibleReports.isNotEmpty()) {
-                    item {
-                        ReportsRow(visibleReports)
-                        Spacer(Modifier.height(24.dp))
-                    }
+            if (!isSearching && homeState.birthdays != null) {
+                item(key = "birthdays") {
+                    BirthdaysCard(
+                        homeState.birthdays,
+                        onOpenMonth = { showBirthdays = true },
+                        onOpenYear = onNavigateToBirthdays
+                    )
+                    if (homeState.birthdays?.thisMonth?.isNotEmpty() == true) Spacer(Modifier.height(24.dp))
                 }
             }
-            visibleSections.forEach { section ->
+            // Hasta saber de quién son, no se pinta nada: si no, al cambiar de persona en el
+            // equipo se verían un instante los accesos de la anterior.
+            if (!isSearching && homeState.shortcutsLoaded && visibleTitles.isNotEmpty()) {
+                item(key = "shortcuts") {
+                    ShortcutsSection(
+                        items = shortcutItems,
+                        onEdit = { showShortcutEditor = true },
+                        onOpen = { navigate(it) }
+                    )
+                    Spacer(Modifier.height(28.dp))
+                }
+            }
+            if (!isSearching) visibleSections.forEach { section ->
                 item(key = "hdr_${section.title}") {
                     SectionHeader(section)
                     Spacer(Modifier.height(12.dp))
                 }
                 item(key = "grid_${section.title}") {
                     ResponsiveGrid(
-                        modules = section.modules,
-                        iconTint = section.iconColor,
-                        iconBg = section.container,
-                        onModuleClick = { navigate(it.title) }
-                    )
+                        items = section.modules,
+                        onClick = { navigate(it.title) }
+                    ) { module, modifier, onClick ->
+                        ModuleCard(
+                            module = module,
+                            iconTint = section.iconColor,
+                            iconBg = section.container,
+                            modifier = modifier,
+                            onClick = onClick
+                        )
+                    }
                     Spacer(Modifier.height(28.dp))
                 }
             }
             item { Spacer(Modifier.height(16.dp)) }
         }
+        }
     }
 }
 
 @Composable
-private fun GreetingHeader(user: User?, orgName: String?) {
+private fun GreetingHeader(
+    user: User?,
+    orgName: String?,
+    positionTitle: String,
+    photoUrl: String?,
+    onAvatarClick: () -> Unit
+) {
+    // La foto va a la izquierda, antes del nombre: es lo primero que se lee y deja claro de
+    // quién es el inicio en un equipo que comparten varias personas.
+    val greeting = remember {
+        dayGreeting(Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).hour)
+    }
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column {
+        Avatar(
+            name = user?.displayName.orEmpty(),
+            photoUrl = photoUrl,
+            size = 54,
+            modifier = Modifier.clip(CircleShape).clickable(onClick = onAvatarClick)
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
             Text(
-                text = "¡Hola, ${user?.displayName?.split(" ")?.firstOrNull() ?: "Usuario"}!",
-                style = MaterialTheme.typography.headlineMedium,
+                text = "$greeting, ${user?.displayName?.split(" ")?.firstOrNull() ?: "Usuario"}",
+                style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.ExtraBold,
-                color = PrimaryBlue
+                color = PrimaryBlue,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
-            val roleLabel = when (user?.role ?: UserRole.EMPLOYEE) {
-                UserRole.OWNER    -> "Propietario"
-                UserRole.ADMIN    -> "Administrador"
-                UserRole.MANAGER  -> "Encargado"
-                UserRole.EMPLOYEE -> "Empleado"
-                UserRole.RESELLER -> "Revendedor"
-            }
+            // Con ficha, el puesto dice más que el rol: en un equipo de sucursal todas
+            // las personas comparten el rol de la cuenta ("Empleado").
+            val label = positionTitle.ifBlank { roleLabel(user?.role ?: UserRole.EMPLOYEE) }
             Text(
-                text = if (!orgName.isNullOrBlank()) "$roleLabel · $orgName" else roleLabel,
+                text = if (!orgName.isNullOrBlank()) "$label · $orgName" else label,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MutedText
             )
         }
-        if (!user?.photoUrl.isNullOrBlank()) {
-            Box(
-                modifier = Modifier
-                    .size(50.dp)
-                    .clip(CircleShape)
-                    .border(2.dp, CoffeeBrown, CircleShape)
-            ) {
-                ProductImage(
-                    imageUrl = user?.photoUrl,
-                    contentDescription = "Foto de perfil",
-                    modifier = Modifier.size(50.dp)
-                )
-            }
+    }
+}
+
+private fun roleLabel(role: UserRole): String = when (role) {
+    UserRole.OWNER    -> "Propietario"
+    UserRole.ADMIN    -> "Administrador"
+    UserRole.MANAGER  -> "Encargado"
+    UserRole.EMPLOYEE -> "Empleado"
+    UserRole.RESELLER -> "Revendedor"
+}
+
+/** Foto de la persona (la de su ficha de colaborador primero) o su inicial. */
+@Composable
+private fun Avatar(name: String, photoUrl: String?, size: Int, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .size(size.dp)
+            .clip(CircleShape)
+            .background(PrimaryBlue)
+            .border(2.dp, BrandColors.Accent, CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        if (!photoUrl.isNullOrBlank()) {
+            ProductImage(
+                imageUrl = photoUrl,
+                contentDescription = "Foto de perfil",
+                modifier = Modifier.size(size.dp)
+            )
         } else {
-            Surface(
-                shape = CircleShape,
-                color = PrimaryBlue,
-                border = BorderStroke(2.dp, CoffeeBrown),
-                modifier = Modifier.size(50.dp)
-            ) {
-                Text(
-                    text = (user?.displayName?.firstOrNull() ?: 'U').toString().uppercase(),
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    style = MaterialTheme.typography.titleMedium,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.wrapContentSize(Alignment.Center)
-                )
-            }
+            Text(
+                text = (name.firstOrNull() ?: 'U').toString().uppercase(),
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                style = if (size >= 72) MaterialTheme.typography.headlineMedium
+                        else MaterialTheme.typography.titleMedium,
+                textAlign = TextAlign.Center
+            )
         }
     }
 }
@@ -656,166 +934,354 @@ private fun InviteCodeDialog(code: String?, onDismiss: () -> Unit) {
     )
 }
 
+/**
+ * Buscador del lanzador. Va arriba, antes de alertas y gráficas: es lo primero que se ve y,
+ * al escribir, todo lo demás se esconde y los resultados quedan pegados a la barra.
+ */
 @Composable
-private fun KpiRow(
-    salesToday: Double,
-    salesCount: Int,
-    lotsToday: Int,
-    lowStockCount: Int,
-    showSalesValue: Boolean
-) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        KpiCard(
-            label = "Ventas hoy",
-            value = if (showSalesValue) "Q ${salesToday.fmtMoney()}" else "$salesCount tickets",
-            icon = Icons.AutoMirrored.Filled.TrendingUp,
-            color = PrimaryBlue,
-            modifier = Modifier.weight(1f)
-        )
-        KpiCard(
-            label = "Producción",
-            value = "$lotsToday ${if (lotsToday == 1) "lote" else "lotes"}",
-            icon = Icons.Default.Factory,
-            color = Color(0xFF0D7A8C),
-            modifier = Modifier.weight(1f)
-        )
-        KpiCard(
-            label = "Stock bajo",
-            value = "$lowStockCount ${if (lowStockCount == 1) "alerta" else "alertas"}",
-            icon = Icons.Default.Warning,
-            color = CoffeeBrown,
-            modifier = Modifier.weight(1f)
-        )
-    }
-}
-
-@Composable
-private fun KpiCard(label: String, value: String, icon: ImageVector, color: Color, modifier: Modifier) {
-    Card(
-        modifier = modifier,
+private fun ModuleSearchBar(query: String, onQueryChange: (String) -> Unit, onDone: () -> Unit) {
+    OutlinedTextField(
+        value = query,
+        onValueChange = onQueryChange,
+        modifier = Modifier.fillMaxWidth(),
+        placeholder = { Text("Buscar módulo: vender, fiado, horno…", color = MutedText) },
+        leadingIcon = { Icon(Icons.Default.Search, null, tint = PrimaryBlue) },
+        trailingIcon = {
+            if (query.isNotEmpty()) {
+                IconButton(onClick = { onQueryChange(""); onDone() }) {
+                    Icon(Icons.Default.Close, "Borrar búsqueda", tint = MutedText)
+                }
+            }
+        },
+        singleLine = true,
         shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-    ) {
-        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Icon(icon, null, tint = color, modifier = Modifier.size(20.dp))
-            Text(value, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall, color = SlateText)
-            Text(label, style = MaterialTheme.typography.labelSmall, color = MutedText)
-        }
-    }
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        keyboardActions = KeyboardActions(onSearch = { onDone() }),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedContainerColor = Color.White,
+            unfocusedContainerColor = Color.White,
+            focusedBorderColor = PrimaryBlue,
+            unfocusedBorderColor = Color(0xFFE0D6CC)
+        )
+    )
 }
 
-@Composable
-private fun WeeklySalesChart(
-    points: List<DailySalesPoint>,
-    showValue: Boolean,
-    onSeeDetail: () -> Unit
-) {
-    val dayLabels = listOf("Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb")
-    val maxVal = points.maxOfOrNull { it.revenue } ?: 0.0
-    val totalWeek = points.sumOf { it.revenue }
+/** Un acceso directo ya resuelto: el módulo con los colores de su sección. */
+private data class ShortcutItem(val module: ModuleItem, val iconTint: Color, val iconBg: Color)
 
-    Card(
-        modifier = Modifier.fillMaxWidth().height(210.dp),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-    ) {
-        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        "Ventas de la semana",
-                        fontWeight = FontWeight.SemiBold,
-                        style = MaterialTheme.typography.titleSmall,
-                        color = SlateText
-                    )
-                    if (showValue) {
-                        Text(
-                            text = "Total Q ${totalWeek.fmtMoney()}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MutedText
-                        )
-                    }
-                }
-                TextButton(onClick = onSeeDetail) {
-                    Text("Ver detalle", style = MaterialTheme.typography.labelSmall, color = PrimaryBlue)
-                }
-            }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .padding(top = 8.dp),
-                horizontalArrangement = Arrangement.SpaceAround,
-                verticalAlignment = Alignment.Bottom
-            ) {
-                points.forEach { point ->
-                    val fraction = if (maxVal > 0) (point.revenue / maxVal).toFloat().coerceAtLeast(0.04f)
-                                   else 0.04f
-                    // Día de la semana derivado del label yyyy-MM-dd: usamos su orden y modulamos.
-                    // points viene ya ordenado por fecha en HomeViewModel.fillMissingDays.
-                    val labelIdx = (point.dateMillis / (24L * 60 * 60 * 1000) % 7).toInt()
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Box(
-                            modifier = Modifier
-                                .width(26.dp)
-                                .fillMaxHeight(fraction)
-                                .clip(RoundedCornerShape(topStart = 5.dp, topEnd = 5.dp))
-                                .background(PrimaryBlue.copy(alpha = 0.75f))
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            dayLabels[(labelIdx + 4) % 7], // epoch day 0 = Jueves; ajuste para Dom..Sab
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MutedText
-                        )
-                    }
-                }
-            }
-        }
-    }
+private fun shortcutFor(title: String): ShortcutItem? {
+    val section = ALL_SECTIONS.firstOrNull { sec -> sec.modules.any { it.title == title } } ?: return null
+    val module = section.modules.first { it.title == title }
+    return ShortcutItem(module, section.iconColor, section.container)
 }
 
+/**
+ * Accesos directos de la PERSONA (no de la cuenta): en el equipo de una sucursal cada
+ * colaborador ve los suyos al identificarse con su PIN. Solo se pueden escoger módulos que
+ * ya le aparecen abajo en el lanzador.
+ */
 @Composable
-private fun ReportsRow(
-    items: List<Triple<String, ImageVector, () -> Unit>>
+private fun ShortcutsSection(
+    items: List<ShortcutItem>,
+    onEdit: () -> Unit,
+    onOpen: (String) -> Unit
 ) {
     Column {
-        Text(
-            text = "Reportes",
-            fontWeight = FontWeight.Bold,
-            style = MaterialTheme.typography.titleSmall,
-            color = SlateText
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .background(BrandColors.PrimaryContainer, RoundedCornerShape(8.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Default.Star, null, tint = PrimaryBlue, modifier = Modifier.size(17.dp))
+            }
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = "Accesos directos",
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleSmall,
+                color = SlateText,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = onEdit) {
+                Icon(Icons.Default.Edit, null, modifier = Modifier.size(16.dp), tint = PrimaryBlue)
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    if (items.isEmpty()) "Agregar" else "Editar",
+                    color = PrimaryBlue,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
         Spacer(Modifier.height(10.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-            items.forEach { (label, icon, action) ->
-                Card(
-                    modifier = Modifier.weight(1f).clickable { action() },
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = PrimaryBlue.copy(alpha = 0.06f)),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-                    border = BorderStroke(1.dp, PrimaryBlue.copy(alpha = 0.18f))
+        if (items.isEmpty()) {
+            Card(
+                modifier = Modifier.fillMaxWidth().clickable(onClick = onEdit),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = PrimaryBlue.copy(alpha = 0.04f)),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                border = BorderStroke(1.dp, PrimaryBlue.copy(alpha = 0.18f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 14.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(icon, null, tint = PrimaryBlue, modifier = Modifier.size(22.dp))
-                        Text(
-                            label,
-                            fontWeight = FontWeight.SemiBold,
-                            style = MaterialTheme.typography.labelLarge,
-                            color = PrimaryBlue
-                        )
+                    Icon(Icons.Default.AddCircleOutline, null, tint = PrimaryBlue)
+                    Text(
+                        "Escoge los módulos que más usas para tenerlos aquí a un toque.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = SlateText
+                    )
+                }
+            }
+        } else {
+            ResponsiveGrid(
+                items = items,
+                onClick = { onOpen(it.module.title) }
+            ) { item, modifier, onClick ->
+                ModuleCard(
+                    module = item.module,
+                    iconTint = item.iconTint,
+                    iconBg = item.iconBg,
+                    modifier = modifier,
+                    onClick = onClick
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Escoger accesos directos entre los módulos que la persona ve. El orden en el Home es el
+ * orden en que los fue marcando: lo que ya tenía se queda en su lugar y lo nuevo va al final.
+ */
+@Composable
+private fun ShortcutEditorDialog(
+    sections: List<ModuleSection>,
+    selected: List<String>,
+    onSave: (List<String>) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var chosen by remember { mutableStateOf(selected) }
+    fun toggle(title: String) {
+        chosen = if (title in chosen) chosen - title else chosen + title
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Accesos directos") },
+        text = {
+            Column {
+                Text(
+                    "Solo aparecen los módulos a los que tienes acceso.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MutedText
+                )
+                Spacer(Modifier.height(8.dp))
+                LazyColumn(modifier = Modifier.heightIn(max = 440.dp)) {
+                    sections.forEach { section ->
+                        item(key = "h_${section.title}") {
+                            Text(
+                                section.title,
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = SlateText,
+                                modifier = Modifier.padding(top = 10.dp, bottom = 2.dp)
+                            )
+                        }
+                        section.modules.forEach { module ->
+                            item(key = "m_${module.title}") {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable { toggle(module.title) },
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Checkbox(
+                                        checked = module.title in chosen,
+                                        onCheckedChange = { toggle(module.title) }
+                                    )
+                                    Icon(module.icon, null, tint = section.iconColor, modifier = Modifier.size(20.dp))
+                                    Spacer(Modifier.width(10.dp))
+                                    Text(module.title, color = SlateText, style = MaterialTheme.typography.bodyMedium)
+                                }
+                            }
+                        }
                     }
                 }
             }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(chosen) }) { Text("Guardar", fontWeight = FontWeight.SemiBold) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancelar") }
+        }
+    )
+}
+
+/**
+ * Perfil de quien está en el Home. Con ficha de colaborador: nombre completo, puesto y
+ * sucursal, y puede corregir su nombre y contacto (lo demás de la ficha es del encargado).
+ * Sin ficha (cuenta propia no ligada): solo lo que se sabe de la cuenta.
+ */
+@Composable
+private fun ProfileDialog(
+    user: User,
+    orgName: String?,
+    employee: Employee?,
+    photoUrl: String?,
+    isSaving: Boolean,
+    error: String?,
+    savedVersion: Int,
+    onSave: (name: String, phone: String, phoneAux: String, email: String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var editing by rememberSaveable { mutableStateOf(false) }
+    var name by rememberSaveable(employee?.id) { mutableStateOf(employee?.name.orEmpty()) }
+    var phone by rememberSaveable(employee?.id) { mutableStateOf(employee?.phone.orEmpty()) }
+    var phoneAux by rememberSaveable(employee?.id) { mutableStateOf(employee?.phoneAux.orEmpty()) }
+    var email by rememberSaveable(employee?.id) { mutableStateOf(employee?.email.orEmpty()) }
+    // Guardado bien: vuelve a la vista de lectura, ya con los datos nuevos.
+    val openedAtVersion = remember { savedVersion }
+    LaunchedEffect(savedVersion) {
+        if (savedVersion != openedAtVersion) editing = false
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!isSaving) onDismiss() },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Avatar(name = employee?.name ?: user.displayName, photoUrl = photoUrl, size = 84)
+                Spacer(Modifier.height(12.dp))
+                if (!editing) {
+                    Text(
+                        employee?.name?.ifBlank { null } ?: user.displayName,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = SlateText,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    if (employee != null) {
+                        ProfileLine(Icons.Default.WorkOutline, "Puesto", employee.positionTitle.ifBlank { "Sin puesto asignado" })
+                        ProfileLine(Icons.Default.Store, "Sucursal", employee.branchName.ifBlank { "Sin sucursal asignada" })
+                        ProfileLine(Icons.Default.Phone, "Teléfono", employee.phone.ifBlank { "—" })
+                        ProfileLine(Icons.Default.PhoneAndroid, "Teléfono adicional", employee.phoneAux.ifBlank { "—" })
+                        ProfileLine(Icons.Default.Email, "Correo", employee.email.ifBlank { "—" })
+                    } else {
+                        ProfileLine(Icons.Default.Badge, "Rol", roleLabel(user.role))
+                        if (!orgName.isNullOrBlank()) ProfileLine(Icons.Default.Store, "Panadería", orgName)
+                        if (user.email.isNotBlank()) ProfileLine(Icons.Default.Email, "Correo", user.email)
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Tu usuario no está ligado a una ficha de colaborador, por eso no hay " +
+                                "puesto ni sucursal que mostrar.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MutedText,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                } else {
+                    OutlinedTextField(
+                        value = name, onValueChange = { name = it },
+                        label = { Text("Nombre completo") },
+                        singleLine = true, enabled = !isSaving,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = phone, onValueChange = { phone = it },
+                        label = { Text("Teléfono") },
+                        singleLine = true, enabled = !isSaving,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = phoneAux, onValueChange = { phoneAux = it },
+                        label = { Text("Teléfono adicional") },
+                        singleLine = true, enabled = !isSaving,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = email, onValueChange = { email = it },
+                        label = { Text("Correo") },
+                        singleLine = true, enabled = !isSaving,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "El puesto, la sucursal y lo demás de tu ficha lo cambia tu encargado.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MutedText
+                    )
+                }
+                if (error != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            when {
+                employee == null -> TextButton(onClick = onDismiss) { Text("Cerrar") }
+                !editing -> TextButton(onClick = {
+                    name = employee.name
+                    phone = employee.phone
+                    phoneAux = employee.phoneAux
+                    email = employee.email
+                    editing = true
+                }) {
+                    Icon(Icons.Default.Edit, null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Editar mis datos")
+                }
+                else -> TextButton(
+                    enabled = !isSaving && name.isNotBlank(),
+                    onClick = { onSave(name, phone, phoneAux, email) }
+                ) {
+                    if (isSaving) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text("Guardar", fontWeight = FontWeight.SemiBold)
+                }
+            }
+        },
+        dismissButton = {
+            if (employee != null) {
+                TextButton(
+                    enabled = !isSaving,
+                    onClick = { if (editing) editing = false else onDismiss() }
+                ) { Text(if (editing) "Cancelar" else "Cerrar") }
+            }
+        }
+    )
+}
+
+@Composable
+private fun ProfileLine(icon: ImageVector, label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, null, tint = PrimaryBlue, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.labelSmall, color = MutedText)
+            Text(value, style = MaterialTheme.typography.bodyMedium, color = SlateText)
         }
     }
 }
@@ -863,12 +1329,12 @@ private fun SectionHeader(section: ModuleSection) {
     }
 }
 
+/** Rejilla de fichas que se adapta al ancho; la usan el lanzador y los accesos directos. */
 @Composable
-private fun ResponsiveGrid(
-    modules: List<ModuleItem>,
-    iconTint: Color,
-    iconBg: Color,
-    onModuleClick: (ModuleItem) -> Unit
+private fun <T> ResponsiveGrid(
+    items: List<T>,
+    onClick: (T) -> Unit,
+    cell: @Composable (item: T, modifier: Modifier, onClick: () -> Unit) -> Unit
 ) {
     BoxWithConstraints {
         val cols = when {
@@ -877,27 +1343,14 @@ private fun ResponsiveGrid(
             maxWidth >= 400.dp -> 3
             else               -> 2
         }
-        val rows = (modules.size + cols - 1) / cols
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            repeat(rows) { rowIdx ->
+            items.chunked(cols).forEach { row ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    repeat(cols) { colIdx ->
-                        val idx = rowIdx * cols + colIdx
-                        if (idx < modules.size) {
-                            ModuleCard(
-                                module = modules[idx],
-                                iconTint = iconTint,
-                                iconBg = iconBg,
-                                modifier = Modifier.weight(1f),
-                                onClick = { onModuleClick(modules[idx]) }
-                            )
-                        } else {
-                            Spacer(Modifier.weight(1f))
-                        }
-                    }
+                    row.forEach { item -> cell(item, Modifier.weight(1f)) { onClick(item) } }
+                    repeat(cols - row.size) { Spacer(Modifier.weight(1f)) }
                 }
             }
         }

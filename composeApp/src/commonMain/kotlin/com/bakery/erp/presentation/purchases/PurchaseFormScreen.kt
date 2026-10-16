@@ -1,5 +1,7 @@
 ﻿package com.bakery.erp.presentation.purchases
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import com.bakery.erp.model.splitsStore
 import com.bakery.erp.util.fmt
 import com.bakery.erp.util.fmtMoney
@@ -377,7 +379,7 @@ fun PurchaseFormScreen(
     Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = {
                     Text(
                         when {

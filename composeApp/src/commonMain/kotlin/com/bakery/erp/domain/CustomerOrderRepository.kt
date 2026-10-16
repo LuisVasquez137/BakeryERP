@@ -21,6 +21,14 @@ interface CustomerOrderRepository {
         untilMillis: Long
     ): List<CustomerOrder>
 
+    /** Pedidos que se entregan en [branchId] con `deliveryDate` en `[fromMillis, untilMillis)`. */
+    suspend fun getOrdersForDeliveryBranch(
+        companyId: String,
+        branchId: String,
+        fromMillis: Long,
+        untilMillis: Long
+    ): List<CustomerOrder>
+
     /**
      * Pedidos PENDING para una planta+día+turno; análogo a
      * `ProductionRepository.getPendingOrdersForProducingBranch` pero filtrando por

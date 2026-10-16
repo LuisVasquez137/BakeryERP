@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.employees
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.ui.unit.Dp
 import com.bakery.erp.ui.theme.BrandChip
@@ -135,7 +137,7 @@ fun EmployeeListScreen(
     Box(Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Colaboradores", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {

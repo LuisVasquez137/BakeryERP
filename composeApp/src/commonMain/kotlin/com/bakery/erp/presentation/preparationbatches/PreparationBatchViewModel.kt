@@ -221,7 +221,10 @@ class PreparationBatchViewModel(
                             branchId = branch.id,
                             branchName = branch.name,
                             reference = batchId,
-                            date = now
+                            date = now,
+                        createdByUserId = currentUser.id,
+                        createdByUserName = currentUser.displayName.ifBlank { currentUser.email },
+                        createdByEmployeeId = currentUser.operatorEmployeeId
                         )
                     )
                 }

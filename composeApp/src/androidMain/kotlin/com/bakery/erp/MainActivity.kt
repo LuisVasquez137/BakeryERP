@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
@@ -26,7 +27,9 @@ class MainActivity : ComponentActivity() {
         // Debe ir ANTES de super.onCreate(): el splash nativo solo muestra el fondo ivory
         // un instante; el logo completo lo enseña el SplashScreen de Compose.
         installSplashScreen()
-        enableEdgeToEdge()
+        // Íconos de la barra de estado blancos por defecto: casi toda la app tiene el
+        // encabezado azul detrás. Con el estilo automático salían negros (tema claro).
+        enableEdgeToEdge(statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT))
         super.onCreate(savedInstanceState)
 
         askForNotificationPermissionIfNeeded()

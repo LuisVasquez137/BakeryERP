@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.operator
 
+import com.bakery.erp.ui.BrandHeaderBrush
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -94,11 +96,13 @@ fun OperatorLockScreen(
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
         color = BrandColors.Ivory
     ) {
-        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+        Column(Modifier.fillMaxSize().navigationBarsPadding()) {
+            // La franja azul sube hasta detrás de la hora y la batería (íconos blancos).
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(BrandColors.Primary)
+                    .background(BrandHeaderBrush)
+                    .statusBarsPadding()
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {

@@ -15,6 +15,16 @@ data class ProductionLot(
     val updatedAt: Long = 0L,
     val startedAt: Long? = null,
     val completedAt: Long? = null,
+    /**
+     * Quién lo inició y quién lo cerró. Son personas distintas a [createdByUserName] (quien
+     * armó el lote) y en un equipo de planta, el colaborador que entró con su PIN.
+     */
+    val startedByUserId: String = "",
+    val startedByUserName: String = "",
+    val startedByEmployeeId: String = "",
+    val completedByUserId: String = "",
+    val completedByUserName: String = "",
+    val completedByEmployeeId: String = "",
     val stockDeducted: Boolean = false,
     val lineCount: Int = 0,
     val sourceOrderIds: List<String> = emptyList(),

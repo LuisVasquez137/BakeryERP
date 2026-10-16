@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.expenses
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import com.bakery.erp.model.formatPeriodLabel
 import com.bakery.erp.ui.LoadingOverlay
 import com.bakery.erp.ui.theme.BrandColors
@@ -146,7 +148,7 @@ fun FixedBudgetListScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Costos Fijos", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
@@ -401,7 +403,7 @@ fun FixedBudgetFormScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = {
                     Text(
                         if (itemId == null) "Nuevo Costo Fijo" else "Editar Costo Fijo",

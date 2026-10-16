@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.products
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import com.bakery.erp.util.fmtTrim
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -422,7 +424,7 @@ fun ProductFormScreen(
     Box(Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = {
                     Text(
                         if (productId == null) "Nuevo Producto" else "Editar Producto",

@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.transfers
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -172,7 +174,7 @@ fun StockTransferFormScreen(
     Box(Modifier.fillMaxSize()) {
         Scaffold(
             topBar = {
-                TopAppBar(
+                BrandTopAppBar(
                     title = { Text("Nuevo traslado", fontWeight = FontWeight.SemiBold) },
                     navigationIcon = {
                         IconButton(onClick = onNavigateBack) {

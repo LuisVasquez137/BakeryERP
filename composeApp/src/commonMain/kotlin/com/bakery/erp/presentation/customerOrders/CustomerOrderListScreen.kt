@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.customerOrders
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -128,7 +130,7 @@ fun CustomerOrderListScreen(
     Scaffold(
         containerColor = WarmIvory,
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text("Pedidos de clientes", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
@@ -281,6 +283,13 @@ private fun OrderCard(order: CustomerOrder, onClick: () -> Unit) {
             if (order.producingBranchName.isNotEmpty()) {
                 Text(
                     "Planta: ${order.producingBranchName}${order.shiftName.takeIf { it.isNotEmpty() }?.let { " · $it" } ?: ""}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MutedText
+                )
+            }
+            if (order.createdByUserName.isNotBlank()) {
+                Text(
+                    "Tomó: ${order.createdByUserName}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MutedText
                 )

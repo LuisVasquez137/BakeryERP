@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.assets
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -125,7 +127,7 @@ fun FixedAssetDetailScreen(
     Scaffold(
         containerColor = WarmIvory,
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = { Text(asset?.name ?: "Activo", fontWeight = FontWeight.SemiBold, maxLines = 1) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
@@ -657,6 +659,13 @@ private fun HistoryTableRow(
                         maxLines = 2,
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
+                    if (entry.createdByName.isNotBlank()) {
+                        Text(
+                            "Anotó: ${entry.createdByName}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     if (entry.type == AssetEventType.TRANSFER && !entry.toBranchName.isNullOrEmpty()) {
                         Text(
                             "${entry.fromBranchName ?: "—"} → ${entry.toBranchName}",

@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.expenses
 
+import com.bakery.erp.ui.BrandTopAppBar
+
 import com.bakery.erp.model.splitsStore
 import com.bakery.erp.util.fmt
 import androidx.compose.foundation.layout.Arrangement
@@ -123,7 +125,15 @@ fun ExpenseFormScreen(
 
     fun build(): Expense {
         val branch = selectedBranch
-        return Expense(
+        val me = authState.user
+        // Editar parte del gasto existente: el repositorio hace set(), y los campos que este
+        // formulario no muestra (compra de origen, caja, foto, autor, alta) se perdían.
+        val base = existing ?: Expense(
+            createdByUserId = me?.id.orEmpty(),
+            createdByUserName = me?.displayName.orEmpty().ifBlank { me?.email.orEmpty() },
+            createdByEmployeeId = me?.operatorEmployeeId.orEmpty()
+        )
+        return base.copy(
             id = existing?.id ?: "",
             branchId = branch?.id ?: "",
             branchName = branch?.name ?: "",
@@ -138,7 +148,7 @@ fun ExpenseFormScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            BrandTopAppBar(
                 title = {
                     Text(
                         if (expenseId == null) "Nuevo Gasto" else "Editar Gasto",

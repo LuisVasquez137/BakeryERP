@@ -328,6 +328,14 @@ class AuthViewModel(
         _operator.value = session
     }
 
+    /**
+     * La persona corrigió su nombre desde el Home: el saludo y lo que se registre de aquí en
+     * adelante ya llevan el nuevo, sin pedirle el PIN otra vez.
+     */
+    fun renameOperator(employeeId: String, name: String) {
+        _operator.update { op -> if (op?.employeeId == employeeId) op.copy(name = name) else op }
+    }
+
     /** "Cambiar de persona", o el bloqueo por inactividad. */
     fun lockOperator() {
         _operator.value = null

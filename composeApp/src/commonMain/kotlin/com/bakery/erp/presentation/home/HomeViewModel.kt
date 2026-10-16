@@ -3,10 +3,15 @@ package com.bakery.erp.presentation.home
 import com.bakery.erp.model.openChargeList
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.bakery.erp.domain.AttendanceRepository
 import com.bakery.erp.domain.AuthRepository
 import com.bakery.erp.domain.BranchRepository
 import com.bakery.erp.domain.CashSessionRepository
+import com.bakery.erp.domain.CustomerOrderRepository
 import com.bakery.erp.domain.DispatchRepository
+import com.bakery.erp.domain.EmployeeRepository
+import com.bakery.erp.domain.HomeShortcutRepository
+import com.bakery.erp.domain.homeShortcutOwnerKey
 import com.bakery.erp.domain.FixedAssetRepository
 import com.bakery.erp.domain.IngredientRepository
 import com.bakery.erp.domain.ProductionRepository
@@ -14,11 +19,12 @@ import com.bakery.erp.domain.PurchaseRepository
 import com.bakery.erp.domain.SaleRepository
 import com.bakery.erp.domain.report.AlertSeverity
 import com.bakery.erp.domain.report.AlertTarget
-import com.bakery.erp.domain.report.DailySalesPoint
+import com.bakery.erp.domain.report.SalesSummary
 import com.bakery.erp.domain.report.HomeAlert
 import com.bakery.erp.model.AssetStatus
 import com.bakery.erp.model.CashSessionStatus
 import com.bakery.erp.model.DispatchStatus
+import com.bakery.erp.model.Employee
 import com.bakery.erp.model.Permission
 import com.bakery.erp.model.ProductionLotStatus
 import com.bakery.erp.model.ProductionOrderStatus
@@ -34,7 +40,9 @@ import com.bakery.erp.model.hasPermission
 import com.bakery.erp.presentation.purchases.formatPurchaseDate
 import com.bakery.erp.util.fmtMoney
 import kotlin.time.Clock
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.coroutineScope
@@ -56,13 +64,31 @@ data class HomeUiState(
     val isLoading: Boolean = false,
     val isAggregating: Boolean = false,
     val error: String? = null,
-    val salesTodayTotal: Double = 0.0,
-    val salesTodayCount: Int = 0,
-    val lotsTodayCount: Int = 0,
     val lowStockCount: Int = 0,
     val maintenanceDueCount: Int = 0,
-    val weeklySales: List<DailySalesPoint> = emptyList(),
-    val alerts: List<HomeAlert> = emptyList()
+    /** Gráficas del inicio; null = sin permiso o todavía sin datos (ver [dashboardLoading]). */
+    val dashboard: HomeDashboard? = null,
+    val dashboardLoading: Boolean = false,
+    /** Lo que le toca hacer a la persona, con botón (ver HomePersonal.kt). */
+    val pendingTasks: List<PendingTask> = emptyList(),
+    val birthdays: Birthdays? = null,
+    /** Cuándo terminó la última carga; el Home dice "actualizado hace 5 min". */
+    val lastUpdatedAt: Long = 0L,
+    /** Solo el jalón de "deslizar para actualizar", no la primera carga. */
+    val isRefreshing: Boolean = false,
+    val alerts: List<HomeAlert> = emptyList(),
+    /**
+     * Ficha de la persona que está en el Home: la que se identificó con PIN o, con cuenta
+     * propia, la ficha ligada a su usuario (`Employee.userId`). Null = no tiene ficha.
+     */
+    val profileEmployee: Employee? = null,
+    val isSavingProfile: Boolean = false,
+    val profileError: String? = null,
+    /** Sube cada vez que el perfil se guarda bien: el diálogo lo usa para cerrarse. */
+    val profileSavedVersion: Int = 0,
+    /** Títulos de módulos que la persona escogió; HomeScreen los filtra por permisos. */
+    val shortcuts: List<String> = emptyList(),
+    val shortcutsLoaded: Boolean = false
 )
 
 class HomeViewModel(
@@ -76,22 +102,203 @@ class HomeViewModel(
     private val cashSessionRepository: CashSessionRepository,
     private val purchaseRepository: PurchaseRepository,
     /** Aviso de créditos con saldo viejo. */
-    private val creditRepository: com.bakery.erp.domain.CreditRepository
+    private val creditRepository: com.bakery.erp.domain.CreditRepository,
+    private val employeeRepository: EmployeeRepository,
+    private val shortcutRepository: HomeShortcutRepository,
+    private val customerOrderRepository: CustomerOrderRepository,
+    private val attendanceRepository: AttendanceRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
-    private var lastLoadedUserId: String? = null
+    private var lastLoadedKey: String? = null
+    private var shortcutOwnerKey: String? = null
+    private var shortcutCompanyId: String = ""
+    private var dashboardJob: Job? = null
+    /** Sucursales del tablero del dueño; null = todas (no hace falta filtrar). */
+    private var ownerBranchFilter: List<String>? = null
+    private var dashboardCompanyId: String = ""
 
-    /** Llamado por HomeScreen cuando obtiene el [User] desde AuthViewModel. */
+    /**
+     * Llamado por HomeScreen cuando obtiene el [User] desde AuthViewModel. La llave no es
+     * solo el id: en un equipo de sucursal el id es el de la cuenta y no cambia al pasar de
+     * una persona a otra, pero los permisos, las alertas y la ficha sí.
+     */
     fun ensureLoadedFor(user: User) {
-        if (lastLoadedUserId == user.id) return
-        lastLoadedUserId = user.id
+        val key = "${user.id}|${user.operatorEmployeeId}|${user.permissions.sorted().joinToString(",")}"
+        if (lastLoadedKey == key) return
+        lastLoadedKey = key
+        // Lo de la persona anterior no se queda pintado mientras carga lo de la nueva.
+        _uiState.update {
+            it.copy(profileEmployee = null, shortcuts = emptyList(), shortcutsLoaded = false, profileError = null)
+        }
         refresh(user)
+        loadPerson(user)
+    }
+
+    private fun loadPerson(user: User) {
+        viewModelScope.launch {
+            val employee = runCatching {
+                if (user.operatorEmployeeId.isNotBlank()) {
+                    employeeRepository.getEmployee(user.orgId, user.operatorEmployeeId)
+                } else {
+                    employeeRepository.getEmployees(user.orgId).firstOrNull { it.userId == user.id }
+                }
+            }.getOrNull()
+            val ownerKey = homeShortcutOwnerKey(employee?.id ?: user.operatorEmployeeId, user.id)
+            shortcutOwnerKey = ownerKey
+            shortcutCompanyId = user.orgId
+            val shortcuts = shortcutRepository.getShortcuts(user.orgId, ownerKey)
+            _uiState.update {
+                it.copy(profileEmployee = employee, shortcuts = shortcuts, shortcutsLoaded = true)
+            }
+            loadPersonal(user, employee)
+        }
+    }
+
+    /** Jalón de "deslizar para actualizar": todo de nuevo, incluidos pendientes y gráficas. */
+    fun pullToRefresh(user: User) {
+        _uiState.update { it.copy(isRefreshing = true) }
+        refresh(user)
+        viewModelScope.launch {
+            val employee = _uiState.value.profileEmployee
+            loadPersonal(user, employee)
+        }
+    }
+
+    /**
+     * Pendientes y cumpleaños. Cada fuente va en su propio `runCatching`: que falle la
+     * consulta de cajas no debe dejar sin cumpleaños ni sin el aviso de asistencia.
+     */
+    private suspend fun loadPersonal(user: User, employee: Employee?) = withContext(Dispatchers.Default) {
+        coroutineScope {
+            val companyId = user.orgId
+            val tz = TimeZone.currentSystemDefault()
+            val now = Clock.System.now().toLocalDateTime(tz)
+            val today = now.date
+            val todayStart = today.atStartOfDayIn(tz).toEpochMilliseconds()
+            val tomorrowStart = today.plus(DatePeriod(days = 1)).atStartOfDayIn(tz).toEpochMilliseconds()
+            val seesAll = user.role == UserRole.OWNER || user.hasPermission(Permission.VIEW_ALL_BRANCHES)
+
+            val employeesAsync = async { runCatching { employeeRepository.getEmployees(companyId) }.getOrDefault(emptyList()) }
+            val branchesAsync = async { runCatching { branchRepository.getBranches(companyId) }.getOrDefault(emptyList()) }
+            val attendanceAsync = async {
+                if (employee == null) null
+                else runCatching { attendanceRepository.getTodayRecords(companyId, employee.id) }.getOrNull()
+            }
+            val cashAsync = async {
+                if (!user.hasPermission(Permission.OPERATE_POS)) emptyList()
+                else runCatching { cashSessionRepository.observeOpenSessions(companyId).first() }.getOrDefault(emptyList())
+                    .filter { s ->
+                        s.openedAt in 1 until todayStart &&
+                            if (user.operatorEmployeeId.isNotBlank()) s.openedByEmployeeId == user.operatorEmployeeId
+                            else s.cashierId == user.id
+                    }
+            }
+
+            // El pedido de planta y los pedidos de clientes son de la sucursal: solo para
+            // quien trabaja en una o pocas (al dueño le llegan como alertas generales).
+            val myBranches = if (seesAll) emptyList()
+                             else branchesAsync.await().filter { user.canAccessBranch(it.id) }.map { it.id }.take(3)
+            val notesAsync = async {
+                if (!user.hasPermission(Permission.RECEIVE_DISPATCH)) emptyList()
+                else myBranches.flatMap { b ->
+                    runCatching {
+                        dispatchRepository.getNotesForDestination(companyId, b, todayStart - 24L * 60 * 60 * 1000, tomorrowStart)
+                    }.getOrDefault(emptyList())
+                }
+            }
+            val ordersAsync = async {
+                val canSee = user.hasPermission(Permission.VIEW_CUSTOMER_ORDERS) ||
+                    user.hasPermission(Permission.MANAGE_CUSTOMER_ORDERS)
+                if (!canSee) emptyList()
+                else myBranches.flatMap { b ->
+                    runCatching {
+                        customerOrderRepository.getOrdersForDeliveryBranch(companyId, b, todayStart, tomorrowStart)
+                    }.getOrDefault(emptyList())
+                }
+            }
+
+            val tasks = buildPendingTasks(
+                employee = employee,
+                today = today,
+                hour = now.hour,
+                minute = now.minute,
+                todayAttendance = attendanceAsync.await(),
+                canOpenAttendance = user.hasPermission(Permission.MANAGE_EMPLOYEES),
+                staleCash = cashAsync.await(),
+                notes = notesAsync.await(),
+                ordersToday = ordersAsync.await()
+            )
+            val birthdays = buildBirthdays(employeesAsync.await(), today)
+            _uiState.update { it.copy(pendingTasks = tasks, birthdays = birthdays) }
+        }
+    }
+
+    /** Guarda los accesos directos de la persona actual. Se pinta de una vez (optimista). */
+    fun saveShortcuts(modules: List<String>) {
+        val ownerKey = shortcutOwnerKey ?: return
+        val previous = _uiState.value.shortcuts
+        _uiState.update { it.copy(shortcuts = modules) }
+        viewModelScope.launch {
+            runCatching { shortcutRepository.saveShortcuts(shortcutCompanyId, ownerKey, modules) }
+                .onFailure { e ->
+                    _uiState.update { it.copy(shortcuts = previous, error = e.message) }
+                }
+        }
+    }
+
+    /**
+     * La persona corrige su nombre y contacto. [onSaved] recibe el nombre guardado para que
+     * la sesión del equipo lo use de una vez.
+     */
+    fun saveProfile(name: String, phone: String, phoneAux: String, email: String, onSaved: (String) -> Unit) {
+        val employee = _uiState.value.profileEmployee ?: return
+        val cleanName = name.trim()
+        if (cleanName.isBlank()) {
+            _uiState.update { it.copy(profileError = "El nombre no puede quedar vacío") }
+            return
+        }
+        val cleanEmail = email.trim()
+        if (cleanEmail.isNotEmpty() && !EMAIL_REGEX.matches(cleanEmail)) {
+            _uiState.update { it.copy(profileError = "El correo no parece válido") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSavingProfile = true, profileError = null) }
+            runCatching {
+                employeeRepository.updateEmployeeContact(
+                    companyId = shortcutCompanyId,
+                    employeeId = employee.id,
+                    name = cleanName,
+                    phone = phone.trim(),
+                    phoneAux = phoneAux.trim(),
+                    email = cleanEmail
+                )
+            }.onSuccess {
+                _uiState.update {
+                    it.copy(
+                        isSavingProfile = false,
+                        profileEmployee = employee.copy(
+                            name = cleanName, phone = phone.trim(), phoneAux = phoneAux.trim(), email = cleanEmail
+                        ),
+                        profileSavedVersion = it.profileSavedVersion + 1
+                    )
+                }
+                onSaved(cleanName)
+            }.onFailure { e ->
+                _uiState.update { it.copy(isSavingProfile = false, profileError = e.message ?: "No se pudo guardar") }
+            }
+        }
+    }
+
+    fun clearProfileError() {
+        _uiState.update { it.copy(profileError = null) }
     }
 
     fun refresh(user: User) {
+        loadDashboard(user)
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             // Fuera del hilo de UI: loadAll lee colecciones enteras (ventas de la
@@ -99,7 +306,7 @@ class HomeViewModel(
             // Main trababa el scroll de Home los primeros segundos.
             runCatching { withContext(Dispatchers.Default) { loadAll(user) } }
                 .onFailure { e ->
-                    _uiState.update { it.copy(isLoading = false, error = e.message) }
+                    _uiState.update { it.copy(isLoading = false, isRefreshing = false, error = e.message) }
                 }
         }
     }
@@ -110,36 +317,9 @@ class HomeViewModel(
         val today: LocalDate = Clock.System.now().toLocalDateTime(tz).date
         val todayStart = today.atStartOfDayIn(tz).toEpochMilliseconds()
         val tomorrowStart = today.plus(DatePeriod(days = 1)).atStartOfDayIn(tz).toEpochMilliseconds()
-        val weekAgoStart = today.minus(DatePeriod(days = 6)).atStartOfDayIn(tz).toEpochMilliseconds()
 
         // Sucursales accesibles para este usuario.
         val branchesAsync = async { branchRepository.getBranches(companyId) }
-
-        // Lanzamos en paralelo todo lo que no depende de las sucursales accesibles.
-        val salesTodayAsync = async {
-            saleRepository.aggregateSalesInRange(
-                companyId = companyId,
-                branchIds = null, // filtramos después por accesibles
-                fromMillis = todayStart,
-                untilMillis = tomorrowStart
-            )
-        }
-        val weeklySalesAsync = async {
-            saleRepository.aggregateSalesInRange(
-                companyId = companyId,
-                branchIds = null,
-                fromMillis = weekAgoStart,
-                untilMillis = tomorrowStart
-            )
-        }
-        val lotsTodayAsync = async {
-            productionRepository.aggregateProductionInRange(
-                companyId = companyId,
-                producingBranchIds = null,
-                fromMillis = todayStart,
-                untilMillis = tomorrowStart
-            )
-        }
 
         // Datos para alertas — cada uno solo se carga si el user tiene el permiso correspondiente.
         val assetsAsync = async {
@@ -194,49 +374,8 @@ class HomeViewModel(
         // Esperamos las primeras
         val branches = branchesAsync.await()
         val accessibleBranchIds = branches.filter { user.canAccessBranch(it.id) }.map { it.id }
-        val branchById = branches.associateBy { it.id }
 
-        val salesToday = salesTodayAsync.await()
-        val weeklySales = weeklySalesAsync.await()
-        val lotsToday = lotsTodayAsync.await()
-
-        // Filtrar ventas de hoy por sucursales accesibles (las agregaciones nos dan byBranch).
         val accessibleSet = accessibleBranchIds.toSet()
-        val accessibleSalesToday = salesToday.byBranch.filter { it.branchId in accessibleSet }
-        val salesTodayTotal = accessibleSalesToday.sumOf { it.total }
-        val salesTodayCount = accessibleSalesToday.sumOf { it.transactionCount }
-
-        val accessibleLotsToday = run {
-            // ProductionSummary no tiene byBranch; pero los lotes de hoy en sucursales accesibles
-            // los podemos contar desde lotsAsync (los cargamos abajo). Para Today usamos la cifra total
-            // si el user tiene VIEW_ALL_BRANCHES; si no, recargamos restringido.
-            if (user.hasPermission(Permission.VIEW_ALL_BRANCHES) || user.role == UserRole.OWNER) {
-                lotsToday.lotsCount
-            } else {
-                productionRepository.aggregateProductionInRange(
-                    companyId = companyId,
-                    producingBranchIds = accessibleBranchIds,
-                    fromMillis = todayStart,
-                    untilMillis = tomorrowStart
-                ).lotsCount
-            }
-        }
-
-        // Filtrar weeklySales también por sucursales accesibles (recalcular por día limitando branch).
-        val weeklyAccessible = if (
-            user.hasPermission(Permission.VIEW_ALL_BRANCHES) || user.role == UserRole.OWNER
-        ) {
-            weeklySales.byDay
-        } else {
-            saleRepository.aggregateSalesInRange(
-                companyId = companyId,
-                branchIds = accessibleBranchIds,
-                fromMillis = weekAgoStart,
-                untilMillis = tomorrowStart
-            ).byDay
-        }
-        // Rellenar días sin ventas con 0 para que la barra se renderice consistente.
-        val filledWeekly = fillMissingDays(weeklyAccessible, today, tz)
 
         // Construir alertas
         val alerts = mutableListOf<HomeAlert>()
@@ -481,33 +620,160 @@ class HomeViewModel(
         _uiState.update {
             it.copy(
                 isLoading = false,
-                salesTodayTotal = salesTodayTotal,
-                salesTodayCount = salesTodayCount,
-                lotsTodayCount = accessibleLotsToday,
                 lowStockCount = lowStockEntries.size,
                 maintenanceDueCount = maintenanceSoon.size,
-                weeklySales = filledWeekly,
                 alerts = sortedAlerts,
+                lastUpdatedAt = Clock.System.now().toEpochMilliseconds(),
+                isRefreshing = false,
                 error = null
             )
         }
     }
 
-    private fun fillMissingDays(
-        points: List<DailySalesPoint>,
-        today: LocalDate,
-        tz: TimeZone
-    ): List<DailySalesPoint> {
-        val byKey = points.associateBy { it.dateLabel }
-        return (6 downTo 0).map { offset ->
-            val date = today.minus(DatePeriod(days = offset))
-            val key = date.toString()
-            byKey[key] ?: DailySalesPoint(
-                dateMillis = date.atStartOfDayIn(tz).toEpochMilliseconds(),
-                dateLabel = key,
-                revenue = 0.0,
-                transactionCount = 0
-            )
+    // ── Gráficas del inicio ──────────────────────────────────────────────────
+
+    /**
+     * Carga el tablero aparte de las alertas: las gráficas no esperan a que se lean las
+     * compras o los insumos, ni las alertas a las gráficas. El Home se pinta de una vez y
+     * cada parte llega cuando llega.
+     */
+    private fun loadDashboard(user: User) {
+        dashboardJob?.cancel()
+        if (!user.hasPermission(Permission.VIEW_OPERATIONS_REPORT)) {
+            _uiState.update { it.copy(dashboard = null, dashboardLoading = false) }
+            return
+        }
+        _uiState.update { it.copy(dashboard = null, dashboardLoading = true) }
+        dashboardJob = viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.Default) { buildDashboard(user) }
+            }.onSuccess { d ->
+                _uiState.update { it.copy(dashboard = d, dashboardLoading = false) }
+            }.onFailure { e ->
+                if (e is CancellationException) throw e
+                _uiState.update { it.copy(dashboard = null, dashboardLoading = false) }
+            }
         }
     }
+
+    private suspend fun buildDashboard(user: User): HomeDashboard? {
+        val companyId = user.orgId
+        dashboardCompanyId = companyId
+        val branches = branchRepository.getBranches(companyId)
+        val seesAll = user.role == UserRole.OWNER || user.hasPermission(Permission.VIEW_ALL_BRANCHES)
+        val accessible = if (seesAll) branches else branches.filter { user.canAccessBranch(it.id) }
+        if (accessible.isEmpty()) return null
+
+        // Una sola sucursal = el tablero de la sucursal (sin montos).
+        if (!seesAll && accessible.size == 1) {
+            val branch = accessible.first()
+            return HomeDashboard.Branch(loadBranchToday(companyId, branch.id, branch.name))
+        }
+
+        ownerBranchFilter = if (seesAll) null else accessible.map { it.id }
+        val week = loadOwnerPeriod(DashboardPeriod.WEEK)
+        return HomeDashboard.Owner(
+            showMoney = user.hasPermission(Permission.VIEW_SALES_VALUE),
+            branchCount = accessible.size,
+            selected = DashboardPeriod.WEEK,
+            periods = mapOf(DashboardPeriod.WEEK to week)
+        )
+    }
+
+    /** El dueño cambia Hoy / Semana / Mes. Cada período se pide una vez y se guarda. */
+    fun selectDashboardPeriod(period: DashboardPeriod) {
+        val owner = _uiState.value.dashboard as? HomeDashboard.Owner ?: return
+        _uiState.update { it.copy(dashboard = owner.copy(selected = period)) }
+        if (owner.periods[period] != null) return
+        viewModelScope.launch {
+            val data = runCatching {
+                withContext(Dispatchers.Default) { loadOwnerPeriod(period) }
+            }.getOrNull() ?: return@launch
+            _uiState.update { st ->
+                val current = st.dashboard as? HomeDashboard.Owner ?: return@update st
+                st.copy(dashboard = current.copy(periods = current.periods + (period to data)))
+            }
+        }
+    }
+
+    private suspend fun loadOwnerPeriod(period: DashboardPeriod): OwnerPeriodData = coroutineScope {
+        val companyId = dashboardCompanyId
+        val filter = ownerBranchFilter
+        val tz = TimeZone.currentSystemDefault()
+        val now = Clock.System.now().toLocalDateTime(tz)
+        val today = now.date
+        val n = period.days()
+        val shift = period.compareShiftDays()
+        fun startOf(d: LocalDate) = d.atStartOfDayIn(tz).toEpochMilliseconds()
+        val from = today.minus(DatePeriod(days = n - 1))
+        val until = today.plus(DatePeriod(days = 1))
+        val prevFrom = from.minus(DatePeriod(days = shift))
+        val prevUntil = until.minus(DatePeriod(days = shift))
+        val prevLastDay = today.minus(DatePeriod(days = shift))
+
+        val current = async { saleRepository.aggregateSalesInRange(companyId, filter, startOf(from), startOf(until)) }
+        val previous = async { saleRepository.aggregateSalesInRange(companyId, filter, startOf(prevFrom), startOf(prevUntil)) }
+        val lastDay = if (period == DashboardPeriod.TODAY) previous else async {
+            saleRepository.aggregateSalesInRange(
+                companyId, filter, startOf(prevLastDay), startOf(prevLastDay.plus(DatePeriod(days = 1)))
+            )
+        }
+        buildOwnerPeriod(
+            period = period,
+            today = today,
+            hour = now.hour,
+            minute = now.minute,
+            current = current.await(),
+            previous = previous.await(),
+            previousLastDay = lastDay.await()
+        )
+    }
+
+    private suspend fun loadBranchToday(companyId: String, branchId: String, branchName: String): BranchToday =
+        coroutineScope {
+            val tz = TimeZone.currentSystemDefault()
+            val now = Clock.System.now().toLocalDateTime(tz)
+            val today = now.date
+            fun startOf(d: LocalDate) = d.atStartOfDayIn(tz).toEpochMilliseconds()
+            val ids = listOf(branchId)
+            val todayStart = startOf(today)
+            val tomorrowStart = startOf(today.plus(DatePeriod(days = 1)))
+
+            val todaySales = async { saleRepository.aggregateSalesInRange(companyId, ids, todayStart, tomorrowStart) }
+            // Los últimos cuatro días iguales a hoy: con eso se arma "un jueves normal".
+            val sameWeekdays = (1..4).map { w ->
+                val d = today.minus(DatePeriod(days = 7 * w))
+                async {
+                    runCatching {
+                        saleRepository.aggregateSalesInRange(companyId, ids, startOf(d), startOf(d.plus(DatePeriod(days = 1))))
+                    }.getOrDefault(SalesSummary())
+                }
+            }
+            val notes = async {
+                runCatching {
+                    dispatchRepository.getNotesForDestination(companyId, branchId, todayStart, tomorrowStart)
+                }.getOrDefault(emptyList())
+            }
+            val orders = async {
+                runCatching {
+                    customerOrderRepository.getOrdersForDeliveryBranch(
+                        companyId, branchId, todayStart, startOf(today.plus(DatePeriod(days = 2)))
+                    )
+                }.getOrDefault(emptyList())
+            }
+            buildBranchToday(
+                branchName = branchName,
+                today = today,
+                hour = now.hour,
+                minute = now.minute,
+                todaySales = todaySales.await(),
+                sameWeekdays = sameWeekdays.map { it.await() },
+                notes = notes.await(),
+                customerOrders = orders.await(),
+                todayStartMillis = todayStart,
+                tomorrowStartMillis = tomorrowStart
+            )
+        }
 }
+
+private val EMAIL_REGEX = Regex("""^[^@\s]+@[^@\s]+\.[^@\s]+$""")

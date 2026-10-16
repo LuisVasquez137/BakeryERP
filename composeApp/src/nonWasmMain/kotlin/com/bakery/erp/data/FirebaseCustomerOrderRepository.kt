@@ -65,6 +65,16 @@ class FirebaseCustomerOrderRepository(
             .filter { it.deliveryDate in fromMillis until untilMillis }
             .sortedByDescending { it.deliveryDate }
 
+    override suspend fun getOrdersForDeliveryBranch(
+        companyId: String,
+        branchId: String,
+        fromMillis: Long,
+        untilMillis: Long
+    ): List<CustomerOrder> =
+        ordersCol(companyId).where { "deliveryBranchId" equalTo branchId }.get().documents
+            .map { it.toOrder() }
+            .filter { it.deliveryDate >= fromMillis && it.deliveryDate < untilMillis }
+
     override suspend fun getPendingOrdersForProducingBranch(
         companyId: String,
         producingBranchId: String,
