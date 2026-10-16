@@ -158,24 +158,31 @@ class FirebaseIngredientRepository(
         companyId: String, ingredientId: String, ingredientName: String,
         branchId: String, branchName: String, delta: Double,
         newLot: NewStockLot?, skipLots: Boolean
-    ) {
+    ): Double {
         val docId = "${branchId}_${ingredientId}"
         val stockDoc = branchStocksCol(companyId).document(docId)
-        val existing = runCatching { stockDoc.get().get<Double?>("currentStock") }.getOrNull() ?: 0.0
-        val newStock = (existing + delta).coerceAtLeast(0.0)
-        stockDoc.set(firestoreSafeOf(
-            "id" to docId,
-            "branchId" to branchId,
-            "branchName" to branchName,
-            "ingredientId" to ingredientId,
-            "ingredientName" to ingredientName,
-            "currentStock" to newStock,
-            "updatedAt" to Clock.System.now().toEpochMilliseconds()
-        ))
+        // Transacción: producción, preparación y venta (el huevo, la leche) bajan el mismo
+        // insumo a la vez, y con leer-y-escribir suelto el segundo pisaba al primero.
+        val existing = firestore.runTransaction {
+            val snap = get(stockDoc)
+            val before = if (snap.exists) runCatching { snap.get<Double?>("currentStock") }.getOrNull() ?: 0.0
+                         else 0.0
+            set(stockDoc, firestoreSafeOf(
+                "id" to docId,
+                "branchId" to branchId,
+                "branchName" to branchName,
+                "ingredientId" to ingredientId,
+                "ingredientName" to ingredientName,
+                "currentStock" to (before + delta).coerceAtLeast(0.0),
+                "updatedAt" to Clock.System.now().toEpochMilliseconds()
+            ))
+            before
+        }
 
         // El libro de lotes va DESPUÉS del stock: si algo falla acá, el inventario ya quedó
-        // correcto y solo se pierde precisión en el aviso de caducidad.
-        if (skipLots) return
+        // correcto y solo se pierde precisión en el aviso de caducidad. Queda fuera de la
+        // transacción porque necesita una consulta, y las transacciones de la app no consultan.
+        if (skipLots) return existing
         runCatching {
             when {
                 delta < 0.0 -> consumeLotsFefo(companyId, branchId, ingredientId, -delta)
@@ -194,6 +201,7 @@ class FirebaseIngredientRepository(
                 }
             }
         }
+        return existing
     }
 
     // ── Lotes de insumos perecederos (FEFO) ────────────────────────────

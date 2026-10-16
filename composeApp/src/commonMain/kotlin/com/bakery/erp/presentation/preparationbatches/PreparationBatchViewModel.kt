@@ -208,7 +208,8 @@ class PreparationBatchViewModel(
 
                 plans.forEach { plan ->
                     val delta = -plan.required
-                    ingredientRepository.updateBranchStock(
+                    // "Antes" leído en la transacción que descuenta, no en la validación de arriba.
+                    val before = ingredientRepository.updateBranchStock(
                         companyId, plan.ingredient.id, plan.ingredient.name,
                         branch.id, branch.name, delta
                     )
@@ -216,8 +217,8 @@ class PreparationBatchViewModel(
                         companyId, plan.ingredient.id, StockMovement(
                             type = "PRODUCCION",
                             quantity = delta,
-                            balanceBefore = plan.prev,
-                            balanceAfter = (plan.prev + delta).coerceAtLeast(0.0),
+                            balanceBefore = before,
+                            balanceAfter = (before + delta).coerceAtLeast(0.0),
                             branchId = branch.id,
                             branchName = branch.name,
                             reference = batchId,

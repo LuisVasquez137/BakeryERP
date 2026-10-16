@@ -299,7 +299,9 @@ class PlantIssueViewModel(
         isReversal: Boolean,
         actorName: String = ""
     ) {
-        ingredientRepository.updateBranchStock(
+        // El "antes" del Kardex es el de la transacción que movió el stock; [prevStock] es el
+        // de la pantalla y puede ir atrasado si otro equipo movió el insumo mientras tanto.
+        val before = ingredientRepository.updateBranchStock(
             companyId, ingredient.id, ingredient.name, branch.id, branch.name, delta
         )
         ingredientRepository.addStockMovement(
@@ -307,8 +309,8 @@ class PlantIssueViewModel(
             StockMovement(
                 type = if (isReversal) "AJUSTE" else PLANT_ISSUE_MOVEMENT_TYPE,
                 quantity = delta,
-                balanceBefore = prevStock,
-                balanceAfter = (prevStock + delta).coerceAtLeast(0.0),
+                balanceBefore = before,
+                balanceAfter = (before + delta).coerceAtLeast(0.0),
                 branchId = branch.id,
                 branchName = branch.name,
                 reference = issue.id,

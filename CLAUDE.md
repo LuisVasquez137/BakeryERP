@@ -149,7 +149,7 @@ nonWasmMain/  data/ (impls compartidas), di/AppModule.kt
 - **Encabezado antes que stock** (`receivePurchase`, `cancelNote`, vales de planta): un reintento choca con la guarda de estado en vez de duplicar.
 - **Fechas**: filtrar en memoria (pueden ser `Timestamp` o número); "mismo día" con `toLocalDateTime(tz).date`.
 - **Conversiones que no se pueden hacer devuelven null** (`toGramsOrNull`, `packagesToBaseUnitOrNull`, `looseToBaseUnitOrNull`), nunca pasan el número tal cual.
-- **`applyMovement` lee-modifica-escribe**: agrupar por producto y llamar en serie.
+- **Stock en transacción**: `FinishedStockRepository.applyMovement` y `IngredientRepository.updateBranchStock` leen y escriben el saldo en `runTransaction` (dos cajas a la vez no se pisan). `updateBranchStock` devuelve el saldo previo: usarlo como `balanceBefore` del Kardex. Requieren conexión. Los lotes FEFO van después, fuera de la transacción.
 - **Valores viejos en Firestore se siguen leyendo** (`MARKET_RUN` = QUICK; enums viejos de categoría se conservan).
 - Barras inferiores fijas llevan `navigationBarsPadding()` (edge-to-edge Android 15).
 - Esperas largas contra Firestore muestran `LoadingOverlay` (evita doble toque = doble registro).

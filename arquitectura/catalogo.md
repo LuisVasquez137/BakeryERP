@@ -64,3 +64,22 @@ ID compuesto `{branchId}_{ingredientId}`. `IngredientListScreen` tiene chips de 
 **Pasos**: `RecipeStep(id, stageId="", order, text, photoUrl)`. Foto opcional vía `RecipeImageUploader` (split por plataforma). En recetas nuevas `stageId=""`.
 
 **Legacy**: si existe `stages/` con `stageId≠""`, `FirebaseRecipeRepository.getRecipe` hidrata `recipe.stages` Y aplana en `components`/`steps`. Al editar y guardar, persiste plana; los docs viejos de `stages/` quedan huérfanos.
+
+## Stock en transacción (16 oct 2026)
+
+`FirebaseFinishedStockRepository.applyMovement` y `FirebaseIngredientRepository.updateBranchStock`
+leían el saldo, calculaban y escribían por separado: dos cajas vendiendo el mismo pan a la vez
+(o una venta mientras planta recibe/produce) leían el mismo saldo y la segunda escritura pisaba
+a la primera. Ahora ambos van en `firestore.runTransaction`:
+
+- **Pan terminado**: lectura del saldo, costo promedio, saldo nuevo y movimiento del Kardex en
+  la MISMA transacción (quedan los dos o ninguno). El id del movimiento se fija fuera de la
+  función porque Firestore la reintenta si el documento cambió.
+- **Insumos**: el saldo va en transacción y la función devuelve el saldo previo leído dentro;
+  los callers que escriben Kardex (venta, anulación, vales de planta, lotes de preparación,
+  producción) lo usan como `balanceBefore` en vez de una lectura aparte.
+- **Lotes FEFO** siguen fuera de la transacción (necesitan una consulta y las transacciones del
+  SDK de cliente no consultan). Si fallan, el saldo ya quedó bien; solo se pierde precisión en
+  el aviso de caducidad — mismo criterio que antes.
+- Las transacciones requieren conexión. No se pierde nada: el cobro ya esperaba la confirmación
+  del servidor en cada escritura, así que sin internet ya se quedaba esperando.

@@ -4758,19 +4758,20 @@ class ProductionViewModel(
                         val delta = -inBaseUnit
                         val prevStock = stockMap[ingredientId] ?: 0.0
                         launch {
-                            runCatching {
+                            // "Antes" de la transacción que descontó; si falló, el de la lectura de arriba.
+                            val before = runCatching {
                                 ingredientRepository.updateBranchStock(
                                     companyId, ingredientId, ingredient.name,
                                     lot.producingBranchId, lot.producingBranchName, delta
                                 )
-                            }
+                            }.getOrNull() ?: prevStock
                             runCatching {
                                 ingredientRepository.addStockMovement(
                                     companyId, ingredientId, StockMovement(
                                         type = "PRODUCCION",
                                         quantity = delta,
-                                        balanceBefore = prevStock,
-                                        balanceAfter = (prevStock + delta).coerceAtLeast(0.0),
+                                        balanceBefore = before,
+                                        balanceAfter = (before + delta).coerceAtLeast(0.0),
                                         branchId = lot.producingBranchId,
                                         branchName = lot.producingBranchName,
                                         reference = lot.id,

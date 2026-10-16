@@ -64,11 +64,39 @@ class FirebaseFinishedStockRepository(
             .sortedByDescending { it.createdAt }
     }
 
+    /**
+     * Leer, calcular y escribir van en UNA transacción: dos cajas de la misma sucursal que
+     * venden el mismo pan a la vez (o una venta mientras se recibe el despacho) leían el
+     * mismo saldo y la segunda escritura pisaba a la primera — un descuento perdido y el
+     * stock inflado hasta el siguiente conteo. Firestore reintenta la función si el
+     * documento cambió entre la lectura y la escritura, por eso aquí no hay efectos fuera
+     * de la transacción. El movimiento del Kardex va adentro: o quedan los dos o ninguno.
+     */
     override suspend fun applyMovement(companyId: String, movement: FinishedStockMovement) {
         val docId = finishedStockDocId(movement.branchId, movement.productId)
-        val current = getStock(companyId, movement.branchId, movement.productId)
-        val now = Clock.System.now().toEpochMilliseconds()
+        val stockRef = stocksCol(companyId).document(docId)
+        // El id del movimiento se fija afuera: un reintento reescribe el MISMO documento.
+        val moveRef = movementsCol(companyId).document
+        firestore.runTransaction {
+            val snap = get(stockRef)
+            val current = if (snap.exists) snap.toStock() else null
+            val now = Clock.System.now().toEpochMilliseconds()
+            val stock = nextStock(docId, current, movement, now)
+            set(stockRef, stock.toMap())
+            val finalMove = movement.copy(
+                id = moveRef.id,
+                createdAt = if (movement.createdAt == 0L) now else movement.createdAt
+            )
+            set(moveRef, finalMove.toMap())
+        }
+    }
 
+    private fun nextStock(
+        docId: String,
+        current: FinishedProductStock?,
+        movement: FinishedStockMovement,
+        now: Long
+    ): FinishedProductStock {
         val newQty: Double
         val newAvgCost: Double
         if (movement.quantity > 0) {
@@ -84,7 +112,7 @@ class FirebaseFinishedStockRepository(
             newAvgCost = current?.avgUnitCost ?: 0.0
         }
 
-        val stock = FinishedProductStock(
+        return FinishedProductStock(
             id = docId,
             branchId = movement.branchId,
             branchName = movement.branchName,
@@ -94,11 +122,6 @@ class FirebaseFinishedStockRepository(
             avgUnitCost = newAvgCost,
             updatedAt = now
         )
-        stocksCol(companyId).document(docId).set(stock.toMap())
-
-        val moveRef = movementsCol(companyId).document
-        val finalMove = movement.copy(id = moveRef.id, createdAt = if (movement.createdAt == 0L) now else movement.createdAt)
-        moveRef.set(finalMove.toMap())
     }
 
     override suspend fun applyPortioning(companyId: String, request: PortioningRequest): Int {

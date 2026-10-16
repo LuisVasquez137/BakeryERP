@@ -48,6 +48,10 @@ interface IngredientRepository {
      *   un insumo perecedero; así los lotes existen únicamente donde sirven.
      * - `delta > 0` sin [newLot] → si el insumo ya lleva lotes, entra como lote sin fecha,
      *   para que un ajuste manual no deje el libro corto.
+     *
+     * El saldo se lee y se escribe en una transacción (dos movimientos a la vez sobre el
+     * mismo insumo ya no se pisan). Devuelve el saldo que había justo antes del cambio,
+     * leído dentro de esa transacción: es el `balanceBefore` correcto para el Kardex.
      */
     suspend fun updateBranchStock(
         companyId: String,
@@ -64,7 +68,7 @@ interface IngredientRepository {
          * corrección se contaría dos veces.
          */
         skipLots: Boolean = false
-    )
+    ): Double
 
     // ── Lotes de insumos perecederos (FEFO) ──────────────────────────────────
 

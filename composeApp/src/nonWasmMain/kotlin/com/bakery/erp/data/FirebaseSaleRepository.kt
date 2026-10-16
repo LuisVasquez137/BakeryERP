@@ -146,10 +146,9 @@ class FirebaseSaleRepository(
             .map { line ->
                 async {
                     val consumed = line.ingredientUnitsConsumed
-                    val previous = ingredientRepository
-                        .getBranchStocksForIngredient(companyId, line.linkedIngredientId, listOf(sale.branchId))
-                        .find { it.branchId == sale.branchId }?.currentStock ?: 0.0
-                    ingredientRepository.updateBranchStock(
+                    // El saldo previo sale de la misma transacción que descuenta: leído aparte,
+                    // dos ventas a la vez escribían el mismo "antes" en el Kardex.
+                    val previous = ingredientRepository.updateBranchStock(
                         companyId, line.linkedIngredientId, line.linkedIngredientName,
                         sale.branchId, sale.branchName, -consumed
                     )
@@ -272,10 +271,7 @@ class FirebaseSaleRepository(
         lines.filter { it.stockDeducted && !it.productId.isNullOrEmpty() }.forEach { line ->
             if (line.isIngredientBacked) {
                 val returned = line.ingredientUnitsConsumed
-                val previous = ingredientRepository
-                    .getBranchStocksForIngredient(companyId, line.linkedIngredientId, listOf(voided.branchId))
-                    .find { it.branchId == voided.branchId }?.currentStock ?: 0.0
-                ingredientRepository.updateBranchStock(
+                val previous = ingredientRepository.updateBranchStock(
                     companyId, line.linkedIngredientId, line.linkedIngredientName,
                     voided.branchId, voided.branchName, returned
                 )
