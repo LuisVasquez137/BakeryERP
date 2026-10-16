@@ -1,5 +1,6 @@
 package com.bakery.erp.domain
 
+import kotlinx.coroutines.flow.Flow
 import com.bakery.erp.model.StockTransfer
 
 /**
@@ -54,6 +55,16 @@ interface StockTransferRepository {
         fromMillis: Long,
         untilMillis: Long
     ): List<StockTransfer>
+
+    /**
+     * Igual que [getForBranches] pero en vivo y sin tope de fecha final: la sucursal que
+     * recibe ve aparecer el envío (y el origen ve que ya lo recibieron) sin salir de la lista.
+     */
+    fun observeForBranches(
+        companyId: String,
+        branchIds: List<String>,
+        fromMillis: Long
+    ): Flow<List<StockTransfer>>
 
     /** Recibidos en el rango (por fecha de recepción), para el reporte por sucursal. */
     suspend fun getReceivedInRange(companyId: String, fromMillis: Long, untilMillis: Long): List<StockTransfer>

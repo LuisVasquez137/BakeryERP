@@ -33,6 +33,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -91,12 +92,15 @@ fun StockTransferListScreen(
     var days by rememberSaveable { mutableStateOf(7) }
 
     LaunchedEffect(companyId) { if (companyId.isNotEmpty()) viewModel.loadBranches(companyId) }
-    LaunchedEffect(companyId, branchId, days, user?.id) {
-        if (companyId.isEmpty() || user == null) return@LaunchedEffect
-        val tz = TimeZone.currentSystemDefault()
-        val now = Clock.System.now()
-        val from = now.toLocalDateTime(tz).date.minus(DatePeriod(days = days)).atStartOfDayIn(tz)
-        viewModel.loadList(companyId, user, branchId, from.toEpochMilliseconds(), now.toEpochMilliseconds() + 60_000)
+    // En vivo mientras la lista está en pantalla; al salir se suelta. La llave lleva sucursales
+    // y permisos: en un equipo con PIN el id de la cuenta no cambia al cambiar de persona.
+    DisposableEffect(companyId, branchId, days, user?.id, user?.branchIds, user?.permissions) {
+        if (companyId.isNotEmpty() && user != null) {
+            val tz = TimeZone.currentSystemDefault()
+            val from = Clock.System.now().toLocalDateTime(tz).date.minus(DatePeriod(days = days)).atStartOfDayIn(tz)
+            viewModel.loadList(companyId, user, branchId, from.toEpochMilliseconds())
+        }
+        onDispose { viewModel.stopObservingList() }
     }
     LaunchedEffect(state.error) { state.error?.let { viewModel.clearError(); snackbar.showSnackbar(it) } }
 

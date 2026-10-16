@@ -278,3 +278,13 @@ existencias (cloro sin conteo, conceptos de compra) no aparece. Modelo y reglas 
 - Despacho (`resolveWholesalePrice`): mira el escalón antes del porcentaje; el porcentaje sigue SIN redondear allí para no cambiar el valor de lo ya despachado.
 - El grupo de precio ("Pan Q0.50") con escalón se cobra junto: todos sus panes caen en el mismo escalón.
 - Pantalla de listas: textos en lenguaje del dueño ("¿Para quién es esta lista?", "Usarla cuando nadie eligió otra (★)") porque "tipo de canal" y "default" no se entendían.
+
+### Traslados: lista en vivo (16 oct 2026)
+
+`StockTransferRepository.observeForBranches` escucha la colección y `StockTransferViewModel.loadList`
+la colecciona en su propio `Job` mientras `StockTransferListScreen` está en pantalla
+(`DisposableEffect` → `stopObservingList`). La sucursal que recibe ve aparecer el envío y el
+origen ve cuándo lo recibieron sin salir de la lista. La versión en vivo no tiene tope de fecha
+final (la lista vieja cortaba en "ahora + 1 min" y un envío nuevo quedaba fuera); los que siguen
+en camino se muestran siempre. La llave del efecto incluye sucursales y permisos por los equipos
+con PIN. El detalle sigue siendo lectura al abrirlo.

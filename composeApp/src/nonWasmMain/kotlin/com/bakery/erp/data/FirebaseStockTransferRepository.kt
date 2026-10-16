@@ -23,6 +23,8 @@ import dev.gitlive.firebase.firestore.FirebaseFirestore
 import dev.gitlive.firebase.firestore.Timestamp
 import dev.gitlive.firebase.firestore.toMilliseconds
 import dev.gitlive.firebase.firestore.where
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.Flow
 import kotlin.time.Clock
 
 class FirebaseStockTransferRepository(
@@ -218,10 +220,22 @@ class FirebaseStockTransferRepository(
         // Pocos documentos por empresa: se leen todos y se filtra en memoria (fechas y "origen O
         // destino" pedirían dos consultas e índices).
         return col(companyId).get().documents.map { it.toTransfer() }
-            .filter { branchIds.isEmpty() || it.originBranchId in branchIds || it.destinationBranchId in branchIds }
+            .forBranches(branchIds, fromMillis, untilMillis)
+    }
+
+    override fun observeForBranches(
+        companyId: String, branchIds: List<String>, fromMillis: Long
+    ): Flow<List<StockTransfer>> =
+        col(companyId).snapshots.map { snap ->
+            snap.documents.map { it.toTransfer() }.forBranches(branchIds, fromMillis, Long.MAX_VALUE)
+        }
+
+    private fun List<StockTransfer>.forBranches(
+        branchIds: List<String>, fromMillis: Long, untilMillis: Long
+    ): List<StockTransfer> =
+        filter { branchIds.isEmpty() || it.originBranchId in branchIds || it.destinationBranchId in branchIds }
             .filter { it.isInTransit || it.sentAt in fromMillis until untilMillis }
             .sortedByDescending { it.sentAt }
-    }
 
     override suspend fun getReceivedInRange(companyId: String, fromMillis: Long, untilMillis: Long): List<StockTransfer> =
         col(companyId).where { "status" equalTo StockTransferStatus.RECEIVED }.get().documents

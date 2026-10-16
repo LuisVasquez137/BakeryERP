@@ -24,9 +24,11 @@ import com.bakery.erp.model.quantityLabel
 import com.bakery.erp.model.stockTransferSendError
 import com.bakery.erp.util.fmtTrim
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 data class StockTransferUiState(
@@ -132,18 +134,34 @@ class StockTransferViewModel(
         }
     }
 
-    fun loadList(companyId: String, user: User, branchId: String, fromMillis: Long, untilMillis: Long) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isListLoading = true, error = null) }
-            runCatching {
-                val ids = if (branchId.isNotEmpty()) listOf(branchId)
-                          else if (user.branchIds.isEmpty()) emptyList()
-                          else user.branchIds
-                repository.getForBranches(companyId, ids, fromMillis, untilMillis)
-                    .filter { user.canAccessBranch(it.originBranchId) || user.canAccessBranch(it.destinationBranchId) }
-            }.onSuccess { list -> _uiState.update { it.copy(isListLoading = false, list = list) } }
-                .onFailure { e -> _uiState.update { it.copy(isListLoading = false, error = e.message) } }
+    private var listJob: Job? = null
+
+    /**
+     * Escucha la lista mientras la pantalla está abierta: la sucursal que recibe ve aparecer
+     * el envío, y el origen ve cuándo lo recibieron, sin salir y volver a entrar. Cambiar de
+     * sucursal o de período reemplaza la escucha anterior; [stopObservingList] la suelta.
+     */
+    fun loadList(companyId: String, user: User, branchId: String, fromMillis: Long) {
+        listJob?.cancel()
+        val ids = if (branchId.isNotEmpty()) listOf(branchId)
+                  else if (user.branchIds.isEmpty()) emptyList()
+                  else user.branchIds
+        _uiState.update { it.copy(isListLoading = true, error = null) }
+        listJob = viewModelScope.launch {
+            repository.observeForBranches(companyId, ids, fromMillis)
+                .catch { e -> _uiState.update { it.copy(isListLoading = false, error = e.message) } }
+                .collect { all ->
+                    val list = all.filter {
+                        user.canAccessBranch(it.originBranchId) || user.canAccessBranch(it.destinationBranchId)
+                    }
+                    _uiState.update { it.copy(isListLoading = false, list = list) }
+                }
         }
+    }
+
+    fun stopObservingList() {
+        listJob?.cancel()
+        listJob = null
     }
 
     fun loadDetail(companyId: String, transferId: String) {
