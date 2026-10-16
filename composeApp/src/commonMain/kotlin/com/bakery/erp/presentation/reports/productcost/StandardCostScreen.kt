@@ -87,7 +87,9 @@ fun StandardCostScreen(
     var confirm by remember { mutableStateOf(false) }
     val canFreeze = user?.hasPermission(Permission.MANAGE_PRICE_LISTS) == true
 
-    LaunchedEffect(companyId) { if (companyId.isNotEmpty()) viewModel.load(companyId) }
+    val canSeePay = user?.hasPermission(Permission.VIEW_EMPLOYEE_SALARY) == true
+    viewModel.includePay = canSeePay
+    LaunchedEffect(companyId, canSeePay) { if (companyId.isNotEmpty()) viewModel.load(companyId) }
     LaunchedEffect(state.message) { state.message?.let { snackbar.showSnackbar(it); viewModel.clearMessage() } }
     LaunchedEffect(state.error) {
         if (state.plants.isNotEmpty()) state.error?.let { snackbar.showSnackbar(it); viewModel.clearError() }
@@ -150,7 +152,7 @@ fun StandardCostScreen(
                 state.error != null && state.plants.isEmpty() -> Box(Modifier.fillMaxSize().padding(24.dp), Alignment.Center) {
                     Text(state.error.orEmpty(), color = MaterialTheme.colorScheme.error)
                 }
-                else -> Content(state, viewModel.periodOptions, { viewModel.load(companyId, it) }, onOpenProduct)
+                else -> Content(state, viewModel.periodOptions, { viewModel.load(companyId, it) }, onOpenProduct, showNoSalary = !canSeePay)
             }
             LoadingOverlay(visible = state.isFreezing, message = "Congelando costo...")
         }
@@ -162,10 +164,12 @@ private fun Content(
     state: StandardCostUiState,
     periods: List<String>,
     onPeriod: (String) -> Unit,
-    onOpenProduct: (String) -> Unit
+    onOpenProduct: (String) -> Unit,
+    showNoSalary: Boolean = false
 ) {
     val frozenByProduct = state.frozenCosts.associateBy { it.productId }
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (showNoSalary) item { NoSalaryNotice() }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 periods.forEach { p ->

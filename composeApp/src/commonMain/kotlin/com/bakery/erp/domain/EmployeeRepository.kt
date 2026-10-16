@@ -1,12 +1,42 @@
 package com.bakery.erp.domain
 
+import com.bakery.erp.model.hasPermission
 import com.bakery.erp.model.Employee
+import com.bakery.erp.model.Permission
+import com.bakery.erp.model.User
 
+/**
+ * La ficha vive en tres documentos (ver arquitectura/seguridad-accesos.md, "Ficha privada"):
+ * - `employees/{id}`: lo que usa toda la app (nombre, foto, sucursal, horario, PIN...).
+ * - `employees/{id}/private/profile`: DPI, NIT, dirección, emergencia, estado civil, notas.
+ *   Lo lee quien tiene `MANAGE_EMPLOYEES`.
+ * - `employees/{id}/private/pay`: salario, prestaciones, banco, cuenta, forma de pago. Lo lee
+ *   quien tiene `VIEW_EMPLOYEE_SALARY`.
+ *
+ * [PrivatePart] dice qué partes leer o escribir. Sin permiso no se piden: las reglas las
+ * negarían y, al guardar, se pisaría la parte privada con lo que la pantalla no mostró.
+ */
 interface EmployeeRepository {
-    suspend fun getEmployees(companyId: String): List<Employee>
-    suspend fun getEmployee(companyId: String, employeeId: String): Employee?
-    /** Devuelve el id de la ficha (el nuevo, si era alta). */
-    suspend fun saveEmployee(companyId: String, employee: Employee): String
+    enum class PrivatePart { PROFILE, PAY }
+
+    suspend fun getEmployees(
+        companyId: String,
+        privateParts: Set<PrivatePart> = emptySet()
+    ): List<Employee>
+    suspend fun getEmployee(
+        companyId: String,
+        employeeId: String,
+        privateParts: Set<PrivatePart> = emptySet()
+    ): Employee?
+    /**
+     * Devuelve el id de la ficha (el nuevo, si era alta). Solo escribe las partes privadas de
+     * [privateParts]; las demás quedan como estaban.
+     */
+    suspend fun saveEmployee(
+        companyId: String,
+        employee: Employee,
+        privateParts: Set<PrivatePart>
+    ): String
     suspend fun deleteEmployee(companyId: String, employeeId: String)
     /** Escritura parcial: solo `permissions`. Las reglas exigen OWNER/ADMIN. */
     suspend fun updateEmployeePermissions(companyId: String, employeeId: String, permissions: List<String>)
@@ -29,4 +59,11 @@ interface EmployeeRepository {
         phoneAux: String,
         email: String
     )
+}
+
+/** Las partes privadas de la ficha que esta persona puede leer y escribir (mismo corte que las reglas). */
+fun User?.employeePrivateParts(): Set<EmployeeRepository.PrivatePart> = buildSet {
+    val u = this@employeePrivateParts ?: return@buildSet
+    if (u.hasPermission(Permission.MANAGE_EMPLOYEES)) add(EmployeeRepository.PrivatePart.PROFILE)
+    if (u.hasPermission(Permission.VIEW_EMPLOYEE_SALARY)) add(EmployeeRepository.PrivatePart.PAY)
 }

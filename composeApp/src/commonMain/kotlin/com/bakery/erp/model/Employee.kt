@@ -74,7 +74,13 @@ data class Employee(
     /** Lo que esta persona puede hacer al identificarse con su PIN (nombres de [Permission]). */
     val permissions: List<String> = emptyList(),
     val pinStatus: EmployeePinStatus = EmployeePinStatus.NONE,
-    val pinUpdatedAt: Long = 0L
+    val pinUpdatedAt: Long = 0L,
+    /**
+     * No se guarda: qué partes privadas ("PROFILE", "PAY") vinieron LEÍDAS en este objeto.
+     * Guardar solo escribe esas: una ficha cargada sin la parte de pago no la pisa con ceros.
+     * Ver `EmployeeRepository`.
+     */
+    val privatePartsLoaded: Set<String> = emptySet()
 )
 
 enum class EmployeePinStatus {

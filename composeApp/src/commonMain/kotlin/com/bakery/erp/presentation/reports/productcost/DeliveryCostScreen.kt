@@ -1,5 +1,7 @@
 package com.bakery.erp.presentation.reports.productcost
 
+import com.bakery.erp.model.hasPermission
+import com.bakery.erp.model.Permission
 import com.bakery.erp.ui.BrandTopAppBar
 
 import androidx.compose.foundation.layout.Arrangement
@@ -63,7 +65,9 @@ fun DeliveryCostScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val companyId = user?.orgId.orEmpty()
-    LaunchedEffect(companyId) { if (companyId.isNotEmpty()) viewModel.load(companyId) }
+    val canSeePay = user?.hasPermission(Permission.VIEW_EMPLOYEE_SALARY) == true
+    viewModel.includePay = canSeePay
+    LaunchedEffect(companyId, canSeePay) { if (companyId.isNotEmpty()) viewModel.load(companyId) }
 
     Scaffold(
         containerColor = ReportSurface,
@@ -84,6 +88,7 @@ fun DeliveryCostScreen(
     ) { padding ->
         AdaptiveContainer(modifier = Modifier.padding(padding)) {
             LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (!canSeePay) item { NoSalaryNotice() }
                 item {
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(viewModel.periodOptions) { p ->

@@ -1,5 +1,6 @@
 package com.bakery.erp.presentation.reports.financial
 
+import com.bakery.erp.model.hasPermission
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bakery.erp.domain.BranchRepository
@@ -136,7 +137,13 @@ class FinancialReportViewModel(
                         saleRepository.aggregateSalesInRange(user.orgId, branchIds, start, endExclusive)
                     }
                     val expAsync = async { expenseRepository.aggregateExpensesForPeriod(user.orgId, period) }
-                    val payAsync = async { payrollRepository.aggregatePayrollForPeriod(user.orgId, start, endExclusive) }
+                    // La nómina es de quien ve salarios (reglas): sin el permiso la lectura se
+                    // negaría y tumbaría el reporte entero. Sale en cero.
+                    val payAsync = async {
+                        if (user.hasPermission(com.bakery.erp.model.Permission.VIEW_EMPLOYEE_SALARY))
+                            payrollRepository.aggregatePayrollForPeriod(user.orgId, start, endExclusive)
+                        else com.bakery.erp.domain.report.PayrollSummary()
+                    }
                     val stockAsync = async {
                         finishedStockRepository.aggregateMovementsInRange(user.orgId, "", start, endExclusive)
                     }

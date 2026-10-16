@@ -48,6 +48,12 @@ class DeliveryCostViewModel(
     val periodOptions: List<String>
         get() = thisMonth().let { m -> listOf(previousPeriod(previousPeriod(m)), previousPeriod(m), m) }
 
+    /**
+     * Si quien mira puede leer salarios (`VIEW_EMPLOYEE_SALARY`). Lo fija la pantalla; sin él,
+     * las fichas se leen sin la parte de pago y el costo sale sin mano de obra.
+     */
+    var includePay: Boolean = false
+
     fun load(companyId: String, period: String = _uiState.value.period) {
         viewModelScope.launch {
             _uiState.update { it.copy(period = period, isLoading = true, error = null) }
@@ -62,7 +68,9 @@ class DeliveryCostViewModel(
         val from = monthStart(period, tz)
         val until = monthStart(nextPeriod(period), tz)
         val expensesD = async { expenseRepository.getExpensesForPeriod(companyId, period) }
-        val employeesD = async { employeeRepository.getEmployees(companyId) }
+        val employeesD = async { employeeRepository.getEmployees(
+            companyId, if (includePay) setOf(EmployeeRepository.PrivatePart.PAY) else emptySet()
+        ) }
         val payrollD = async { runCatching { payrollRepository.getPayrollForPeriod(companyId, from, until) }.getOrElse { emptyList() } }
         // getNotesInRange incluye el extremo final: hasta el último milisegundo del mes.
         val notesD = async { dispatchRepository.getNotesInRange(companyId, from, until - 1) }

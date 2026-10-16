@@ -62,6 +62,12 @@ class BranchResultViewModel(
     val periodOptions: List<String>
         get() = currentMonth().let { m -> listOf(previousPeriod(previousPeriod(m)), previousPeriod(m), m) }
 
+    /**
+     * Si quien mira puede leer salarios (`VIEW_EMPLOYEE_SALARY`). Lo fija la pantalla; sin él,
+     * las fichas se leen sin la parte de pago y el costo sale sin mano de obra.
+     */
+    var includePay: Boolean = false
+
     fun load(companyId: String, period: String = _uiState.value.period) {
         viewModelScope.launch {
             _uiState.update { it.copy(period = period, isLoading = true, error = null) }
@@ -81,7 +87,9 @@ class BranchResultViewModel(
         // getNotesInRange incluye el extremo final.
         val notesD = async { dispatchRepository.getNotesInRange(companyId, from, until - 1) }
         val expensesD = async { expenseRepository.getExpensesForPeriod(companyId, period) }
-        val employeesD = async { employeeRepository.getEmployees(companyId) }
+        val employeesD = async { employeeRepository.getEmployees(
+            companyId, if (includePay) setOf(EmployeeRepository.PrivatePart.PAY) else emptySet()
+        ) }
         val payrollD = async { runCatching { payrollRepository.getPayrollForPeriod(companyId, from, until) }.getOrElse { emptyList() } }
         // Traslados del mes en que se RECIBIERON: es cuando el costo cambió de sucursal.
         val transfersD = async { runCatching { stockTransferRepository.getReceivedInRange(companyId, from, until) }.getOrElse { emptyList() } }

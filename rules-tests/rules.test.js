@@ -46,6 +46,9 @@ beforeEach(async () => {
       managerUsersA: profile({ permissions: ['MANAGE_USERS'] }),
       encargadaA: profile({ permissions: ['OPERATE_POS', 'MANAGE_EXTERNAL_CUSTOMERS'], branchIds: ['b1'] }),
       cajeraA: profile({ permissions: ['OPERATE_POS'], branchIds: ['b1'] }),
+      rrhhA: profile({ permissions: ['MANAGE_EMPLOYEES', 'VIEW_EMPLOYEE_DOCUMENTS'] }),
+      nominaA: profile({ permissions: ['VIEW_EMPLOYEE_SALARY'] }),
+      resellerA: profile({ role: 'RESELLER' }),
       pendingA: profile({ isApproved: false, isActive: false }),
       inactiveA: profile({ isActive: false }),
       resellerPendingA: profile({ role: 'RESELLER', isApproved: false }),
@@ -255,8 +258,43 @@ describe('colaboradores', () => {
     await assertSucceeds(setDoc(doc(db, 'companies/orgA/employees/e2'), ficha));
     await seed({ ...ficha, permissions: ['OPERATE_POS'], pinStatus: 'SET', pinUpdatedAt: 1 });
     await assertSucceeds(updateDoc(doc(db, 'companies/orgA/employees/e1'), { name: 'Ana María', phone: '5555' }));
-    await assertSucceeds(setDoc(doc(db, 'companies/orgA/employees/e1/documents/d1'), { url: 'x' }));
+    await assertSucceeds(setDoc(doc(as('rrhhA'), 'companies/orgA/employees/e1/documents/d1'), { url: 'x' }));
     await assertSucceeds(getDoc(doc(as('cajeraA'), 'companies/orgA/employees/e1')));
+  });
+
+  test('parte privada: datos personales con MANAGE_EMPLOYEES, salario con VIEW_EMPLOYEE_SALARY', async () => {
+    await seed(ficha);
+    const profileRef = (db) => doc(db, 'companies/orgA/employees/e1/private/profile');
+    const payRef = (db) => doc(db, 'companies/orgA/employees/e1/private/pay');
+    await assertSucceeds(setDoc(profileRef(as('rrhhA')), { dpi: '123' }));
+    await assertSucceeds(getDoc(profileRef(as('rrhhA'))));
+    await assertFails(getDoc(payRef(as('rrhhA'))));
+    await assertSucceeds(setDoc(payRef(as('nominaA')), { baseSalary: 3000 }));
+    await assertSucceeds(getDoc(payRef(as('nominaA'))));
+    await assertFails(getDoc(profileRef(as('nominaA'))));
+    await assertSucceeds(getDoc(payRef(as('ownerA'))));
+    // La cajera ve la ficha pública pero nada de lo privado.
+    await assertFails(getDoc(profileRef(as('cajeraA'))));
+    await assertFails(getDoc(payRef(as('cajeraA'))));
+    await assertFails(setDoc(payRef(as('cajeraA')), { baseSalary: 9999 }));
+    await assertFails(getDoc(payRef(as('ownerB'))));
+  });
+
+  test('pestañas de la ficha con su permiso; la asistencia sigue abierta al personal', async () => {
+    await seed(ficha);
+    const caj = as('cajeraA');
+    await assertFails(getDoc(doc(caj, 'companies/orgA/employees/e1/payroll/p1')));
+    await assertFails(setDoc(doc(caj, 'companies/orgA/employees/e1/documents/d1'), { url: 'x' }));
+    await assertFails(getDoc(doc(caj, 'companies/orgA/employees/e1/history/h1')));
+    await assertSucceeds(setDoc(doc(caj, 'companies/orgA/employees/e1/attendance/a1'), { at: 1 }));
+    await assertSucceeds(getDoc(doc(caj, 'companies/orgA/employees/e1/attendance/a1')));
+    await assertSucceeds(getDoc(doc(as('nominaA'), 'companies/orgA/employees/e1/payroll/p1')));
+    await assertSucceeds(getDoc(doc(as('rrhhA'), 'companies/orgA/employees/e1/documents/d1')));
+  });
+
+  test('el revendedor no lee fichas de colaboradores', async () => {
+    await seed(ficha);
+    await assertFails(getDoc(doc(as('resellerA'), 'companies/orgA/employees/e1')));
   });
 
   test('OWNER y ADMIN asignan permisos al colaborador', async () => {
@@ -411,15 +449,24 @@ describe('storage', () => {
   const read = (uid, p) => env.authenticatedContext(uid).storage().ref(p).getMetadata();
 
   test('personal sube y lee documentos de su empresa', async () => {
-    await assertSucceeds(put('cajeraA', 'companies/orgA/employees/e1/dpi.pdf'));
-    await assertSucceeds(read('cajeraA', 'companies/orgA/employees/e1/dpi.pdf'));
+    await assertSucceeds(put('rrhhA', 'companies/orgA/employees/e1/dpi.pdf'));
+    await assertSucceeds(read('rrhhA', 'companies/orgA/employees/e1/dpi.pdf'));
     await assertSucceeds(put('cajeraA', 'purchaseInvoices/orgA/p1.jpg'));
     await assertSucceeds(put('cajeraA', 'products/p1.jpg'));
     await assertSucceeds(put('cajeraA', 'recipes/r1/steps/s1.jpg'));
   });
 
+  test('documentos del colaborador: solo con la pestaña de documentos; la foto, todo el personal', async () => {
+    await assertSucceeds(put('rrhhA', 'companies/orgA/employees/e1/dpi.pdf'));
+    await assertFails(read('cajeraA', 'companies/orgA/employees/e1/dpi.pdf'));
+    await assertFails(put('cajeraA', 'companies/orgA/employees/e1/otro.pdf'));
+    await assertSucceeds(put('rrhhA', 'companies/orgA/employees/e1/profile_photo.jpg'));
+    await assertSucceeds(read('cajeraA', 'companies/orgA/employees/e1/profile_photo.jpg'));
+    await assertFails(put('cajeraA', 'companies/orgA/employees/e1/profile_photo.jpg'));
+  });
+
   test('extraño, pendiente y otra empresa no tocan archivos', async () => {
-    await assertSucceeds(put('cajeraA', 'companies/orgA/employees/e1/dpi.pdf'));
+    await assertSucceeds(put('rrhhA', 'companies/orgA/employees/e1/dpi.pdf'));
     await assertFails(read('stranger', 'companies/orgA/employees/e1/dpi.pdf'));
     await assertFails(read('ownerB', 'companies/orgA/employees/e1/dpi.pdf'));
     await assertFails(read('pendingA', 'companies/orgA/employees/e1/dpi.pdf'));

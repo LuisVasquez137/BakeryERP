@@ -81,6 +81,12 @@ class StandardCostViewModel(
     /** El mes actual y el siguiente: congelar el siguiente apenas cierra el mes. */
     val periodOptions: List<String> get() = currentPeriod().let { listOf(it, nextPeriod(it)) }
 
+    /**
+     * Si quien mira puede leer salarios (`VIEW_EMPLOYEE_SALARY`). Lo fija la pantalla; sin él,
+     * las fichas se leen sin la parte de pago y el costo sale sin mano de obra.
+     */
+    var includePay: Boolean = false
+
     fun load(companyId: String, target: String = _uiState.value.targetPeriod) {
         viewModelScope.launch {
             _uiState.update { it.copy(targetPeriod = target, isLoading = true, error = null) }
@@ -97,7 +103,9 @@ class StandardCostViewModel(
         val materialD = async { materialLoader.load(companyId) }
         val branchesD = async { branchRepository.getBranches(companyId) }
         val expensesD = async { expenseRepository.getExpensesForPeriod(companyId, source) }
-        val employeesD = async { employeeRepository.getEmployees(companyId) }
+        val employeesD = async { employeeRepository.getEmployees(
+            companyId, if (includePay) setOf(EmployeeRepository.PrivatePart.PAY) else emptySet()
+        ) }
         val payrollD = async { runCatching { payrollRepository.getPayrollForPeriod(companyId, from, until) }.getOrElse { emptyList() } }
         val frozenD = async { standardCostRepository.getPeriod(companyId, target) }
         val frozenCostsD = async { runCatching { standardCostRepository.getCosts(companyId, target) }.getOrElse { emptyList() } }
@@ -149,6 +157,11 @@ class StandardCostViewModel(
     fun freeze(companyId: String, user: User) {
         val s = _uiState.value
         if (s.isFreezing || s.isLoading) return
+        // Congelar sin salarios dejaría todo el mes con un costo sin mano de obra.
+        if (!includePay) {
+            _uiState.update { it.copy(error = "Para congelar el costo hace falta el permiso \"Ver nómina y salario\": sin él el cálculo no lleva la mano de obra.") }
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isFreezing = true, error = null) }
             runCatching {

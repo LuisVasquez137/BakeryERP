@@ -263,14 +263,17 @@ service cloud.firestore {
     }
 
     match /companies/{companyId}/{collection}/{docId} {
-      allow read: if isApprovedMemberOf(companyId);
+      // Colaboradores: lectura con su propia regla (solo personal, no revendedores).
+      allow read: if isApprovedMemberOf(companyId) && collection != 'employees';
       allow create: if canWriteCollection(companyId, collection) && branchOkOnCreate(collection);
       allow update: if canWriteCollection(companyId, collection);
       allow delete: if canWriteCollection(companyId, collection) && !isHistory(collection);
     }
 
     match /companies/{companyId}/{collection}/{docId}/{sub}/{rest=**} {
-      allow read: if isApprovedMemberOf(companyId);
+      // Las subcolecciones del colaborador (nómina, documentos, historial, parte privada)
+      // tienen sus propias reglas más abajo: aquí no se abren.
+      allow read: if isApprovedMemberOf(companyId) && collection != 'employees';
       allow create, update: if canWriteCollection(companyId, collection);
       allow delete: if canWriteCollection(companyId, collection) && !isHistorySub(collection, sub);
     }
@@ -279,6 +282,9 @@ service cloud.firestore {
     // deje entrar, pero sus permisos (lo que puede hacer con su PIN) solo OWNER/ADMIN, y
     // el estado del PIN solo la Cloud Function (functions/access/employeeAccess.js).
     match /companies/{companyId}/employees/{employeeId} {
+      // La ficha pública: nombre, foto, sucursal, horario, PIN... la usa toda la app (pantalla
+      // de PIN, kiosko, cajas, Home). Lo delicado vive en private/ (ver más abajo).
+      allow read: if isStaffOf(companyId);
       allow create: if isApprovedMemberOf(companyId)
                     && !request.resource.data.keys().hasAny(['pinStatus', 'pinUpdatedAt'])
                     && (request.resource.data.get('permissions', []).size() == 0 || isAdminOf(companyId));
@@ -292,7 +298,29 @@ service cloud.firestore {
     // Subcolecciones (documentos, historial...). `{sub}/{rest=**}` y no `{sub=**}`: este
     // último también calza con CERO segmentos, o sea con la ficha misma, y la dejaba abierta.
     match /companies/{companyId}/employees/{employeeId}/{sub}/{rest=**} {
-      allow write: if isApprovedMemberOf(companyId);
+      allow read, write: if isStaffOf(companyId) && employeeSubOk(sub);
+    }
+
+    // Cada pestaña de la ficha con su permiso. La asistencia queda para todo el personal:
+    // la escribe el kiosko (cuenta del equipo) y el Home la lee para el aviso del día.
+    // private/ no pasa por aquí: tiene su propia regla.
+    function employeeSubOk(sub) {
+      return sub == 'attendance'
+        || (sub == 'payroll' && hasPermission('VIEW_EMPLOYEE_SALARY'))
+        || (sub == 'documents' && hasPermission('VIEW_EMPLOYEE_DOCUMENTS'))
+        || (sub == 'history' && hasPermission('VIEW_EMPLOYEE_HISTORY'))
+        || !(sub in ['payroll', 'documents', 'history', 'private']);
+    }
+
+    // Parte privada de la ficha (arquitectura/seguridad-accesos.md, "Ficha privada"):
+    // profile = DPI, NIT, dirección, emergencia, notas → quien maneja colaboradores.
+    // pay = salario, prestaciones, banco, cuenta → quien ve nómina y salario.
+    // Ojo: con PIN, Firestore ve los permisos de la CUENTA del equipo, no de la persona.
+    match /companies/{companyId}/employees/{employeeId}/private/{part} {
+      allow read, write: if isStaffOf(companyId) && (
+        (part == 'profile' && hasPermission('MANAGE_EMPLOYEES'))
+        || (part == 'pay' && hasPermission('VIEW_EMPLOYEE_SALARY'))
+      );
     }
 
     // Hash del PIN: solo el Admin SDK. Ni el dueño lo lee desde la app.

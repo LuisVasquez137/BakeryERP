@@ -1,5 +1,6 @@
 package com.bakery.erp.presentation.employees
 
+import com.bakery.erp.domain.employeePrivateParts
 import com.bakery.erp.util.fmtDate
 import com.bakery.erp.model.PayrollStatus
 import com.bakery.erp.model.payrollCreditMovementId
@@ -107,10 +108,17 @@ class EmployeeViewModel(
 
     // ── Empleados ────────────────────────────────────────────────────────────
 
-    fun loadEmployees(companyId: String) {
+    /**
+     * [viewer]: quien mira. Define qué partes privadas de la ficha se leen (DPI y dirección con
+     * MANAGE_EMPLOYEES, salario y banco con VIEW_EMPLOYEE_SALARY). Null = solo lo público
+     * (el kiosko). Ver `EmployeeRepository`.
+     */
+    fun loadEmployees(companyId: String, viewer: User? = null) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
-            val employees = runCatching { employeeRepository.getEmployees(companyId) }.getOrElse { emptyList() }
+            val employees = runCatching {
+                employeeRepository.getEmployees(companyId, viewer.employeePrivateParts())
+            }.getOrElse { emptyList() }
             val branches = runCatching { branchRepository.getBranches(companyId) }.getOrElse { emptyList() }
             val positions = runCatching { jobPositionRepository.getJobPositions(companyId) }.getOrElse { emptyList() }
             val users = runCatching { authRepository.getUsersForOrg(companyId) }.getOrElse { emptyList() }
@@ -126,10 +134,12 @@ class EmployeeViewModel(
         }
     }
 
-    fun loadEmployeeDetail(companyId: String, employeeId: String) {
+    fun loadEmployeeDetail(companyId: String, employeeId: String, viewer: User? = null) {
         viewModelScope.launch {
             _uiState.update { it.copy(isDetailLoading = true) }
-            val employee = runCatching { employeeRepository.getEmployee(companyId, employeeId) }.getOrNull()
+            val employee = runCatching {
+                employeeRepository.getEmployee(companyId, employeeId, viewer.employeePrivateParts())
+            }.getOrNull()
             if (_uiState.value.jobPositions.isEmpty()) {
                 val positions = runCatching { jobPositionRepository.getJobPositions(companyId) }.getOrElse { emptyList() }
                 _uiState.update { it.copy(jobPositions = positions.filter { p -> p.active }) }
@@ -140,7 +150,10 @@ class EmployeeViewModel(
             }
             // El "Jefe inmediato" del formulario se escoge entre colaboradores.
             if (_uiState.value.employees.isEmpty()) {
-                val employees = runCatching { employeeRepository.getEmployees(companyId) }.getOrElse { emptyList() }
+                // Con las mismas partes que la lista: la lista abre el formulario con estos objetos.
+                val employees = runCatching {
+                    employeeRepository.getEmployees(companyId, viewer.employeePrivateParts())
+                }.getOrElse { emptyList() }
                 _uiState.update { it.copy(employees = employees) }
             }
             if (_uiState.value.branches.isEmpty()) {
@@ -184,8 +197,14 @@ class EmployeeViewModel(
         companyId: String,
         employee: Employee,
         photoBytes: ByteArray? = null,
-        pendingDocuments: List<Pair<EmployeeDocument, ByteArray>> = emptyList()
+        pendingDocuments: List<Pair<EmployeeDocument, ByteArray>> = emptyList(),
+        viewer: User? = null
     ) {
+        // Solo las partes privadas que esta persona puede tocar Y que la ficha trajo leídas:
+        // guardar una parte que no se cargó la dejaría en blanco. En el alta, todas las suyas.
+        val allowed = viewer.employeePrivateParts()
+        val parts = if (employee.id.isEmpty()) allowed
+                    else allowed.filter { it.name in employee.privatePartsLoaded }.toSet()
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             val finalEmployee = if (photoBytes != null) {
@@ -196,7 +215,7 @@ class EmployeeViewModel(
             } else {
                 employee
             }
-            val id = runCatching { employeeRepository.saveEmployee(companyId, finalEmployee) }
+            val id = runCatching { employeeRepository.saveEmployee(companyId, finalEmployee, parts) }
                 .getOrElse { err -> _uiState.update { it.copy(isLoading = false, error = err.message) }; return@launch }
             // En serie: son pocos y así un corte deja subidos los primeros, no una mezcla.
             val failed = pendingDocuments.filter { (doc, bytes) ->

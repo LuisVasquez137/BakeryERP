@@ -176,3 +176,41 @@ Revisión al terminar la rentabilidad por sucursal (`propuesta-rentabilidad-por-
   revendedor por la app sigue por su propia regla.
 - **Lectura**: las reglas siguen dejando leer toda la empresa a cualquier miembro aprobado
   (incluidos `standardCosts`, que el despacho necesita leer). El recorte de lectura es de la app.
+
+## Ficha privada del colaborador (16 oct 2026)
+
+Antes cualquier persona del personal (y los revendedores) podía leer de Firestore el DPI, la
+cuenta bancaria y el salario de todos, y bajar los documentos escaneados. Ahora la ficha vive en
+tres documentos:
+
+| Documento | Qué lleva | Quién lo lee/escribe |
+|---|---|---|
+| `employees/{id}` | nombre, foto, sucursal, puesto, horario, cumpleaños, permisos, PIN, estado | todo el personal (no revendedores) |
+| `employees/{id}/private/profile` | DPI, NIT, estado civil, dirección, emergencia, notas | `MANAGE_EMPLOYEES` |
+| `employees/{id}/private/pay` | forma de pago, banco, cuenta, salario, prestaciones | `VIEW_EMPLOYEE_SALARY` |
+
+Subcolecciones: `payroll` con `VIEW_EMPLOYEE_SALARY`, `documents` con `VIEW_EMPLOYEE_DOCUMENTS`,
+`history` con `VIEW_EMPLOYEE_HISTORY`; `attendance` abierta al personal (la escribe el kiosko con la
+cuenta del equipo y el Home la lee). Storage `companies/{c}/employees/{id}/`: la foto
+(`profile_photo.jpg`) la lee todo el personal y la sube `MANAGE_EMPLOYEES`; lo demás, documentos.
+
+- **App**: `EmployeeRepository.getEmployees/getEmployee(..., privateParts)` y
+  `saveEmployee(..., privateParts)`. `User.employeePrivateParts()` da el corte (mismo que las
+  reglas). Cada `Employee` trae `privatePartsLoaded` (no se guarda) y al guardar solo se escriben
+  las partes que vinieron leídas: una ficha abierta sin la parte de pago no la pisa con ceros.
+  La lista de Colaboradores carga las mismas partes que el detalle porque abre el formulario.
+- **Reportes de costo** (resultado por sucursal, costo estándar, reparto): con
+  `VIEW_EMPLOYEE_SALARY` leen la parte de pago; sin él salen sin mano de obra y con aviso
+  (`NoSalaryNotice`), y congelar el costo estándar queda bloqueado. El financiero pone la nómina
+  en cero sin el permiso.
+- **Límite del PIN**: Firestore ve los permisos de la CUENTA del equipo, no de la persona. No dar
+  permisos de colaboradores a cuentas de equipo (hoy Bombero y Democracia tienen
+  `MANAGE_EMPLOYEES`, Democracia además documentos).
+
+### Fases
+1. **Hecha (16 oct)**: app lee lo privado (si la parte privada es igual o más reciente que la
+   pública, o la pública ya no trae esos campos) y escribe lo privado + una copia en la pública
+   (bloque "FASE 1" en `saveEmployee`, `runCatching`) para las versiones viejas. Reglas publicadas.
+2. **Pendiente, cuando todos los equipos actualicen**: `functions/tools/migrate-employee-private.js
+   --apply --strip` (ensayo sin flags); luego reglas que rechacen esos campos en la ficha pública y
+   quitar el bloque "FASE 1". Hasta entonces los datos siguen también en la ficha pública.

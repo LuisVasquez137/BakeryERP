@@ -43,9 +43,25 @@ service firebase.storage {
       return request.resource == null || request.resource.size < 20 * 1024 * 1024;
     }
 
-    match /companies/{companyId}/{allPaths=**} {
-      allow read: if isStaffOf(companyId);
-      allow write: if isStaffOf(companyId) && sizeOk();
+    function hasPermission(p) {
+      return profile().role == 'OWNER' || p in profile().get('permissions', []);
+    }
+
+    // Archivos de colaboradores: la foto la ve todo el personal (pantalla de PIN, Home) y la
+    // sube quien maneja colaboradores; los documentos escaneados (DPI, antecedentes), solo
+    // quien tiene la pestaña de documentos. Va antes que la regla general de la empresa,
+    // que ya no los cubre.
+    match /companies/{companyId}/employees/{employeeId}/{file} {
+      allow read: if isStaffOf(companyId)
+        && (file == 'profile_photo.jpg' || hasPermission('VIEW_EMPLOYEE_DOCUMENTS'));
+      allow write: if isStaffOf(companyId) && sizeOk()
+        && (file == 'profile_photo.jpg' ? hasPermission('MANAGE_EMPLOYEES')
+                                        : hasPermission('VIEW_EMPLOYEE_DOCUMENTS'));
+    }
+
+    match /companies/{companyId}/{section}/{allPaths=**} {
+      allow read: if isStaffOf(companyId) && section != 'employees';
+      allow write: if isStaffOf(companyId) && section != 'employees' && sizeOk();
     }
 
     match /purchaseInvoices/{companyId}/{allPaths=**} {

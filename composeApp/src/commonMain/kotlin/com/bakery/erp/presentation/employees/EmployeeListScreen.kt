@@ -102,8 +102,9 @@ fun EmployeeListScreen(
     val companyId = authState.user?.orgId ?: ""
     val snackbarHostState = remember { SnackbarHostState() }
 
-    LaunchedEffect(companyId) {
-        if (companyId.isNotEmpty()) viewModel.loadEmployees(companyId)
+    // Con permisos en la llave: lo privado que se lee depende de quién mira (PIN).
+    LaunchedEffect(companyId, authState.user?.permissions) {
+        if (companyId.isNotEmpty()) viewModel.loadEmployees(companyId, authState.user)
     }
     LaunchedEffect(state.error) {
         state.error?.let { snackbarHostState.showSnackbar(it); viewModel.clearError() }

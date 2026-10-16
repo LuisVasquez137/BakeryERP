@@ -150,8 +150,8 @@ fun EmployeeDetailScreen(
         creditState?.message?.let { snackbarHostState.showSnackbar(it); creditViewModel?.clearMessage() }
     }
 
-    LaunchedEffect(employeeId, companyId) {
-        if (companyId.isNotEmpty()) viewModel.loadEmployeeDetail(companyId, employeeId)
+    LaunchedEffect(employeeId, companyId, authState.user?.permissions) {
+        if (companyId.isNotEmpty()) viewModel.loadEmployeeDetail(companyId, employeeId, authState.user)
     }
     LaunchedEffect(state.isDeleted) {
         if (state.isDeleted) { viewModel.clearDeleted(); onNavigateBack() }

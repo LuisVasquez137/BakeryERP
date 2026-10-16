@@ -144,12 +144,12 @@ fun EmployeeFormScreen(
 
     LaunchedEffect(companyId) {
         if (companyId.isNotEmpty() && state.branches.isEmpty()) {
-            viewModel.loadEmployees(companyId)
+            viewModel.loadEmployees(companyId, authState.user)
         }
     }
     LaunchedEffect(employeeId, companyId) {
         if (employeeId != null && companyId.isNotEmpty()) {
-            viewModel.loadEmployeeDetail(companyId, employeeId)
+            viewModel.loadEmployeeDetail(companyId, employeeId, authState.user)
         }
     }
     // PIN y permisos del alta: van por la Cloud Function / el VM de acceso, y necesitan el id.
@@ -217,7 +217,7 @@ fun EmployeeFormScreen(
             authState.user?.hasPermission(Permission.VIEW_EMPLOYEE_ACCESS) == true,
         onSave = { employee, photoBytes, extras ->
             pendingAccess = extras
-            viewModel.saveEmployee(companyId, employee, photoBytes, extras.documents)
+            viewModel.saveEmployee(companyId, employee, photoBytes, extras.documents, authState.user)
         },
         onDelete = if (!isNew) { { viewModel.deleteEmployee(companyId, employeeId!!) } } else null,
         isDeleted = state.isDeleted,
@@ -501,7 +501,9 @@ private fun EmployeeFormContent(
                 active = selectedStatus == EmployeeStatus.ACTIVE,
                 createdAt = existing?.createdAt ?: 0L,
                 // Ya no se edita (la identidad sale del PIN); se conserva el que tuviera.
-                userId = existing?.userId ?: ""
+                userId = existing?.userId ?: "",
+                // Qué partes privadas trajo la ficha que se está editando: solo esas se guardan.
+                privatePartsLoaded = existing?.privatePartsLoaded ?: emptySet()
             ),
             photoBytes,
             NewEmployeeExtras(
