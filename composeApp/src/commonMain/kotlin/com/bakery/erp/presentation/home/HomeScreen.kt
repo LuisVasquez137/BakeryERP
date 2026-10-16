@@ -397,9 +397,16 @@ fun HomeScreen(
     // La campana se suscribe desde Home porque es la pantalla que siempre está
     // en el backstack: así el badge sigue vivo aunque el usuario ande en otro
     // módulo y vuelva.
-    LaunchedEffect(user?.id, user?.orgId) {
+    // Los avisos se filtran por los permisos de quien está usando el equipo: con solo el id
+    // de llave, en un equipo de sucursal se quedaba el filtro de antes del PIN (cero
+    // permisos) o el de la persona anterior.
+    LaunchedEffect(user?.id, user?.orgId, user?.operatorEmployeeId, user?.permissions, user?.branchIds) {
         val u = user ?: return@LaunchedEffect
         notificationViewModel.observe(u.orgId, u)
+    }
+    // El token del teléfono es de la cuenta, no de la persona: basta con registrarlo una vez.
+    LaunchedEffect(user?.id, user?.orgId) {
+        val u = user ?: return@LaunchedEffect
         notificationViewModel.registerCurrentDevice(u.orgId, u.id)
     }
 

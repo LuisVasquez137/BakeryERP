@@ -42,6 +42,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -98,11 +99,13 @@ fun CustomerOrderListScreen(
     val canManageCustomers = user?.hasPermission(Permission.MANAGE_EXTERNAL_CUSTOMERS) == true
     val snackbarHostState = remember { SnackbarHostState() }
 
-    LaunchedEffect(companyId) {
+    // Escucha en vivo mientras la lista está en pantalla; al salir se suelta.
+    DisposableEffect(companyId) {
         if (companyId.isNotEmpty()) {
             viewModel.observeOrders(companyId)
             viewModel.loadOrdersOnce(companyId)
         }
+        onDispose { viewModel.stopObservingOrders() }
     }
     LaunchedEffect(state.error) {
         state.error?.let { snackbarHostState.showSnackbar(it); viewModel.clearError() }

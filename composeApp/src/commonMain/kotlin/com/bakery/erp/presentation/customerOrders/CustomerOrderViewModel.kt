@@ -22,11 +22,11 @@ import com.bakery.erp.model.Product
 import com.bakery.erp.model.ProductionLot
 import com.bakery.erp.model.ProductionLotLine
 import com.bakery.erp.model.ProductionShift
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 data class CustomerOrderUiState(
@@ -65,17 +65,29 @@ class CustomerOrderViewModel(
     private val _uiState = MutableStateFlow(CustomerOrderUiState())
     val uiState: StateFlow<CustomerOrderUiState> = _uiState.asStateFlow()
 
-    /** Listener vivo a la colección de pedidos. */
+    private var ordersJob: Job? = null
+
+    /**
+     * Listener vivo a la colección de pedidos. Cancela el anterior: la lista lo pide cada
+     * vez que entra en pantalla y antes se acumulaba un listener más por visita.
+     */
     fun observeOrders(companyId: String) {
-        viewModelScope.launch {
+        ordersJob?.cancel()
+        ordersJob = viewModelScope.launch {
             orderRepo.observeOrders(companyId)
-                .stateIn(this, SharingStarted.Eagerly, emptyList<CustomerOrder>())
+                // Un error del listener no debe tumbar la app: se avisa y ya.
+                .catch { e -> _uiState.value = _uiState.value.copy(error = e.message) }
                 .collect { list ->
                     _uiState.value = _uiState.value.copy(
                         orders = list.sortedByDescending { it.deliveryDate }
                     )
                 }
         }
+    }
+
+    fun stopObservingOrders() {
+        ordersJob?.cancel()
+        ordersJob = null
     }
 
     fun loadOrdersOnce(companyId: String) {

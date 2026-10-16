@@ -205,7 +205,8 @@ fun ProductWeightsScreen(
             bottomBar = {
                 Surface(shadowElevation = 8.dp, color = Color.White) {
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        // Edge-to-edge (Android 15): sin esto el botón queda bajo la barra de navegación.
+                        modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
