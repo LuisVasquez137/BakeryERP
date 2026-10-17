@@ -280,6 +280,16 @@ describe('colaboradores', () => {
     await assertFails(getDoc(payRef(as('ownerB'))));
   });
 
+  test('la ficha pública no acepta DPI, dirección ni salario (viven en private/)', async () => {
+    await seed(ficha);
+    const own = as('ownerA');
+    await assertFails(updateDoc(doc(own, 'companies/orgA/employees/e1'), { dpi: '123' }));
+    await assertFails(updateDoc(doc(own, 'companies/orgA/employees/e1'), { baseSalary: 3000 }));
+    await assertFails(updateDoc(doc(as('encargadaA'), 'companies/orgA/employees/e1'), { address: 'zona 1' }));
+    await assertFails(setDoc(doc(own, 'companies/orgA/employees/e4'), { ...ficha, bankAccount: '001' }));
+    await assertSucceeds(updateDoc(doc(own, 'companies/orgA/employees/e1'), { phone: '5555' }));
+  });
+
   test('pestañas de la ficha con su permiso; la asistencia sigue abierta al personal', async () => {
     await seed(ficha);
     const caj = as('cajeraA');

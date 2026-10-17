@@ -208,9 +208,10 @@ cuenta del equipo y el Home la lee). Storage `companies/{c}/employees/{id}/`: la
   `MANAGE_EMPLOYEES`, Democracia además documentos).
 
 ### Fases
-1. **Hecha (16 oct)**: app lee lo privado (si la parte privada es igual o más reciente que la
-   pública, o la pública ya no trae esos campos) y escribe lo privado + una copia en la pública
-   (bloque "FASE 1" en `saveEmployee`, `runCatching`) para las versiones viejas. Reglas publicadas.
-2. **Pendiente, cuando todos los equipos actualicen**: `functions/tools/migrate-employee-private.js
-   --apply --strip` (ensayo sin flags); luego reglas que rechacen esos campos en la ficha pública y
-   quitar el bloque "FASE 1". Hasta entonces los datos siguen también en la ficha pública.
+1. **Hecha (16 oct)**: la app leía lo privado y escribía también una copia en la ficha pública
+   para las versiones viejas.
+2. **Hecha (16 oct)**: respaldo (`functions/tools/backup-employees.js`), luego
+   `migrate-employee-private.js --apply --strip` sobre las 21 fichas (verificado contra el
+   respaldo). La regla rechaza en la ficha pública los 12 campos privados
+   (`employeePrivateFields()`), se quitó la copia y la app ya no lee esos campos de la pública:
+   lo privado siempre manda. Una versión vieja de la app ya no puede guardar fichas.

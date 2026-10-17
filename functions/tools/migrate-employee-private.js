@@ -15,8 +15,8 @@
  *   node migrate-employee-private.js --apply                          # copia a private/
  *   node migrate-employee-private.js --apply --strip                  # copia y limpia la pública
  *
- * Después de --strip: publicar las reglas que rechazan esos campos en la ficha pública y quitar
- * el bloque "FASE 1" de FirebaseEmployeeRepository.saveEmployee.
+ * Hecho el 16 oct 2026 (fase 2). Después de --strip: la regla employeePrivateFields() ya rechaza
+ * esos campos en la ficha pública. Respaldar antes con backup-employees.js.
  */
 const { initializeApp } = require('firebase-admin/app');
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');

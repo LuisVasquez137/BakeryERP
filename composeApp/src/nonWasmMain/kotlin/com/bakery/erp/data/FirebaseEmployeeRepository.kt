@@ -32,10 +32,10 @@ class FirebaseEmployeeRepository(
 
     override suspend fun getEmployees(companyId: String, privateParts: Set<PrivatePart>): List<Employee> {
         val visible = col(companyId).get().documents
-            .map { it.toPublicRead() }
-            .filter { it.employee.status != EmployeeStatus.FIRED && it.employee.status != EmployeeStatus.RESIGNED }
-            .sortedBy { it.employee.name }
-        if (privateParts.isEmpty()) return visible.map { it.employee }
+            .map { it.toEmployee() }
+            .filter { it.status != EmployeeStatus.FIRED && it.status != EmployeeStatus.RESIGNED }
+            .sortedBy { it.name }
+        if (privateParts.isEmpty()) return visible
         return coroutineScope {
             visible.map { async { withPrivate(companyId, it, privateParts) } }.awaitAll()
         }
@@ -44,35 +44,28 @@ class FirebaseEmployeeRepository(
     override suspend fun getEmployee(
         companyId: String, employeeId: String, privateParts: Set<PrivatePart>
     ): Employee? {
-        val read = runCatching { col(companyId).document(employeeId).get().toPublicRead() }.getOrNull()
+        val employee = runCatching { col(companyId).document(employeeId).get().toEmployee() }.getOrNull()
             ?: return null
-        return if (privateParts.isEmpty()) read.employee else withPrivate(companyId, read, privateParts)
+        return if (privateParts.isEmpty()) employee else withPrivate(companyId, employee, privateParts)
     }
 
     /**
-     * Encima de la ficha pública pone lo de las partes privadas. Mientras dure la fase 1 la
-     * ficha pública todavía trae esos campos (las versiones viejas de la app los leen y los
-     * escriben ahí); se usa la parte privada si es al menos igual de reciente, o si la pública
-     * ya no los trae. Así, lo que una app vieja corrija no queda tapado por una copia vieja.
-     * Una parte que no se puede leer (sin permiso, o sin crear) deja lo de la pública.
+     * Encima de la ficha pública pone lo de las partes privadas (la pública ya no trae esos
+     * campos: las reglas los rechazan ahí). Una parte que no existe deja los campos vacíos.
      */
-    private suspend fun withPrivate(companyId: String, read: PublicRead, parts: Set<PrivatePart>): Employee =
+    private suspend fun withPrivate(companyId: String, employee: Employee, parts: Set<PrivatePart>): Employee =
         coroutineScope {
             // null = no se pudo leer (sin permiso, sin red): esa parte NO cuenta como cargada.
             val pending = parts.associateWith { part ->
-                async { runCatching { privateDoc(companyId, read.employee.id, part).get() }.getOrNull() }
+                async { runCatching { privateDoc(companyId, employee.id, part).get() }.getOrNull() }
             }
             val results = pending.mapValues { it.value.await() }
             val snaps = results.mapValues { (_, snap) -> snap?.takeIf { it.exists } }
-            var e = read.employee.copy(
+            var e = employee.copy(
                 privatePartsLoaded = results.filterValues { it != null }.keys.map { it.name }.toSet()
             )
-            snaps[PrivatePart.PROFILE]?.let { snap ->
-                if (!read.hasLegacyProfile || snap.readMillis("updatedAt") >= read.updatedAt) e = e.withProfileFrom(snap)
-            }
-            snaps[PrivatePart.PAY]?.let { snap ->
-                if (!read.hasLegacyPay || snap.readMillis("updatedAt") >= read.updatedAt) e = e.withPayFrom(snap)
-            }
+            snaps[PrivatePart.PROFILE]?.let { e = e.withProfileFrom(it) }
+            snaps[PrivatePart.PAY]?.let { e = e.withPayFrom(it) }
             e
         }
 
@@ -95,15 +88,6 @@ class FirebaseEmployeeRepository(
         // Cada parte privada es entera de este formulario: set() con su propio updatedAt.
         privateParts.forEach { part ->
             privateDoc(companyId, docRef.id, part).set(final.privateMap(part) + ("updatedAt" to now.toDouble()))
-        }
-        // FASE 1 (transición): copia de lo privado en la ficha pública, para que las versiones
-        // viejas de la app lo sigan viendo igual. En la fase 2 las reglas dejan de aceptar estos
-        // campos ahí (esta escritura falla sin consecuencias) y se quita este bloque. Ver
-        // arquitectura/seguridad-accesos.md, "Ficha privada".
-        if (privateParts.isNotEmpty()) {
-            runCatching {
-                docRef.update(privateParts.fold(emptyMap<String, Any?>()) { acc, part -> acc + final.privateMap(part) })
-            }
         }
         return docRef.id
     }
@@ -206,27 +190,6 @@ class FirebaseEmployeeRepository(
         "userId" to userId
     )
 
-    /** La ficha pública y lo que hace falta para decidir contra las partes privadas. */
-    private class PublicRead(
-        val employee: Employee,
-        val updatedAt: Long,
-        val hasLegacyProfile: Boolean,
-        val hasLegacyPay: Boolean
-    )
-
-    private fun DocumentSnapshot.toPublicRead(): PublicRead {
-        val e = toEmployee()
-        fun str(field: String) = runCatching { get<String?>(field) }.getOrNull()
-        return PublicRead(
-            employee = e,
-            updatedAt = e.updatedAt,
-            hasLegacyProfile = listOf("dpi", "nit", "address", "emergencyContact", "emergencyPhone", "maritalStatus", "notes")
-                .any { str(it) != null },
-            hasLegacyPay = str("bank") != null || str("bankAccount") != null || str("paymentType") != null ||
-                runCatching { get<Double?>("baseSalary") }.getOrNull() != null
-        )
-    }
-
     private fun Employee.withProfileFrom(snap: DocumentSnapshot): Employee {
         fun str(field: String) = runCatching { snap.get<String?>(field) }.getOrNull() ?: ""
         return copy(
@@ -253,7 +216,7 @@ class FirebaseEmployeeRepository(
         )
     }
 
-    /** Lee la ficha pública. Los campos privados salen de ahí solo mientras dure la fase 1. */
+    /** Lee la ficha pública. Los campos privados quedan vacíos: los pone [withPrivate]. */
     private fun DocumentSnapshot.toEmployee(): Employee {
         val statusStr = runCatching { get<String?>("status") }.getOrNull()
         val status = statusStr?.let { runCatching { EmployeeStatus.valueOf(it) }.getOrNull() }
@@ -267,17 +230,11 @@ class FirebaseEmployeeRepository(
             name = get<String?>("name") ?: "",
             employeeCode = get<String?>("employeeCode") ?: "",
             photoUrl = get<String?>("photoUrl") ?: "",
-            dpi = get<String?>("dpi") ?: "",
-            nit = get<String?>("nit") ?: "",
             birthDate = readMillis("birthDate"),
             gender = get<String?>("gender") ?: "",
-            maritalStatus = get<String?>("maritalStatus") ?: "",
             phone = get<String?>("phone") ?: "",
             phoneAux = get<String?>("phoneAux") ?: "",
             email = get<String?>("email") ?: "",
-            address = get<String?>("address") ?: "",
-            emergencyContact = get<String?>("emergencyContact") ?: "",
-            emergencyPhone = get<String?>("emergencyPhone") ?: "",
             branchId = get<String?>("branchId") ?: "",
             branchName = get<String?>("branchName") ?: "",
             costCenter = CostCenter.normalize(runCatching { get<String?>("costCenter") }.getOrNull()),
@@ -295,16 +252,9 @@ class FirebaseEmployeeRepository(
             splitShift = runCatching { get<Boolean?>("splitShift") }.getOrNull() ?: false,
             secondStartTime = runCatching { get<String?>("secondStartTime") }.getOrNull() ?: "",
             secondEndTime = runCatching { get<String?>("secondEndTime") }.getOrNull() ?: "",
-            paymentType = get<String?>("paymentType") ?: "",
-            bank = get<String?>("bank") ?: "",
-            bankAccount = get<String?>("bankAccount") ?: "",
-            baseSalary = runCatching { get<Double?>("baseSalary") }.getOrNull() ?: 0.0,
-            monthlyBenefits = runCatching { get<Double?>("monthlyBenefits") }.getOrNull()
-                ?: runCatching { get<Long?>("monthlyBenefits")?.toDouble() }.getOrNull() ?: 0.0,
             status = status,
             hireDate = readMillis("hireDate"),
             endDate = readMillis("endDate"),
-            notes = get<String?>("notes") ?: "",
             active = status == EmployeeStatus.ACTIVE,
             createdAt = readMillis("createdAt"),
             updatedAt = readMillis("updatedAt"),

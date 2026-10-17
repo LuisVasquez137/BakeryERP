@@ -287,12 +287,21 @@ service cloud.firestore {
       allow read: if isStaffOf(companyId);
       allow create: if isApprovedMemberOf(companyId)
                     && !request.resource.data.keys().hasAny(['pinStatus', 'pinUpdatedAt'])
+                    && !request.resource.data.keys().hasAny(employeePrivateFields())
                     && (request.resource.data.get('permissions', []).size() == 0 || isAdminOf(companyId));
       allow update: if isApprovedMemberOf(companyId)
                     && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['pinStatus', 'pinUpdatedAt'])
+                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny(employeePrivateFields())
                     && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['permissions'])
                         || isAdminOf(companyId));
       allow delete: if isApprovedMemberOf(companyId);
+    }
+
+    // Lo que vive en private/profile y private/pay no se acepta en la ficha pública (la lee
+    // todo el personal). Fase 2 de "Ficha privada": la migración ya lo sacó de ahí.
+    function employeePrivateFields() {
+      return ['dpi', 'nit', 'maritalStatus', 'address', 'emergencyContact', 'emergencyPhone', 'notes',
+              'paymentType', 'bank', 'bankAccount', 'baseSalary', 'monthlyBenefits'];
     }
 
     // Subcolecciones (documentos, historial...). `{sub}/{rest=**}` y no `{sub=**}`: este
