@@ -70,6 +70,16 @@ interface IngredientRepository {
         skipLots: Boolean = false
     ): Double
 
+    /**
+     * La parte de lotes (FEFO) de una salida cuyo saldo YA se descontó por otro lado. Solo la
+     * usa el cobro: la venta del huevo descuenta el saldo con una suma dentro del paquete único
+     * de la venta (funciona sin internet) y los lotes se ajustan después, cuando el paquete ya
+     * subió, porque necesitan una consulta. No-op si el insumo no lleva lotes; nunca lanza.
+     */
+    suspend fun consumeLotsForSale(
+        companyId: String, branchId: String, ingredientId: String, quantity: Double
+    )
+
     // ── Lotes de insumos perecederos (FEFO) ──────────────────────────────────
 
     suspend fun getStockLots(companyId: String, branchId: String, ingredientId: String): List<StockLot>

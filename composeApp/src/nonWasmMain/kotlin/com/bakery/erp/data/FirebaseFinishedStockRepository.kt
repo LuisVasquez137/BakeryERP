@@ -231,23 +231,6 @@ class FirebaseFinishedStockRepository(
         updatedAt = readMillis("updatedAt")
     )
 
-    private fun FinishedStockMovement.toMap(): Map<String, Any?> = firestoreSafeOf(
-        "id" to id,
-        "productId" to productId,
-        "productName" to productName,
-        "branchId" to branchId,
-        "branchName" to branchName,
-        "type" to type,
-        "quantity" to quantity,
-        "unitPriceAtMovement" to unitPriceAtMovement,
-        "referenceType" to referenceType,
-        "referenceId" to referenceId,
-        "reason" to reason,
-        "createdByUserId" to createdByUserId,
-        "createdByUserName" to createdByUserName,
-        "createdAt" to if (createdAt == 0L) Clock.System.now().toEpochMilliseconds() else createdAt
-    )
-
     private fun DocumentSnapshot.toMovement() = FinishedStockMovement(
         id = id,
         productId = get<String?>("productId") ?: "",
@@ -270,3 +253,22 @@ class FirebaseFinishedStockRepository(
             ?: runCatching { get<Long?>(field) }.getOrNull()
             ?: 0L
 }
+
+// Fuera de la clase: el cobro (FirebaseSaleRepository) escribe el mismo Kardex dentro de su
+// paquete único, con este mismo formato.
+internal fun FinishedStockMovement.toMap(): Map<String, Any?> = firestoreSafeOf(
+    "id" to id,
+    "productId" to productId,
+    "productName" to productName,
+    "branchId" to branchId,
+    "branchName" to branchName,
+    "type" to type,
+    "quantity" to quantity,
+    "unitPriceAtMovement" to unitPriceAtMovement,
+    "referenceType" to referenceType,
+    "referenceId" to referenceId,
+    "reason" to reason,
+    "createdByUserId" to createdByUserId,
+    "createdByUserName" to createdByUserName,
+    "createdAt" to if (createdAt == 0L) Clock.System.now().toEpochMilliseconds() else createdAt
+)

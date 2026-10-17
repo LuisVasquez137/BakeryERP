@@ -1,6 +1,18 @@
 package com.bakery.erp.data
 
 import com.bakery.erp.domain.CashSessionRepository
+import com.bakery.erp.domain.ConnectionStatus
+import com.bakery.erp.domain.FailedSaleUpload
+import com.bakery.erp.model.finishedStockDocId
+import com.bakery.erp.util.fmt
+import dev.gitlive.firebase.firestore.DocumentReference
+import dev.gitlive.firebase.firestore.FieldValue
+import dev.gitlive.firebase.firestore.Source
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import com.bakery.erp.domain.FinishedStockRepository
 import com.bakery.erp.domain.IngredientRepository
 import com.bakery.erp.domain.SaleRepository
@@ -71,6 +83,71 @@ class FirebaseSaleRepository(
     private fun dailyCol(companyId: String) =
         firestore.collection("companies/$companyId/salesDaily")
 
+    // Lo que el cobro toca además de la venta. Las rutas son las mismas de cada repositorio
+    // dueño (terminado, insumos, cajas): el cobro escribe ahí dentro de su paquete único.
+    private fun finishedStockRef(companyId: String, branchId: String, productId: String) =
+        firestore.collection("companies/$companyId/finishedStocks").document(finishedStockDocId(branchId, productId))
+
+    private fun finishedMovementsCol(companyId: String) =
+        firestore.collection("companies/$companyId/finishedMovements")
+
+    private fun branchStockRef(companyId: String, branchId: String, ingredientId: String) =
+        firestore.collection("companies/$companyId/branchStocks").document("${branchId}_$ingredientId")
+
+    private fun ingredientMovementsCol(companyId: String, ingredientId: String) =
+        firestore.collection("companies/$companyId/ingredients/$ingredientId/movements")
+
+    private fun sessionRef(companyId: String, sessionId: String) =
+        firestore.collection("companies/$companyId/cashSessions").document(sessionId)
+
+    /**
+     * Las subidas de ventas viven más que el cobro que las lanzó (y que su ViewModel): la
+     * pantalla sigue con el cliente que viene mientras el paquete espera conexión.
+     */
+    private val uploadScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /**
+     * Lee del servidor si contesta pronto; si no, lo que haya en el equipo. Sin internet
+     * Firestore ya cae solo a la caché, pero con una señal mala (conectado y sin respuesta)
+     * esperaría bastante más: esto pone el techo.
+     */
+    private suspend fun DocumentReference.getQuick(): DocumentSnapshot? =
+        withTimeoutOrNull(QUICK_READ_MS) { runCatching { get() }.getOrNull() }
+            ?: runCatching { get(Source.CACHE) }.getOrNull()
+
+    /**
+     * El aporte de una venta al resumen del día como sumas en el servidor. Recibe el aporte
+     * ya calculado por la fórmula de siempre (`SalesDaily() + contribución`), así que no hay
+     * una segunda fórmula: solo se traduce cada número a "súmale esto".
+     */
+    private fun SalesDaily.toIncrementMap(now: Long): Map<String, Any?> {
+        fun Map<String, Double>.inc() = mapValues { (_, v) -> incrementBy(v) }
+        fun Map<String, Int>.incInt() = mapValues { (_, v) -> FieldValue.increment(v) }
+        return firestoreSafeOf(
+            "id" to id,
+            "branchId" to branchId,
+            "branchName" to branchName,
+            "businessDate" to businessDate,
+            "dateMillis" to dateMillis,
+            "revenue" to incrementBy(revenue),
+            "transactionCount" to FieldValue.increment(transactionCount),
+            "unitsSold" to incrementBy(unitsSold),
+            "paymentTotal" to paymentTotal.inc(),
+            "paymentCount" to paymentCount.incInt(),
+            "cashierName" to cashierName,
+            "cashierTotal" to cashierTotal.inc(),
+            "cashierCount" to cashierCount.incInt(),
+            "hourTotal" to hourTotal.inc(),
+            "productName" to productName,
+            "productQty" to productQty.inc(),
+            "productRevenue" to productRevenue.inc(),
+            "channelRevenue" to channelRevenue.inc(),
+            "channelCount" to channelCount.incInt(),
+            "channelUnits" to channelUnits.inc(),
+            "updatedAt" to now
+        )
+    }
+
     /**
      * Ventas de la empresa acotadas por fecha **en el servidor**. Todas las lecturas por
      * rango pasan por aquí.
@@ -98,6 +175,26 @@ class FirebaseSaleRepository(
                 ("createdAt" lessThanOrEqualTo untilMillis.toDouble())
         }
 
+    /**
+     * El cobro va en UN paquete (`WriteBatch`) que se aplica completo o no se aplica, y que no
+     * necesita leer nada del servidor. Por eso funciona sin internet: Firestore lo aplica de
+     * inmediato en el equipo (el inventario del POS baja al instante), lo guarda en su cola y
+     * lo sube solo al volver la conexión. Ver `arquitectura/pos-ventas.md`, "Cobro sin internet".
+     *
+     * El paquete lleva: la venta, sus líneas, el descuento de inventario (terminado o insumo)
+     * con su Kardex, los totales de la sesión y el resumen del día. Inventario y totales son
+     * SUMAS en el servidor (`incrementBy`), no saldos leídos y reescritos: dos cajas sin
+     * internet que suben en cualquier orden dejan el mismo resultado.
+     *
+     * Lo que se resigna: el `balanceBefore/After` del Kardex de insumos sale de lo que el
+     * equipo tenía a mano (caché), no de una transacción. Es una referencia; el saldo real es
+     * la suma de los movimientos. El terminado no lleva saldo en su Kardex.
+     *
+     * Se espera la confirmación del servidor solo [CONFIRM_WAIT_MS]. Si llega y es un rechazo,
+     * la venta no existe (el paquete es todo o nada) y se lanza el error. Si no llega a
+     * tiempo, la venta queda "por subir" ([ConnectionStatus.pendingSales]) y el cobro sigue;
+     * un rechazo posterior se avisa por [ConnectionStatus.failedSales].
+     */
     override suspend fun createSale(
         companyId: String, sale: Sale, lines: List<SaleLine>
     ): Sale = coroutineScope {
@@ -105,130 +202,183 @@ class FirebaseSaleRepository(
         val now = Clock.System.now().toEpochMilliseconds()
         val saleId = saleRef.id
 
-        // 1. Para líneas con productId: snapshot del costo en paralelo (1 round-trip por
-        //    producto único, no por línea — dedupe primero).
-        // Los respaldados por un insumo no tienen `FinishedProductStock` que consultar: su
-        // costo viene del snapshot que trae la línea (`Product.purchaseCost` al armar el
-        // carrito). Pedirlo igual devolvería 0 y además gastaría una lectura por venta.
+        // 1. Costo del terminado para `costAtSale`, y saldo del insumo para el Kardex: lo que
+        //    tenga el equipo, sin esperar al servidor más de un momento. Uno por producto.
+        //    Los respaldados por un insumo traen su costo en la línea (`Product.purchaseCost`).
         val productIdsToCost = lines
             .filterNot { it.isIngredientBacked }
             .mapNotNull { it.productId?.takeIf { id -> id.isNotEmpty() } }
             .distinct()
         val costByProductId: Map<String, Double> = productIdsToCost.map { pid ->
             async {
-                pid to (finishedStockRepository.getStock(companyId, sale.branchId, pid)?.avgUnitCost ?: 0.0)
+                val snap = finishedStockRef(companyId, sale.branchId, pid).getQuick()
+                pid to (snap?.let { runCatching { it.get<Double?>("avgUnitCost") }.getOrNull() } ?: 0.0)
             }
         }.awaitAll().toMap()
 
         val resolvedLines = lines.map { line ->
             val pid = line.productId
+            val lineId = line.id.ifEmpty { linesCol(companyId, saleId).document.id }
             if (pid != null && pid.isNotEmpty()) {
                 line.copy(
+                    id = lineId,
                     saleId = saleId,
-                    // El costo de un producto respaldado por insumo ya viene en la línea.
                     costAtSale = if (line.isIngredientBacked) line.costAtSale
                                  else costByProductId[pid] ?: 0.0,
                     stockDeducted = true
                 )
             } else {
-                line.copy(saleId = saleId, costAtSale = 0.0, stockDeducted = false)
+                line.copy(id = lineId, saleId = saleId, costAtSale = 0.0, stockDeducted = false)
             }
         }
-
-        // 2. Aplicar movimientos de stock en paralelo (cada línea afecta un producto distinto
-        //    porque el carrito ya agrega cantidades por productId).
-        // Producto respaldado por un insumo (el huevo, que entra a las recetas y además se
-        // vende por docena): descuenta el BranchStock del insumo y escribe el Kardex de
-        // insumos. Es un solo pozo porque es una sola caja — el mostrador y la producción
-        // comen de ahí, y esa competencia es la que de verdad ocurre en la bodega.
-        val ingredientMovements = resolvedLines
-            .filter { it.stockDeducted && it.isIngredientBacked }
-            .map { line ->
+        val ingredientLines = resolvedLines.filter { it.stockDeducted && it.isIngredientBacked }
+        val ingredientBalance: Map<String, Double> = ingredientLines
+            .map { it.linkedIngredientId }.distinct()
+            .map { ingredientId ->
                 async {
-                    val consumed = line.ingredientUnitsConsumed
-                    // El saldo previo sale de la misma transacción que descuenta: leído aparte,
-                    // dos ventas a la vez escribían el mismo "antes" en el Kardex.
-                    val previous = ingredientRepository.updateBranchStock(
-                        companyId, line.linkedIngredientId, line.linkedIngredientName,
-                        sale.branchId, sale.branchName, -consumed
-                    )
-                    ingredientRepository.addStockMovement(
-                        companyId, line.linkedIngredientId,
-                        StockMovement(
-                            type = "VENTA",
-                            quantity = -consumed,
-                            balanceBefore = previous,
-                            balanceAfter = previous - consumed,
-                            branchId = sale.branchId,
-                            branchName = sale.branchName,
-                            reference = saleId,
-                            date = now
-                        )
-                    )
+                    val snap = branchStockRef(companyId, sale.branchId, ingredientId).getQuick()
+                    ingredientId to (snap?.let { runCatching { it.get<Double?>("currentStock") }.getOrNull() } ?: 0.0)
                 }
-            }
+            }.awaitAll().toMap()
 
-        val movementsDone = resolvedLines
-            .filter { it.stockDeducted && it.productId != null && !it.isIngredientBacked }
-            .map { line ->
-                async {
-                    finishedStockRepository.applyMovement(
-                        companyId,
-                        FinishedStockMovement(
-                            productId = line.productId!!,
-                            productName = line.productName,
-                            branchId = sale.branchId,
-                            branchName = sale.branchName,
-                            type = FinishedMovementType.VENTA,
-                            quantity = -line.quantity,
-                            unitPriceAtMovement = line.unitPrice,
-                            referenceType = FinishedMovementReference.SALE,
-                            referenceId = saleId,
-                            reason = null,
-                            createdByUserId = sale.cashierId,
-                            createdByUserName = sale.cashierName,
-                            createdAt = now
-                        )
-                    )
-                }
-            }
-
-        // 3. En paralelo con los movimientos: escribir cabecera, líneas e incrementar sesión.
         val finalSale = sale.copy(
             id = saleId,
             createdAt = if (sale.createdAt == 0L) now else sale.createdAt,
             lineCount = resolvedLines.size,
             status = SaleStatus.COMPLETED
         )
-        val saleWrite = async { saleRef.set(finalSale.toMap()) }
-        val lineWrites = resolvedLines.map { line ->
-            async {
-                val lineRef = if (line.id.isEmpty()) linesCol(companyId, saleId).document
-                              else linesCol(companyId, saleId).document(line.id)
-                lineRef.set(line.copy(id = lineRef.id).toMap())
-            }
+
+        // 2. El paquete.
+        val batch = firestore.batch()
+        batch.set(saleRef, finalSale.toMap())
+        resolvedLines.forEach { line ->
+            batch.set(linesCol(companyId, saleId).document(line.id), line.toMap())
         }
-        val sessionInc = async {
-            if (sale.sessionId.isNotEmpty()) {
-                // Por partes: con anticipo, solo el saldo es dinero de esta gaveta. En serie,
-                // porque incrementSaleTotals lee y reescribe la sesión.
-                sale.effectivePaymentBreakdown.forEach { (method, amount) ->
-                    cashSessionRepository.incrementSaleTotals(companyId, sale.sessionId, method, amount)
+
+        // Terminado: el carrito ya agrupa por producto, así que hay una línea por producto.
+        resolvedLines
+            .filter { it.stockDeducted && it.productId != null && !it.isIngredientBacked }
+            .forEach { line ->
+                val productId = line.productId!!
+                batch.set(
+                    finishedStockRef(companyId, sale.branchId, productId),
+                    firestoreSafeOf(
+                        "id" to finishedStockDocId(sale.branchId, productId),
+                        "branchId" to sale.branchId,
+                        "branchName" to sale.branchName,
+                        "productId" to productId,
+                        "productName" to line.productName,
+                        "updatedAt" to now
+                    ) + ("currentStock" to incrementBy(-line.quantity)),
+                    merge = true
+                )
+                val moveRef = finishedMovementsCol(companyId).document
+                batch.set(moveRef, FinishedStockMovement(
+                    id = moveRef.id,
+                    productId = productId,
+                    productName = line.productName,
+                    branchId = sale.branchId,
+                    branchName = sale.branchName,
+                    type = FinishedMovementType.VENTA,
+                    quantity = -line.quantity,
+                    unitPriceAtMovement = line.unitPrice,
+                    referenceType = FinishedMovementReference.SALE,
+                    referenceId = saleId,
+                    reason = null,
+                    createdByUserId = sale.cashierId,
+                    createdByUserName = sale.cashierName,
+                    createdAt = finalSale.createdAt
+                ).toMap())
+            }
+
+        // Respaldado por un insumo (el huevo, que entra a las recetas y además se vende por
+        // docena): baja el BranchStock del insumo, que es un solo pozo con la producción. Los
+        // lotes FEFO se ajustan después de subir (ver consumeLotsForSale).
+        val consumedByIngredient = mutableMapOf<String, Double>()
+        ingredientLines.forEach { line ->
+            val consumed = line.ingredientUnitsConsumed
+            val before = (ingredientBalance[line.linkedIngredientId] ?: 0.0) -
+                (consumedByIngredient[line.linkedIngredientId] ?: 0.0)
+            consumedByIngredient[line.linkedIngredientId] =
+                (consumedByIngredient[line.linkedIngredientId] ?: 0.0) + consumed
+            batch.set(
+                branchStockRef(companyId, sale.branchId, line.linkedIngredientId),
+                firestoreSafeOf(
+                    "id" to "${sale.branchId}_${line.linkedIngredientId}",
+                    "branchId" to sale.branchId,
+                    "branchName" to sale.branchName,
+                    "ingredientId" to line.linkedIngredientId,
+                    "ingredientName" to line.linkedIngredientName,
+                    "updatedAt" to now
+                ) + ("currentStock" to incrementBy(-consumed)),
+                merge = true
+            )
+            val moveRef = ingredientMovementsCol(companyId, line.linkedIngredientId).document
+            batch.set(moveRef, StockMovement(
+                id = moveRef.id,
+                type = "VENTA",
+                quantity = -consumed,
+                balanceBefore = before,
+                balanceAfter = before - consumed,
+                branchId = sale.branchId,
+                branchName = sale.branchName,
+                reference = saleId,
+                date = finalSale.createdAt
+            ).toMovementMap())
+        }
+
+        // Totales de la sesión. Por partes: con anticipo, solo el saldo es dinero de esta
+        // gaveta. `branchId` va por si la sesión no existiera: crear el documento es mejor que
+        // perder la venta entera por esa línea (la regla exige la sucursal al crear).
+        if (sale.sessionId.isNotEmpty()) {
+            val deltas = mutableMapOf<String, Double>()
+            sale.effectivePaymentBreakdown.forEach { (method, amount) ->
+                saleTotalsDeltas(method, amount).forEach { (field, v) -> deltas[field] = (deltas[field] ?: 0.0) + v }
+            }
+            batch.set(
+                sessionRef(companyId, sale.sessionId),
+                deltas.toSessionIncrements() + ("branchId" to sale.branchId),
+                merge = true
+            )
+        }
+
+        // Resumen del día, con la MISMA fórmula que la reconstrucción (SalesDaily + aporte).
+        val contribution = contributionOf(finalSale, resolvedLines)
+        batch.set(
+            dailyCol(companyId).document(salesDailyId(contribution.branchId, contribution.businessDate)),
+            (SalesDaily() + contribution).toIncrementMap(now),
+            merge = true
+        )
+
+        // 3. Subir. El paquete ya quedó aplicado en el equipo al llamar commit(); lo que se
+        //    espera es solo el acuse del servidor, y esa espera vive fuera de este cobro.
+        ConnectionStatus.salePending()
+        val upload = uploadScope.async {
+            val error = runCatching { batch.commit() }.exceptionOrNull()
+            ConnectionStatus.saleSettled()
+            if (error == null) {
+                consumedByIngredient.forEach { (ingredientId, qty) ->
+                    ingredientRepository.consumeLotsForSale(companyId, sale.branchId, ingredientId, qty)
+                }
+            }
+            error
+        }
+        withTimeoutOrNull(CONFIRM_WAIT_MS) { upload.join() }
+        if (upload.isCompleted) {
+            upload.await()?.let { throw IllegalStateException("No se pudo registrar la venta: ${it.message}", it) }
+        } else {
+            uploadScope.launch {
+                upload.await()?.let { error ->
+                    ConnectionStatus.saleFailed(FailedSaleUpload(
+                        saleId = saleId,
+                        total = finalSale.total,
+                        createdAt = finalSale.createdAt,
+                        summary = resolvedLines.joinToString { "${it.quantity.fmt(0)} ${it.productName}" }.take(200),
+                        message = error.message ?: "Error desconocido"
+                    ))
                 }
             }
         }
-
-        movementsDone.awaitAll()
-        ingredientMovements.awaitAll()
-        saleWrite.await()
-        lineWrites.awaitAll()
-        sessionInc.await()
-
-        // 5. Aporte al resumen del día. Va al final y con la falla contenida a propósito:
-        //    la venta ya está registrada y el stock ya se movió, así que un problema acá no
-        //    puede tumbar un cobro que el cliente ya pagó. El resumen se repara corriendo
-        //    `rebuildDailyRollups`, que recalcula desde las ventas — la fuente de verdad.
-        runCatching { addToDailyRollup(companyId, contributionOf(finalSale, resolvedLines)) }
 
         finalSale
     }
@@ -576,25 +726,10 @@ class FirebaseSaleRepository(
     }
 
     /**
-     * Suma la venta al resumen de su día.
-     *
-     * Va en transacción y no en un leer-modificar-escribir suelto porque dos cajas de la
-     * misma sucursal cobran a la vez y la segunda pisaría a la primera. No se usa
-     * `FieldValue.increment` porque GitLive 2.1.0 solo lo ofrece para enteros y esto es
-     * dinero.
+     * Saca una venta anulada del resumen de su día. En transacción: anular requiere conexión
+     * (no se ofrece sin internet). El cobro, en cambio, suma con [toIncrementMap] dentro de
+     * su paquete único.
      */
-    private suspend fun addToDailyRollup(companyId: String, c: SaleContribution) {
-        val ref = dailyCol(companyId).document(salesDailyId(c.branchId, c.businessDate))
-        firestore.runTransaction {
-            val snapshot = get(ref)
-            val current = if (snapshot.exists) snapshot.toSalesDaily() else SalesDaily()
-            val updated = (current + c).copy(
-                updatedAt = Clock.System.now().toEpochMilliseconds()
-            )
-            set(ref, updated.toMap())
-        }
-    }
-
     private suspend fun subtractFromDailyRollup(companyId: String, c: SaleContribution) {
         val ref = dailyCol(companyId).document(salesDailyId(c.branchId, c.businessDate))
         firestore.runTransaction {
@@ -861,4 +996,11 @@ class FirebaseSaleRepository(
         runCatching { get<Timestamp?>(field)?.toMilliseconds()?.toLong() }.getOrNull()
             ?: runCatching { get<Long?>(field) }.getOrNull()
             ?: 0L
+
+    private companion object {
+        /** Cuánto se espera al servidor para leer costo/saldo antes de usar lo del equipo. */
+        const val QUICK_READ_MS = 2_000L
+        /** Cuánto espera el cobro el acuse del servidor antes de dejar la venta "por subir". */
+        const val CONFIRM_WAIT_MS = 4_000L
+    }
 }

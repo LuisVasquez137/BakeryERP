@@ -49,3 +49,16 @@ Problema: en el kiosko (`ShiftClockInScreen`) cualquiera tocaba el nombre de otr
 - Velocidad: al principio tardaba porque el parpadeo (~150 ms, 1-2 cuadros) se perdía con umbrales estrictos (abierto >0.6, cerrado <0.3) y se esperaba el límite de 6 s; además `minFaceSize 0.25` no veía caras a distancia normal en horizontal, y un cuadro sin cara reiniciaba la cuenta. Ahora: umbrales 0.5/0.4, límite 2.5 s, `minFaceSize 0.15`, 700 ms de gracia si se pierde la cara.
 - CameraX 1.4.0 no trae `awaitInstance`; `getInstance` devuelve `ListenableFuture` y Guava solo estaba en runtime → se declara `guava:32.1.3-android` (la misma versión que ya viajaba, sin peso extra).
 - Fase 2 posible: comparar la selfie contra la foto de perfil (embedding TFLite) y dejar la marca en "revisar", sin bloquear.
+
+---
+
+## Aviso de "sin conexión" (oct 2026)
+
+`ui/ConnectivityBanner.kt::ConnectivityBannerHost` envuelve `AppNavigation()` en `App.kt`: una franja naranja
+(`Accent` + `OnAccent`) arriba de TODAS las pantallas cuando no hay internet, y verde "Conexión restablecida"
+3 s al volver. Espera 2 s antes de avisar (el cambio wifi→datos no parpadea).
+
+- Detección: `ui/Connectivity.kt::rememberIsOnline()` (expect). Android usa la red por defecto con
+  `NET_CAPABILITY_VALIDATED` — wifi conectado sin internet cuenta como sin conexión. JS usa `navigator.onLine`.
+  iOS y wasmJs devuelven siempre `true` (pendiente `NWPathMonitor`).
+- La franja consume el inset de la barra de estado para que `BrandTopAppBar` no deje un segundo hueco.

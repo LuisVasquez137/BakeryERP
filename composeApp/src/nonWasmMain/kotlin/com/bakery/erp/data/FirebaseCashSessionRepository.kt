@@ -13,6 +13,7 @@ import com.bakery.erp.model.SalePaymentMethod
 import com.bakery.erp.model.Sale
 import com.bakery.erp.model.withSaleVoided
 import dev.gitlive.firebase.firestore.DocumentSnapshot
+import dev.gitlive.firebase.firestore.FieldValue
 import dev.gitlive.firebase.firestore.FirebaseFirestore
 import dev.gitlive.firebase.firestore.Timestamp
 import dev.gitlive.firebase.firestore.toMilliseconds
@@ -97,45 +98,8 @@ class FirebaseCashSessionRepository(
     override suspend fun incrementSaleTotals(
         companyId: String, sessionId: String, method: String, amount: Double
     ) {
-        val current = getSession(companyId, sessionId) ?: return
-        val updated = when (method) {
-            SalePaymentMethod.CASH -> current.copy(
-                totalCashSales = current.totalCashSales + amount,
-                totalSales = current.totalSales + amount,
-                saleCount = current.saleCount + 1
-            )
-            SalePaymentMethod.CARD -> current.copy(
-                totalCardSales = current.totalCardSales + amount,
-                totalSales = current.totalSales + amount,
-                saleCount = current.saleCount + 1
-            )
-            SalePaymentMethod.TRANSFER -> current.copy(
-                totalTransferSales = current.totalTransferSales + amount,
-                totalSales = current.totalSales + amount,
-                saleCount = current.saleCount + 1
-            )
-            SalePaymentMethod.PEDIDOS_YA -> current.copy(
-                totalPedidosYaSales = current.totalPedidosYaSales + amount,
-                totalSales = current.totalSales + amount,
-                saleCount = current.saleCount + 1
-            )
-            SalePaymentMethod.CREDIT -> current.copy(
-                totalCreditSales = current.totalCreditSales + amount,
-                totalSales = current.totalSales + amount,
-                saleCount = current.saleCount + 1
-            )
-            // La parte pagada con anticipo es venta de hoy, pero su dinero entró a otra gaveta
-            // (o a ésta, otro día): suma al total vendido y a nada que se cuente en la gaveta. No
-            // suma una venta más: la cuenta la parte que sí se cobró.
-            SalePaymentMethod.CUSTOMER_DEPOSIT -> current.copy(
-                totalSales = current.totalSales + amount
-            )
-            else -> current.copy(
-                totalSales = current.totalSales + amount,
-                saleCount = current.saleCount + 1
-            )
-        }
-        sessionsCol(companyId).document(sessionId).set(updated.toMap())
+        if (getSession(companyId, sessionId) == null) return
+        sessionsCol(companyId).document(sessionId).update(saleTotalsDeltas(method, amount).toSessionIncrements())
     }
 
     override suspend fun applySaleVoid(companyId: String, sessionId: String, sale: Sale) {
@@ -556,4 +520,36 @@ class FirebaseCashSessionRepository(
     private fun DocumentSnapshot.readMillisNullable(field: String): Long? =
         runCatching { get<Timestamp?>(field)?.toMilliseconds()?.toLong() }.getOrNull()
             ?: runCatching { get<Long?>(field) }.getOrNull()
+}
+
+/**
+ * Lo que una venta le suma a los totales de su sesión (campo → monto; `saleCount` cuenta
+ * ventas). Lo usan [FirebaseCashSessionRepository.incrementSaleTotals] y el cobro
+ * (`FirebaseSaleRepository.createSale`, dentro de su paquete único), así que la regla "qué
+ * método suma a qué total" vive solo aquí. Se escribe con [toSessionIncrements]: sumas en el
+ * servidor, para que una venta cobrada sin internet que sube tarde no pise lo escrito
+ * mientras tanto.
+ */
+internal fun saleTotalsDeltas(method: String, amount: Double): Map<String, Double> {
+    val methodField = when (method) {
+        SalePaymentMethod.CASH -> "totalCashSales"
+        SalePaymentMethod.CARD -> "totalCardSales"
+        SalePaymentMethod.TRANSFER -> "totalTransferSales"
+        SalePaymentMethod.PEDIDOS_YA -> "totalPedidosYaSales"
+        SalePaymentMethod.CREDIT -> "totalCreditSales"
+        else -> null
+    }
+    return buildMap {
+        put("totalSales", amount)
+        methodField?.let { put(it, amount) }
+        // La parte pagada con anticipo es venta de hoy, pero su dinero entró a otra gaveta
+        // (o a ésta, otro día): suma al total vendido y a nada que se cuente en la gaveta. No
+        // suma una venta más: la cuenta la parte que sí se cobró.
+        if (method != SalePaymentMethod.CUSTOMER_DEPOSIT) put("saleCount", 1.0)
+    }
+}
+
+/** [saleTotalsDeltas] como sumas en el servidor. `saleCount` sigue siendo entero. */
+internal fun Map<String, Double>.toSessionIncrements(): Map<String, Any> = mapValues { (field, v) ->
+    if (field == "saleCount") FieldValue.increment(v.toInt()) else incrementBy(v)
 }

@@ -550,3 +550,49 @@ sistema no sabe quién tiró el pan: cada caso tiene un control que hace que men
 - Pendiente: el descuento en planilla del cargo lo decide el dueño con su contador (queda como
   deuda en la cuenta, no se descuenta solo).
 
+
+---
+
+## Cobro sin internet (oct 2026)
+
+**Problema**: el cobro descontaba inventario con `runTransaction` (falla sin internet) y esperaba el acuse de
+cada escritura (sin internet nunca llega: el cobro se quedaba girando). Y aunque se encolara, un
+leer-modificar-escribir hecho en el equipo pisa al de otra caja cuando las dos suben tarde.
+
+**Decisión** (aprobada por el dueño): `FirebaseSaleRepository.createSale` arma **un solo `WriteBatch`** que no lee
+del servidor:
+
+- venta + líneas (ids fijados antes) + Kardex de terminado (`finishedMovements`) o de insumo (`ingredients/{id}/movements`);
+- `finishedStocks.currentStock` / `branchStocks.currentStock` como **suma en el servidor** (`incrementBy(-qty)`, `set(merge)`);
+- totales de la sesión (`saleTotalsDeltas` → `toSessionIncrements`, la misma tabla que usa `incrementSaleTotals`);
+- resumen del día: `(SalesDaily() + aporte).toIncrementMap()` — la misma fórmula que la reconstrucción, traducida a sumas.
+
+Todo o nada. Firestore lo aplica al instante en el equipo (el inventario del POS baja aunque no haya red), lo
+guarda en su cola en disco (Android) y lo sube solo. Se espera el acuse `CONFIRM_WAIT_MS` (4 s): rechazo rápido =
+error y la venta no existe; sin acuse = venta "por subir" y el cobro sigue.
+
+- `incrementBy(Double)` (`data/FirestoreIncrement.kt`, expect/actual): GitLive 2.1.0 solo trae `increment(Int)`.
+  Android envuelve el `FieldValue` nativo con `decode(FieldValueSerializer, …)` (de ahí la dependencia
+  `firebase-common-internal`); JS pasa el número por `increment` (en JS Int y Double son lo mismo).
+- `domain/ConnectionStatus` (global): `isOnline` (lo alimenta `ConnectivityBannerHost`), `pendingSales`,
+  `failedSales`. La franja de arriba muestra "N venta(s) por subir"/"subiendo…"; un rechazo tardío abre un
+  diálogo en cualquier pantalla (la venta se deshizo en el equipo, pero el dinero está en la gaveta).
+- Costo (`costAtSale`) y saldo previo del Kardex de insumos salen de `getQuick()`: servidor si contesta en 2 s,
+  si no la caché. El `balanceBefore/After` de una venta es **referencia**; el saldo real es la suma de movimientos.
+- Lotes FEFO del insumo vendido (`IngredientRepository.consumeLotsForSale`): después de que el paquete sube,
+  porque necesitan una consulta.
+- **Se puede vender de más**: dos cajas sin internet venden el último pastel → stock −1, explicado por el Kardex.
+  Igual en `branchStocks` (antes `updateBranchStock` lo topaba en 0; la venta ya no pasa por ahí).
+
+**Necesita internet (bloqueado con mensaje, `requireOnline`)**: crédito, anticipos (aplicar/recibir/devolver),
+cuentas del restaurante, facturar (fase 2: cola de FEL), cuentas en espera, abonos, adelantos, porcionar,
+anular venta/factura, **cerrar caja** (además exige `pendingSales == 0`). Sin internet la sesión se revalida
+contra lo último que trajo su listener.
+
+**Web**: la cola de Firestore vive en memoria (recargar = perder ventas), así que `offlineSalesSupported = false`
+en `jsMain/di/PlatformInitializer.kt` y el POS web no cobra sin conexión. Fase 3: caché persistente (IndexedDB)
++ service worker.
+
+**Pendiente**: el contador `pendingSales` vive en memoria (si cierran la app sin red, las ventas suben igual
+pero el contador arranca en 0); detectar pendientes de verdad requeriría `hasPendingWrites` en un listener.
+iOS: `incrementBy` y `rememberIsOnline` sin compilar/implementar.

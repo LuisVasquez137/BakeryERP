@@ -2,6 +2,7 @@ package com.bakery.erp.presentation.pos
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.bakery.erp.domain.ConnectionStatus
 import com.bakery.erp.domain.BranchRepository
 import com.bakery.erp.domain.CashSessionRepository
 import com.bakery.erp.domain.SaleRepository
@@ -231,6 +232,10 @@ class SaleHistoryViewModel(
      */
     fun voidOrder(companyId: String, order: com.bakery.erp.model.SaleOrder, reason: String, currentUser: User) {
         if (_uiState.value.isVoidBusy) return
+        if (!ConnectionStatus.isOnline.value) {
+            _uiState.update { it.copy(error = "Sin internet no se puede anular ventas. Esperá a que vuelva la conexión.") }
+            return
+        }
         val cleanReason = reason.trim()
         if (cleanReason.length < com.bakery.erp.model.MIN_SALE_VOID_REASON) {
             _uiState.update { it.copy(error = "Escribe el motivo de la anulación.") }
@@ -400,6 +405,10 @@ class SaleHistoryViewModel(
      */
     fun voidInvoice(companyId: String, sale: Sale, reason: String, reissueTo: com.bakery.erp.model.FelInvoiceRequest?) {
         if (_uiState.value.isInvoiceBusy) return
+        if (!ConnectionStatus.isOnline.value) {
+            _uiState.update { it.copy(error = "Sin internet no se puede anular facturas. Esperá a que vuelva la conexión.") }
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isInvoiceBusy = true, error = null) }
             val voided = runCatching { felRepository.voidInvoice(companyId, sale.dteId, reason) }

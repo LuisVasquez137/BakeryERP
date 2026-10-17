@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Aviso global de "sin conexión" (ui/Connectivity.android.kt). -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <!-- Permisos para impresoras térmicas Bluetooth. -->
     <!-- Legacy (Android 11 y menores): permiso normal, no requiere runtime request. -->
     <uses-permission android:name="android.permission.BLUETOOTH"

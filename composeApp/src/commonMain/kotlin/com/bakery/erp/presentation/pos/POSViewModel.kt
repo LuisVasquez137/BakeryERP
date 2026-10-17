@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.bakery.erp.domain.AuthRepository
 import com.bakery.erp.domain.BranchRepository
 import com.bakery.erp.domain.CashSessionRepository
+import com.bakery.erp.domain.ConnectionStatus
 import com.bakery.erp.domain.FinishedStockRepository
 import com.bakery.erp.domain.IngredientRepository
 import com.bakery.erp.domain.POSCategoryRepository
@@ -488,6 +489,7 @@ class POSViewModel(
      * es de mostrador.
      */
     fun holdCart(companyId: String, label: String, currentUser: User) {
+        if (!requireOnline("poner cuentas en espera")) return
         val st = _uiState.value
         val session = st.session ?: return
         if (st.cart.isEmpty() || st.isHoldBusy) return
@@ -520,6 +522,7 @@ class POSViewModel(
      * (intercambio): nunca se borra nada por tocar una ficha.
      */
     fun resumeHeldCart(companyId: String, held: com.bakery.erp.model.HeldCart, currentUser: User) {
+        if (!requireOnline("retomar cuentas en espera")) return
         val st = _uiState.value
         val session = st.session ?: return
         if (st.isHoldBusy) return
@@ -576,6 +579,7 @@ class POSViewModel(
      * cuándo, qué llevaba y por cuánto— y después se borra: el registro de control va antes.
      */
     fun discardHeldCart(companyId: String, held: com.bakery.erp.model.HeldCart, currentUser: User) {
+        if (!requireOnline("descartar cuentas en espera")) return
         val st = _uiState.value
         val session = st.session ?: return
         if (st.isHoldBusy) return
@@ -656,6 +660,7 @@ class POSViewModel(
      * algoritmo puede deducir cuando la sucursal tiene dos cajas y cualquiera puede recibir.
      */
     fun collectPendingSale(companyId: String, sale: Sale, currentUser: User) {
+        if (!requireOnline("recibir cuentas del restaurante")) return
         val session = _uiState.value.session ?: return
         viewModelScope.launch {
             _uiState.update { it.copy(isCollecting = true, error = null) }
@@ -867,6 +872,24 @@ class POSViewModel(
         if (state.cart.isEmpty()) {
             _uiState.update { it.copy(error = "El carrito está vacío") }; return
         }
+        // Sin internet se cobra lo de mostrador (ver createSale). Lo que tiene una guarda contra
+        // otra caja o un tercero de por medio se corta acá, antes de mover nada: el saldo de un
+        // anticipo o de un crédito se gastaría dos veces, una cuenta del restaurante la podría
+        // recibir otra caja, y la factura la certifica la SAT en línea.
+        if (!ConnectionStatus.isOnline.value) {
+            val blocked = when {
+                !ConnectionStatus.offlineSalesSupported -> offlineMessage("cobrar en la versión web")
+                paymentMethod == SalePaymentMethod.CREDIT -> offlineMessage("cargar a crédito")
+                deposit != null -> offlineMessage("aplicar anticipos")
+                state.cart.any { it.isRestaurant } -> offlineMessage("cobrar cuentas del restaurante")
+                invoice != null && canInvoice() ->
+                    "Sin internet no se puede facturar. Cobrá sin factura o esperá a que vuelva la conexión."
+                else -> null
+            }
+            if (blocked != null) {
+                _uiState.update { it.copy(error = blocked) }; return
+            }
+        }
         val isCredit = paymentMethod == SalePaymentMethod.CREDIT
         // Sin fiado combinado: el cargo a la cuenta y la venta tendrían que partirse.
         val splitTyped = if (isCredit) emptyMap() else split
@@ -1015,7 +1038,10 @@ class POSViewModel(
                 // Revalidar la sesión contra Firestore antes de escribir: debe seguir OPEN y ser
                 // del cajero actual. Evita registrar ventas contra una sesión ya cerrada por un
                 // cuadre / cierre concurrente o abierta por otro cajero.
-                val freshSession = cashSessionRepository.getSession(companyId, session.id)
+                // Sin internet, contra lo último que trajo el listener de la sesión: es lo más
+                // fresco que hay, y esperar al servidor dejaría el cobro colgado.
+                val freshSession = (if (ConnectionStatus.isOnline.value) cashSessionRepository.getSession(companyId, session.id)
+                                    else _uiState.value.session)
                     ?: throw IllegalStateException("La sesión de caja ya no existe.")
                 if (freshSession.status != com.bakery.erp.model.CashSessionStatus.OPEN) {
                     throw IllegalStateException("La caja fue cerrada. No se puede registrar la venta.")
@@ -1374,6 +1400,7 @@ class POSViewModel(
      * Si es de un pedido, queda registrado como pago del pedido.
      */
     fun receiveDeposit(companyId: String, currentUser: User, input: DepositInput, print: Boolean = true) {
+        if (!requireOnline("recibir anticipos")) return
         val session = _uiState.value.session ?: return
         val branch = _uiState.value.branch ?: return
         if (_uiState.value.isDepositBusy || input.amount <= 0.0) return
@@ -1460,6 +1487,7 @@ class POSViewModel(
      * efectivo de la sesión recién leída: no se entrega dinero que no está.
      */
     fun refundDeposit(companyId: String, currentUser: User, deposit: com.bakery.erp.model.CustomerDeposit, reason: String) {
+        if (!requireOnline("devolver anticipos")) return
         val session = _uiState.value.session ?: return
         if (_uiState.value.isDepositBusy) return
         viewModelScope.launch {
@@ -1557,6 +1585,7 @@ class POSViewModel(
         tendered: Double,
         bills: Map<Int, Int>
     ) {
+        if (!requireOnline("cobrar abonos de crédito")) return
         val session = _uiState.value.session ?: return
         val branch = _uiState.value.branch ?: return
         if (amount <= 0.0) return
@@ -1629,6 +1658,7 @@ class POSViewModel(
         amount: Double,
         note: String
     ) {
+        if (!requireOnline("dar adelantos")) return
         val session = _uiState.value.session ?: return
         val branch = _uiState.value.branch ?: return
         if (amount <= 0.0 || !account.isEmployee) return
@@ -1685,6 +1715,7 @@ class POSViewModel(
      * listener de `observeStocks`; acá solo se avisa. Ver `FinishedStockRepository.applyPortioning`.
      */
     fun cutIntoPortions(companyId: String, portion: Product, wholes: Int, portionsPerWhole: Int, currentUser: User) {
+        if (!requireOnline("porcionar")) return
         val st = _uiState.value
         val branch = st.branch ?: return
         if (st.isPortioning) return
@@ -1712,6 +1743,19 @@ class POSViewModel(
             }
         }
     }
+
+    /**
+     * Lo del POS que necesita internet (ver confirmSale). Sin conexión avisa y devuelve false;
+     * así no se queda girando esperando una respuesta que no va a llegar.
+     */
+    private fun requireOnline(action: String): Boolean {
+        if (ConnectionStatus.isOnline.value) return true
+        _uiState.update { it.copy(error = offlineMessage(action)) }
+        return false
+    }
+
+    private fun offlineMessage(action: String) =
+        "Sin internet no se puede $action. Esperá a que vuelva la conexión."
 
     fun clearNotice() { _uiState.update { it.copy(notice = null) } }
 

@@ -302,6 +302,13 @@ class FirebaseIngredientRepository(
         doc.set(lot.toLotMap())
     }
 
+    override suspend fun consumeLotsForSale(
+        companyId: String, branchId: String, ingredientId: String, quantity: Double
+    ) {
+        if (quantity <= 0.0) return
+        runCatching { consumeLotsFefo(companyId, branchId, ingredientId, quantity) }
+    }
+
     /**
      * Descuenta [quantity] repartiendola con [allocateFefo]. Si no hay lotes no hace nada:
      * los insumos que no son perecederos nunca los llevan, y su stock ya quedó bien arriba.
@@ -481,22 +488,6 @@ class FirebaseIngredientRepository(
         updatedAt = readTimestampAsMillis("updatedAt")
     )
 
-    private fun StockMovement.toMovementMap(): Map<String, Any?> = firestoreSafeOf(
-        "id" to id,
-        "type" to type,
-        "quantity" to quantity,
-        "balanceBefore" to balanceBefore,
-        "balanceAfter" to balanceAfter,
-        "branchId" to branchId,
-        "branchName" to branchName,
-        "reference" to reference,
-        "date" to date,
-        "notes" to notes,
-        "createdByUserId" to createdByUserId,
-        "createdByUserName" to createdByUserName,
-        "createdByEmployeeId" to createdByEmployeeId
-    )
-
     private fun DocumentSnapshot.toStockMovement() = StockMovement(
         id = id,
         type = get<String?>("type") ?: "COMPRA",
@@ -513,3 +504,21 @@ class FirebaseIngredientRepository(
         createdByEmployeeId = runCatching { get<String?>("createdByEmployeeId") }.getOrNull() ?: ""
     )
 }
+
+// Fuera de la clase: el cobro (FirebaseSaleRepository) escribe el mismo Kardex dentro de su
+// paquete único, con este mismo formato.
+internal fun StockMovement.toMovementMap(): Map<String, Any?> = firestoreSafeOf(
+    "id" to id,
+    "type" to type,
+    "quantity" to quantity,
+    "balanceBefore" to balanceBefore,
+    "balanceAfter" to balanceAfter,
+    "branchId" to branchId,
+    "branchName" to branchName,
+    "reference" to reference,
+    "date" to date,
+    "notes" to notes,
+    "createdByUserId" to createdByUserId,
+    "createdByUserName" to createdByUserName,
+    "createdByEmployeeId" to createdByEmployeeId
+)

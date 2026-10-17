@@ -9,15 +9,16 @@ import kotlinx.coroutines.flow.Flow
 interface SaleRepository {
 
     /**
-     * Persiste una venta con sus líneas:
-     *  1. Para cada línea con productId no-EXPRESS:
-     *     - Lee `FinishedProductStock` para snapshot del `avgUnitCost` en `costAtSale`.
-     *     - Llama `FinishedStockRepository.applyMovement` (tipo VENTA, referencia SALE).
-     *     - Marca `stockDeducted = true`.
-     *  2. Para líneas EXPRESS sin productId: `stockDeducted = false`, `costAtSale = 0`.
-     *  3. Escribe el doc `Sale` y la subcolección `lines`.
-     *  4. Incrementa los totales denormalizados en `CashSession` vía
-     *     `CashSessionRepository.incrementSaleTotals`.
+     * Persiste una venta en UN paquete que se aplica completo o no se aplica, y que no
+     * necesita leer del servidor, así que funciona sin internet (sube solo al volver):
+     *  - la venta y sus líneas (`costAtSale` con lo que el equipo tenga del costo promedio);
+     *  - el descuento de inventario de terminado o, si el producto está respaldado por un
+     *    insumo, del `BranchStock` del insumo, con su Kardex; como SUMA en el servidor;
+     *  - los totales de la sesión y el resumen del día, también como sumas.
+     * Los lotes FEFO del insumo se ajustan después, cuando el paquete ya subió.
+     *
+     * Si el servidor no confirma en unos segundos, devuelve la venta igual y la deja "por
+     * subir" (`ConnectionStatus`). Lanza solo si el servidor la rechaza de inmediato.
      */
     suspend fun createSale(companyId: String, sale: Sale, lines: List<SaleLine>): Sale
 

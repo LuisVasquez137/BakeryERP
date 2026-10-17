@@ -2,6 +2,7 @@ package com.bakery.erp.presentation.pos
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.bakery.erp.domain.ConnectionStatus
 import com.bakery.erp.domain.BranchRepository
 import com.bakery.erp.domain.CashDenominationStage
 import com.bakery.erp.domain.CashRegisterRepository
@@ -632,6 +633,19 @@ class CashSessionViewModel(
         /** Lo retirado va al banco: queda un depósito pendiente de boleta. Null = retiro. */
         withdrawalToBank: BankDepositDraft? = null
     ) {
+        // El cierre cuadra contra lo que tiene el servidor: sin internet, o con ventas cobradas
+        // sin internet que todavía no subieron, el efectivo esperado saldría corto.
+        if (!ConnectionStatus.isOnline.value) {
+            _uiState.update { it.copy(error = "Sin internet no se puede cerrar la caja. Esperá a que vuelva la conexión.") }
+            return
+        }
+        ConnectionStatus.pendingSales.value.takeIf { it > 0 }?.let { pending ->
+            _uiState.update {
+                it.copy(error = "Hay $pending venta(s) cobradas sin internet que todavía no suben. " +
+                    "Esperá unos segundos a que terminen de subir y volvé a cerrar.")
+            }
+            return
+        }
         var verifiedReceiver: com.bakery.erp.domain.VerifiedEmployee? = null
         viewModelScope.launch {
             // En un equipo compartido, quien recibe la gaveta confirma con SU PIN: así la

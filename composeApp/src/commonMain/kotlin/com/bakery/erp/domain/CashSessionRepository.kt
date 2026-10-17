@@ -35,9 +35,9 @@ interface CashSessionRepository {
     fun observeOpenSessions(companyId: String): Flow<List<CashSession>>
 
     /**
-     * Incrementa los totales denormalizados de la sesión al confirmar una venta.
-     * Lee la sesión y la re-escribe con totales sumados — no es atómico contra concurrencia,
-     * pero es seguro porque cada sesión tiene un solo cajero a la vez.
+     * Incrementa los totales denormalizados de la sesión al confirmar una venta. Son sumas
+     * en el servidor (no leer-y-reescribir): una venta que sube tarde, cobrada sin internet,
+     * no pisa lo que se escribió mientras tanto.
      */
     suspend fun incrementSaleTotals(
         companyId: String,
@@ -48,7 +48,7 @@ interface CashSessionRepository {
 
     /**
      * Saca de los totales de la sesión una venta anulada (ver `CashSession.withSaleVoided`).
-     * Mismo leer-reescribir que [incrementSaleTotals].
+     * Lee la sesión y la reescribe: requiere conexión (anular no se ofrece sin internet).
      */
     suspend fun applySaleVoid(companyId: String, sessionId: String, sale: com.bakery.erp.model.Sale)
 
