@@ -18,6 +18,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.expectedCashNow
+import com.bakery.erp.model.expectedCardNow
+import com.bakery.erp.model.expectedTransferNow
+import com.bakery.erp.ui.theme.BrandColors
 import com.bakery.erp.model.CashDenominations
 import com.bakery.erp.model.CashSession
 import com.bakery.erp.presentation.auth.AuthViewModel
@@ -63,6 +66,12 @@ fun CashSessionCloseScreen(
     var depositBank by rememberSaveable { mutableStateOf("") }
     var depositCarrier by remember { mutableStateOf<com.bakery.erp.model.Employee?>(null) }
     var depositCarrierPin by remember { mutableStateOf("") }
+    // Vacío = no se ingresó (distinto de cero).
+    var cardVouchersText by rememberSaveable { mutableStateOf("") }
+    var transfersText by rememberSaveable { mutableStateOf("") }
+    var pedidosYaText by rememberSaveable { mutableStateOf("") }
+    // Cierre del día: lo que se queda de fondo; el resto sale (retiro o banco).
+    var leftForTomorrowText by rememberSaveable { mutableStateOf("") }
     val carrierPinRequired = user?.let { carrierMustConfirm(it) } == true
     val slipActions = remember { BankSlipActions() }
 
@@ -136,13 +145,41 @@ fun CashSessionCloseScreen(
     val canTakeOut = canWithdraw || canBankDeposit
     // Sin uno de los dos permisos, el destino es el que sí tiene.
     val toBank = canBankDeposit && (withdrawalToBank || !canWithdraw)
-    val withdrawal = if (canTakeOut) parseMoneyInput(withdrawalText) else 0.0
-    val withdrawalProblem = com.bakery.erp.model.closingWithdrawalProblem(counted, withdrawal)
+    val endOfDay = receiverChosen && receivedBy == null
+    val leftForTomorrow = leftForTomorrowText.takeIf { it.isNotBlank() }?.let { parseMoneyInput(it) }
+    val withdrawal = when {
+        !canTakeOut -> 0.0
+        // Al final del día se pregunta lo que se queda, no lo que sale: es lo que la cajera sabe.
+        endOfDay -> leftForTomorrow?.let { (counted - it).coerceAtLeast(0.0) } ?: 0.0
+        else -> parseMoneyInput(withdrawalText)
+    }
+    val leftProblem = if (canTakeOut && endOfDay && hasCount)
+        com.bakery.erp.model.leftForTomorrowProblem(counted, leftForTomorrow) else null
+    val withdrawalProblem = leftProblem ?: com.bakery.erp.model.closingWithdrawalProblem(counted, withdrawal)
         ?: if (toBank && withdrawal > 0.004)
             com.bakery.erp.model.bankDepositProblem(withdrawal, counted, depositBank, depositCarrier?.id.orEmpty())
                 ?: carrierPinProblem(user, BankDepositDraft(depositBank, depositCarrier, carrierPin = depositCarrierPin))
         else null
     val handover = session?.let { com.bakery.erp.model.shiftHandover(it, counted, withdrawal) }
+    val expectedCard = session?.expectedCardNow ?: 0.0
+    val expectedTransfer = session?.expectedTransferNow ?: 0.0
+    val expectedPedidosYa = session?.totalPedidosYaSales ?: 0.0
+    val nonCash = com.bakery.erp.model.NonCashCount(
+        cardVouchers = cardVouchersText.takeIf { it.isNotBlank() }?.let { parseMoneyInput(it) },
+        transfers = transfersText.takeIf { it.isNotBlank() }?.let { parseMoneyInput(it) },
+        pedidosYa = pedidosYaText.takeIf { it.isNotBlank() }?.let { parseMoneyInput(it) }
+    )
+    val nonCashRows = listOf(
+        NonCashRow("Tarjeta · suma de los vouchers", expectedCard, cardVouchersText, { cardVouchersText = it },
+            nonCash.cardVouchers, "la suma de los vouchers"),
+        NonCashRow("Transferencias · revisa el banco", expectedTransfer, transfersText, { transfersText = it },
+            nonCash.transfers, "lo que entró por transferencia"),
+        NonCashRow("PedidosYa · según su app", expectedPedidosYa, pedidosYaText, { pedidosYaText = it },
+            nonCash.pedidosYa, "lo que dice PedidosYa")
+    )
+    val nonCashProblem = nonCashRows.firstNotNullOfOrNull {
+        com.bakery.erp.model.closeCountProblem(it.what, it.expected, it.entered)
+    }
 
     Scaffold(
         topBar = {
@@ -242,35 +279,7 @@ fun CashSessionCloseScreen(
                     }
                 }
 
-                if (canTakeOut && hasCount) {
-                    if (canWithdraw && canBankDeposit) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilterChip(selected = withdrawalToBank, onClick = { withdrawalToBank = true },
-                                label = { Text("Depositar al banco") })
-                            FilterChip(selected = !withdrawalToBank, onClick = { withdrawalToBank = false },
-                                label = { Text("Retiro") })
-                        }
-                    }
-                    OutlinedTextField(
-                        value = withdrawalText,
-                        onValueChange = { withdrawalText = it.filter { c -> c.isDigit() || c == '.' } },
-                        label = { Text(if (toBank) "Sacar para depositar al banco (opcional)" else "Retirar de la gaveta (opcional)") },
-                        prefix = { Text("Q ") },
-                        singleLine = true,
-                        isError = withdrawalProblem != null,
-                        supportingText = withdrawalProblem?.let { p -> { Text(p) } },
-                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    if (toBank && withdrawal > 0.004) {
-                        BankDepositFields(depositBank, { depositBank = it }, depositCarrier, { depositCarrier = it }, state.employees,
-                            pinRequired = carrierPinRequired, pin = depositCarrierPin, onPin = { depositCarrierPin = it })
-                        Text("Queda pendiente la boleta: el siguiente cierre de esta caja no se podrá hacer sin ella.",
-                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
+                NonCashCloseSection(session, nonCashRows)
 
                 EmployeePickerField(
                     label = "¿Quién recibe la caja?",
@@ -280,6 +289,48 @@ fun CashSessionCloseScreen(
                     onSelect = { receivedBy = it; receiverChosen = true },
                     noneLabel = "Nadie: es el cierre del día"
                 )
+
+                if (canTakeOut && hasCount && receiverChosen) {
+                    if (canWithdraw && canBankDeposit) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(selected = withdrawalToBank, onClick = { withdrawalToBank = true },
+                                label = { Text("Depositar al banco") })
+                            FilterChip(selected = !withdrawalToBank, onClick = { withdrawalToBank = false },
+                                label = { Text("Retiro") })
+                        }
+                    }
+                    if (endOfDay) {
+                        MoneyField(
+                            value = leftForTomorrowText,
+                            onValueChange = { leftForTomorrowText = it },
+                            label = "¿Cuánto efectivo se queda para mañana?",
+                            problem = withdrawalProblem.takeIf { leftForTomorrow != null },
+                            hint = if (leftForTomorrow != null)
+                                (if (toBank) "Van al banco Q " else "Se retiran Q ") + withdrawal.fmtMoney(2)
+                            else "El fondo o sencillo para abrir mañana. Lo demás sale de la gaveta."
+                        )
+                    } else {
+                        MoneyField(
+                            value = withdrawalText,
+                            onValueChange = { withdrawalText = it },
+                            label = if (toBank) "Sacar para depositar al banco (opcional)" else "Retirar de la gaveta (opcional)",
+                            problem = withdrawalProblem
+                        )
+                    }
+                    if (toBank && withdrawal > 0.004) {
+                        BankDepositFields(depositBank, { depositBank = it }, depositCarrier, { depositCarrier = it }, state.employees,
+                            pinRequired = carrierPinRequired, pin = depositCarrierPin, onPin = { depositCarrierPin = it })
+                        Text("Queda pendiente la boleta: el siguiente cierre de esta caja no se podrá hacer sin ella.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                } else if (!canTakeOut && hasCount && endOfDay) {
+                    // Antes la pantalla escondía el retiro sin decir nada y todo pasaba a mañana.
+                    Text("No tienes permiso para retirar ni depositar efectivo: los Q ${counted.fmtMoney(2)} se quedan " +
+                        "en la gaveta para mañana. Para sacar dinero al cerrar, que cierre alguien con el permiso " +
+                        "\"Retirar efectivo al cerrar caja\" o pide que te lo den.",
+                        color = BrandColors.Danger, fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.bodyMedium)
+                }
 
                 // Lo que sale de esta gaveta: al siguiente turno, o lo que queda para mañana.
                 if (hasCount && receiverChosen && handover != null) {
@@ -323,8 +374,8 @@ fun CashSessionCloseScreen(
 
                 Button(
                     onClick = { showConfirm = true },
-                    enabled = hasCount && receiverChosen && withdrawalProblem == null && !state.isLoading &&
-                        pendingDeposits.isEmpty(),
+                    enabled = hasCount && receiverChosen && withdrawalProblem == null && nonCashProblem == null &&
+                        !state.isLoading && pendingDeposits.isEmpty(),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("Cerrar caja")
@@ -381,6 +432,15 @@ fun CashSessionCloseScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Una vez cerrada no se podrán registrar más ventas en esta sesión. " +
                          "La diferencia (Q ${diff.fmtMoney(2)}) quedará registrada.")
+                    if (endOfDay && withdrawal > 0.004) {
+                        Text((if (toBank) "Van al banco Q " else "Se retiran Q ") + withdrawal.fmtMoney(2) +
+                            " y quedan Q ${(counted - withdrawal).fmtMoney(2)} para mañana.", fontWeight = FontWeight.SemiBold)
+                    }
+                    nonCashRows.mapNotNull { row ->
+                        com.bakery.erp.model.closeCountDifference(row.expected, row.entered)
+                            ?.takeIf { kotlin.math.abs(it) > 0.004 }
+                            ?.let { "${row.label.substringBefore(" ·")}: diferencia Q ${it.fmtMoney(2)}." }
+                    }.forEach { Text(it, color = BrandColors.Danger, fontWeight = FontWeight.SemiBold) }
                     if (needsReceiverPin && receiver != null) {
                         Text(
                             "${receiver.name} recibe la caja: que escriba su PIN para confirmar que la acepta.",
@@ -410,7 +470,8 @@ fun CashSessionCloseScreen(
                             receivedBy = receivedBy, currentUser = user, withdrawal = withdrawal,
                             receiverPin = receiverPin.takeIf { needsReceiverPin },
                             withdrawalToBank = if (toBank && withdrawal > 0.004)
-                                BankDepositDraft(depositBank, depositCarrier, carrierPin = depositCarrierPin) else null
+                                BankDepositDraft(depositBank, depositCarrier, carrierPin = depositCarrierPin) else null,
+                            nonCash = nonCash
                         )
                     }
                 ) { Text("Sí, cerrar") }
@@ -419,6 +480,95 @@ fun CashSessionCloseScreen(
                 TextButton(onClick = { showConfirm = false }) { Text("Cancelar") }
             }
         )
+    }
+}
+
+/** Un método que no es efectivo en el cuadre: lo registrado en ventas y lo que se ingresó. */
+private class NonCashRow(
+    val label: String,
+    val expected: Double,
+    val text: String,
+    val onText: (String) -> Unit,
+    val entered: Double?,
+    val what: String
+)
+
+/**
+ * Cuadre de lo que no es efectivo: vouchers, transferencias y PedidosYa, cada uno contra lo cobrado
+ * con ese método. Obligatorio si se cobró algo con él; si no, se escribe solo si hay (un cobro
+ * registrado con otro método sale como sobrante).
+ */
+@Composable
+private fun NonCashCloseSection(session: CashSession, rows: List<NonCashRow>) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Lo que no es efectivo", fontWeight = FontWeight.SemiBold)
+            rows.forEach { row ->
+                MoneyField(
+                    value = row.text,
+                    onValueChange = row.onText,
+                    label = row.label + if (row.expected > 0.004) "" else " (si hay)",
+                    problem = com.bakery.erp.model.closeCountProblem(row.what, row.expected, row.entered)
+                        ?.takeIf { row.entered != null },
+                    hint = "Según las ventas: Q ${row.expected.fmtMoney(2)}"
+                )
+                CardDifferenceRow(com.bakery.erp.model.closeCountDifference(row.expected, row.entered))
+            }
+            if (session.carriedInCard > 0.004) {
+                Text("La tarjeta incluye Q ${session.carriedInCard.fmtMoney(2)} en vouchers recibidos del turno anterior.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            // El voucher de una venta anulada se queda en la gaveta y se devuelve por el banco.
+            if (session.totalVoidedNonCash > 0.004) {
+                Text("Hay Q ${session.totalVoidedNonCash.fmtMoney(2)} anulados con tarjeta/transferencia: siguen " +
+                    "contando aquí porque se devuelven por el banco.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MoneyField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    problem: String?,
+    hint: String? = null
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = { onValueChange(it.filter { c -> c.isDigit() || c == '.' || c == ',' }) },
+        label = { Text(label) },
+        prefix = { Text("Q ") },
+        singleLine = true,
+        isError = problem != null,
+        supportingText = (problem ?: hint)?.let { t -> { Text(t) } },
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+            keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal
+        ),
+        modifier = Modifier.fillMaxWidth()
+    )
+}
+
+@Composable
+private fun CardDifferenceRow(diff: Double?) {
+    diff ?: return
+    val color = when {
+        diff > 0.01 -> BrandColors.Success
+        diff < -0.01 -> BrandColors.Danger
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(when {
+            diff > 0.01 -> "Sobra"
+            diff < -0.01 -> "Falta"
+            else -> "Cuadra"
+        }, fontWeight = FontWeight.SemiBold, color = color)
+        Text("Q ${diff.fmtMoney(2)}", fontWeight = FontWeight.Bold, color = color)
     }
 }
 

@@ -58,6 +58,9 @@ import com.bakery.erp.model.PreparationBatchStatus
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.presentation.preparations.formatBatchWeight
+import com.bakery.erp.util.fmtTrim
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import com.bakery.erp.presentation.purchases.formatPurchaseDate
 import com.bakery.erp.ui.AdaptiveContainer
 import com.bakery.erp.ui.LoadingOverlay
@@ -67,6 +70,7 @@ import com.bakery.erp.ui.LoadingOverlay
 fun PreparationBatchListScreen(
     onNavigateBack: () -> Unit,
     onNavigateToForm: () -> Unit,
+    onNavigateToBake: () -> Unit,
     authViewModel: AuthViewModel,
     viewModel: PreparationBatchViewModel
 ) {
@@ -76,6 +80,7 @@ fun PreparationBatchListScreen(
     val canManage = user?.hasPermission(Permission.MANAGE_PREPARATION_BATCHES) == true
     val snackbarHostState = remember { SnackbarHostState() }
     var batchPendingDelete by remember { mutableStateOf<PreparationBatch?>(null) }
+    var fabMenu by remember { mutableStateOf(false) }
 
     LaunchedEffect(user?.orgId) {
         if (user != null && user.orgId.isNotEmpty()) viewModel.loadBatches(user.orgId, user)
@@ -137,11 +142,23 @@ fun PreparationBatchListScreen(
         },
         floatingActionButton = {
             if (canManage) {
-                FloatingActionButton(
-                    onClick = onNavigateToForm,
-                    containerColor = MaterialTheme.colorScheme.primary
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = "Producir lote", tint = MaterialTheme.colorScheme.onPrimary)
+                Box {
+                    FloatingActionButton(
+                        onClick = { if (authState.usesBakedAhead) fabMenu = true else onNavigateToForm() },
+                        containerColor = MaterialTheme.colorScheme.primary
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = "Producir lote", tint = MaterialTheme.colorScheme.onPrimary)
+                    }
+                    DropdownMenu(expanded = fabMenu, onDismissRequest = { fabMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Producir lote (esponja, adorno)") },
+                            onClick = { fabMenu = false; onNavigateToForm() }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Hornear bizcochos") },
+                            onClick = { fabMenu = false; onNavigateToBake() }
+                        )
+                    }
                 }
             }
         },
@@ -222,7 +239,9 @@ private fun BatchCard(
                     maxLines = 1
                 )
                 Text(
-                    text = "${batch.batchCount} lote${if (batch.batchCount != 1) "s" else ""} · saldo ${formatBatchWeight(batch.remainingWeightGrams)}",
+                    text = if (batch.isCounted)
+                        "Salieron ${batch.producedUnits.fmtTrim(2)} · quedan ${batch.remainingUnits.fmtTrim(2)}"
+                    else "${batch.batchCount} lote${if (batch.batchCount != 1) "s" else ""} · saldo ${formatBatchWeight(batch.remainingWeightGrams)}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

@@ -31,6 +31,11 @@ object FinishedMovementType {
      * mismo `referenceId`. Ver `portioningMovements`.
      */
     const val PORCIONADO    = "PORCIONADO"
+    /**
+     * Un producto hecho de otro: −4 pan molde y +6 pan tostado, con el mismo `referenceId`.
+     * Ver `transformationMovements`.
+     */
+    const val TRANSFORMACION = "TRANSFORMACION"
     /** Se cayó o se arruinó en el mostrador; se le cargó a costo a una colaboradora. Ver `CounterRemoval`. */
     const val ACCIDENTE     = "ACCIDENTE"
     /** Regalado desde la caja, dentro de la cuota diaria de la sucursal. Ver `CounterRemoval`. */
@@ -44,6 +49,7 @@ object FinishedMovementType {
         TRANSFERENCIA -> "Traslado"
         DEVOLUCION    -> "Devolución (venta anulada)"
         PORCIONADO    -> "Porcionado"
+        TRANSFORMACION -> "Transformación"
         ACCIDENTE     -> "Accidente (cobrado)"
         CORTESIA      -> "Regalo"
         else          -> "Desconocido"
@@ -59,5 +65,7 @@ object FinishedMovementReference {
     const val PURCHASE    = "PURCHASE"   // compra de producto de reventa a proveedor
     const val COUNTER_REMOVAL = "COUNTER_REMOVAL" // salida del mostrador: referenceId = el CounterRemoval
     const val PORTIONING  = "PORTIONING" // pastel cortado: referenceId une la salida y la entrada
+    const val TRANSFORMATION = "TRANSFORMATION" // molde → tostado: referenceId une las dos puntas
+    const val PRODUCTION_LOT = "PRODUCTION_LOT" // producto usado como ingrediente (pan molde de la torta): referenceId = el lote
     const val SALE_VOID   = "SALE_VOID"  // venta anulada: referenceId = la venta
 }

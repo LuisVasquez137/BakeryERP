@@ -18,13 +18,17 @@ data class ReceiptData(
     val paymentMethodLabel: String,
     val tenderedAmount: Double,
     val changeAmount: Double,
-    val footerMessage: String = "¡Gracias por su compra!",
+    val footerMessage: String = DEFAULT_FOOTER,
     /** Anticipo aplicado: el ticket lo resta del total y dice cuánto se pagó hoy. */
     val depositFolio: String = "",
     val depositAmount: Double = 0.0,
     /** Datos de la factura electrónica. Null = ticket sin factura (no se pidió o no salió aún). */
     val invoice: ReceiptInvoice? = null
-)
+) {
+    companion object {
+        const val DEFAULT_FOOTER = "¡Gracias por su compra!"
+    }
+}
 
 /**
  * Lo que la SAT exige en la representación gráfica de una factura: emisor, documento,

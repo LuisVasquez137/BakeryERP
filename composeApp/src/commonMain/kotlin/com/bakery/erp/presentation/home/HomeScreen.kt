@@ -155,8 +155,6 @@ private val ALL_SECTIONS = listOf(
             "vender cobrar caja pos ticket factura cajera mostrador"),
         ModuleItem("Historial de ventas", "Transacciones del día", Icons.Default.Receipt,
             "ventas tickets cobros anular venta transacciones"),
-        ModuleItem("Cierre del día",      "Consolidado por sucursal", Icons.Default.LockClock,
-            "cuadre corte de caja efectivo deposito banco"),
         ModuleItem("Cuadre sorpresa",     "Auditoría a cajas abiertas", Icons.Default.Policy,
             "arqueo auditoria revisar caja efectivo"),
         ModuleItem("Salidas del mostrador", "Merma, accidentes y regalos", Icons.Default.DeleteSweep,
@@ -296,7 +294,6 @@ private fun hasModuleAccess(title: String, user: User) = with(user) {
         "Categorías POS"    -> hasPermission(Permission.MANAGE_POS_CONFIG)
         "Empaques"          -> hasPermission(Permission.MANAGE_POS_CONFIG)
         "Pago con tarjeta"  -> hasPermission(Permission.MANAGE_POS_CONFIG)
-        "Cierre del día"    -> hasPermission(Permission.MANAGE_DAILY_CASH_CLOSE)
         "Cuadre sorpresa"   -> hasPermission(Permission.SPOT_CHECK_CASH)
         "Conteo de pan"     -> hasPermission(Permission.COUNT_FINISHED_STOCK) ||
                                hasPermission(Permission.VIEW_BREAD_COUNTS)
@@ -356,7 +353,6 @@ fun HomeScreen(
     onNavigateToCardRules: () -> Unit = {},
     onNavigateToCredit: () -> Unit = {},
     onNavigateToBreadCount: () -> Unit = {},
-    onNavigateToDailyCashClose: () -> Unit = {},
     onNavigateToSpotCashCheck: () -> Unit = {},
     onNavigateToSalesReport: () -> Unit = {},
     onNavigateToReports: () -> Unit = {},
@@ -464,7 +460,6 @@ fun HomeScreen(
             "Empaques"                -> onNavigateToPackagingAdmin()
             "Pago con tarjeta"        -> onNavigateToCardRules()
             "Conteo de pan"           -> onNavigateToBreadCount()
-            "Cierre del día"          -> onNavigateToDailyCashClose()
             "Cuadre sorpresa"         -> onNavigateToSpotCashCheck()
             "Pedidos de clientes"     -> onNavigateToCustomerOrders()
             "Configuración"           -> onNavigateToOrganizationSettings()
@@ -1300,11 +1295,12 @@ private fun navigateAlert(alert: HomeAlert, navigate: (String) -> Unit) {
         AlertTarget.IN_TRANSIT_DISPATCH    -> "Reparto"
         AlertTarget.STALE_PRODUCTION_LOT   -> "Producción"
         AlertTarget.LATE_PRODUCTION_ORDER  -> "Pedidos"
-        AlertTarget.OVERDUE_CASH_SESSION   -> "Cierre del día"
+        AlertTarget.OVERDUE_CASH_SESSION   -> "Punto de venta"
         AlertTarget.DISPATCH_PRICE_MISSING -> "Listas de precios"
         AlertTarget.OVERDUE_PURCHASE       -> "Compras"
         AlertTarget.EXPIRING_INGREDIENT    -> "Insumos"
         AlertTarget.CREDIT_OVERDUE         -> "Créditos"
+        AlertTarget.STOCK_REPLENISHMENT    -> "Producción"
     }
     navigate(title)
 }

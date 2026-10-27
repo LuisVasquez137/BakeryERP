@@ -23,5 +23,7 @@ enum class AlertTarget {
     OVERDUE_PURCHASE,
     EXPIRING_INGREDIENT,
     /** Cuentas de crédito con compras sin pagar de hace más de 30 días. */
-    CREDIT_OVERDUE
+    CREDIT_OVERDUE,
+    /** Pan para existencia (pan molde) bajo su mínimo en la planta. */
+    STOCK_REPLENISHMENT
 }

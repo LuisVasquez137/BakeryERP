@@ -117,7 +117,8 @@ fun ScaledRecipePanel(
                             color = Color.White
                         )
                         Text(
-                            "${formatWeight(view.totalDoughGrams)} de masa total  ·  ${view.totalDoughGrams.fmt(0)} g",
+                            view.batchLabel
+                                ?: "${formatWeight(view.totalDoughGrams)} de masa total  ·  ${view.totalDoughGrams.fmt(0)} g",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color.White.copy(alpha = 0.82f),
                             modifier = Modifier.padding(top = 4.dp)
@@ -168,7 +169,7 @@ fun ScaledRecipePanel(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    IngredientHeader()
+                    IngredientHeader(if (view.batchLabel != null) "Cantidad" else "A pesar")
                     HorizontalDivider(color = Color(0xFFE0E0E0))
                     view.rows.forEachIndexed { idx, row ->
                         IngredientRow(row = row, zebra = idx % 2 == 1)
@@ -204,13 +205,14 @@ fun ScaledRecipePanel(
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(dec.preparationName, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                                     Text(
-                                        "${dec.gramsPerUnit.fmt(1)} g/unidad",
+                                        if (dec.totalUnits > 0.0) "Del inventario de bizcochos, el más viejo"
+                                        else "${dec.gramsPerUnit.fmt(1)} g/unidad",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = Color.Gray
                                     )
                                 }
                                 Text(
-                                    formatWeight(dec.totalGrams),
+                                    if (dec.totalUnits > 0.0) dec.totalUnits.fmtTrim(2) else formatWeight(dec.totalGrams),
                                     style = MaterialTheme.typography.bodyLarge,
                                     fontWeight = FontWeight.Bold,
                                     color = PrimaryBlue
@@ -264,7 +266,7 @@ fun ScaledRecipePanel(
 }
 
 @Composable
-private fun IngredientHeader() {
+private fun IngredientHeader(quantityTitle: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -273,7 +275,7 @@ private fun IngredientHeader() {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            "A pesar",
+            quantityTitle,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Bold,
             color = PrimaryBlue,
@@ -301,7 +303,7 @@ private fun IngredientRow(row: ScaledRecipeRow, zebra: Boolean) {
         // Cantidad primero y más grande: es el dato que el panadero necesita
         // leer de un vistazo. Antes iba al final de la fila y en letra chica.
         Column(modifier = Modifier.width(118.dp)) {
-            val (weightNumber, weightUnit) = splitWeightParts(formatWeight(row.finalGrams))
+            val (weightNumber, weightUnit) = splitWeightParts(row.displayQuantity ?: formatWeight(row.finalGrams))
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
                     weightNumber,

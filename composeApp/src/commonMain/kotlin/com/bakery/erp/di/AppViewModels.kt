@@ -65,6 +65,10 @@ data class AppViewModels(
     val jobPosition: JobPositionViewModel,
     val preparation: PreparationViewModel,
     val preparationBatch: PreparationBatchViewModel,
+    /** Hoja de horneado de bizcochos. */
+    val bakeSheet: com.bakery.erp.presentation.preparationbatches.BakeSheetViewModel,
+    /** Bizcochos dentro del lote de producción: instancia aparte para no pisar la hoja. */
+    val lotBake: com.bakery.erp.presentation.preparationbatches.BakeSheetViewModel,
     val fixedAsset: FixedAssetViewModel,
     val priceList: PriceListViewModel,
     val dispatch: DispatchViewModel,

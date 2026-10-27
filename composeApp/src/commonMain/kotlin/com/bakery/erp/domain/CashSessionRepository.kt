@@ -52,6 +52,12 @@ interface CashSessionRepository {
      */
     suspend fun applySaleVoid(companyId: String, sessionId: String, sale: com.bakery.erp.model.Sale)
 
+    /**
+     * Suma [deltas] (campo → diferencia; `saleCount` entero) a la sesión, en el servidor. Para
+     * correcciones que ya calcularon su diferencia (`paymentChangeSessionDeltas`).
+     */
+    suspend fun applyTotalsDeltas(companyId: String, sessionId: String, deltas: Map<String, Double>)
+
     /** Devuelve el id del movimiento guardado. */
     suspend fun addMovement(companyId: String, movement: CashMovement): String
     suspend fun listMovements(companyId: String, sessionId: String): List<CashMovement>
@@ -70,7 +76,9 @@ interface CashSessionRepository {
         closedByUserId: String = "",
         closedByUserName: String = "",
         /** Ver [CashSession.closedByEmployeeId]. */
-        closedByEmployeeId: String = ""
+        closedByEmployeeId: String = "",
+        /** Vouchers, transferencias y PedidosYa contados. Ver [com.bakery.erp.model.NonCashCount]. */
+        nonCash: com.bakery.erp.model.NonCashCount = com.bakery.erp.model.NonCashCount()
     ): CashSession
 
     /**

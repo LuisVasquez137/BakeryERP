@@ -172,7 +172,7 @@ private fun MovementCard(movement: FinishedStockMovement, canSeeValue: Boolean) 
         FinishedMovementType.ACCIDENTE     -> Triple(Icons.AutoMirrored.Filled.TrendingDown, BrandColors.Danger, BrandColors.DangerSoft)
         FinishedMovementType.CORTESIA      -> Triple(Icons.AutoMirrored.Filled.TrendingDown, BrandColors.Primary, BrandColors.PrimaryContainer)
         // Mismo color en las dos puntas: es una sola acción (el entero baja, la porción sube).
-        FinishedMovementType.PORCIONADO    ->
+        FinishedMovementType.PORCIONADO, FinishedMovementType.TRANSFORMACION ->
             if (isIngress) Triple(Icons.AutoMirrored.Filled.TrendingUp, BrandColors.Teal, BrandColors.TealSoft)
             else Triple(Icons.AutoMirrored.Filled.TrendingDown, BrandColors.Teal, BrandColors.TealSoft)
         else -> Triple(Icons.AutoMirrored.Filled.TrendingUp, Color.Gray, Color.LightGray)

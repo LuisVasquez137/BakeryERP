@@ -32,4 +32,11 @@ interface PreparationBatchRepository {
      * equivoca de lote/cantidad de esponja y aún no completó la producción.
      */
     suspend fun returnToBatch(companyId: String, batchId: String, grams: Double)
+
+    /**
+     * Saca [units] bizcochos de [preparationId] en la planta, de los lotes más viejos primero
+     * (`fifoUnitTakes`). Devuelve los que no alcanzaron (0 = se cubrió todo): el pastel ya se
+     * hizo, así que no falla, avisa.
+     */
+    suspend fun consumeUnits(companyId: String, branchId: String, preparationId: String, units: Double): Double
 }

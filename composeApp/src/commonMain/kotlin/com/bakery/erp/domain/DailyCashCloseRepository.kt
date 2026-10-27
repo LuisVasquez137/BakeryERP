@@ -20,10 +20,15 @@ data class DailyCashCloseDraft(
     val totalSales: Double,
     val totalMovementsIn: Double,
     val totalMovementsOut: Double,
+    /** Ver [com.bakery.erp.model.dayCashTotals]: esperado/contado al final del día, no suma de turnos. */
     val totalExpectedCash: Double,
     val totalCountedCash: Double,
     val totalDifference: Double,
-    val hasOpenSessions: Boolean
+    val hasOpenSessions: Boolean,
+    /** Salió al cerrar turnos (al banco o retiro): ya no está en las gavetas. */
+    val takenAtShiftClose: Double = 0.0,
+    /** Turnos del día que siguen abiertos: el resumen los muestra, pero sus números aún cambian. */
+    val openSessions: List<CashSession> = emptyList()
 )
 
 interface DailyCashCloseRepository {

@@ -127,7 +127,7 @@ No hay doble conteo con `absorbLeftoverIntoPlant`: ése ingresa lo **no empacado
 Coherencia: el vehículo requiere mantenimiento, depreciación, garantía. Vincular permite atribuir combustible, kilometraje, viajes por vehículo. Evita duplicar registro.
 
 ### Faltantes en recepción NO regresan al stock de la planta
-La planta no almacena terminado (produce y despacha el mismo día). Devolver implicaría inventario de terminado en planta. El faltante queda como pérdida en tránsito en Kardex — pérdida real, no retorno.
+La planta no almacena terminado (produce y despacha el mismo día). Devolver implicaría inventario de terminado en planta. El faltante queda como pérdida en tránsito en Kardex — pérdida real, no retorno. *(Oct 2026: la planta ya guarda terminado —excedente del mínimo, pan de más y producción para existencia, ver `produccion.md`—; la regla del faltante en recepción se mantiene.)*
 
 ### Esponja decidida por el panadero (no la encargada)
 La encargada solo consolida pedidos. El panadero decide por línea (un pan puede llevar esponja y otro no) en el momento de producción, no antes. Por eso la UI vive en el detalle del lote, no en el form del lote.

@@ -36,7 +36,7 @@ import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.ProductionOrder
 import com.bakery.erp.model.ProductionOrderLine
 import com.bakery.erp.model.RecipeBatchCheck
-import com.bakery.erp.model.flourGramsAsPounds
+import com.bakery.erp.model.shortfallText
 import kotlin.math.roundToInt
 import com.bakery.erp.ui.theme.BrandColors
 
@@ -127,7 +127,12 @@ internal fun MinimumBatchDecisionDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("«${check.recipeName}» no llega al mínimo") },
+        title = {
+            Text(
+                if (check.batch != null) "«${check.recipeName}» no completa la ${check.batch.label(1).substringAfter(' ')}"
+                else "«${check.recipeName}» no llega al mínimo"
+            )
+        },
         text = {
             Column(modifier = Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
                 Surface(
@@ -138,10 +143,7 @@ internal fun MinimumBatchDecisionDialog(
                 ) {
                     Column(Modifier.padding(12.dp)) {
                         Text(
-                            "Con lo que pidieron se mojarían solo " +
-                                check.currentFlourGrams.flourGramsAsPounds() +
-                                " de harina, y la amasadora necesita al menos " +
-                                check.minFlourGrams.flourGramsAsPounds() + ".",
+                            check.shortfallText(),
                             style = MaterialTheme.typography.bodySmall,
                             color = BrandColors.AccentDeep
                         )
@@ -274,7 +276,13 @@ internal fun MinimumBatchDecisionDialog(
                     }
                     onBakeMinimum(totals, retained, extraByOrder)
                 }
-            ) { Text("Hornear el mínimo", fontWeight = FontWeight.Bold, color = BrandColors.Primary) }
+            ) {
+                Text(
+                    check.batch?.let { "Hacer ${it.label(it.batchesFor(check.minFlourGrams))}" } ?: "Hornear el mínimo",
+                    fontWeight = FontWeight.Bold,
+                    color = BrandColors.Primary
+                )
+            }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Decidir después") }

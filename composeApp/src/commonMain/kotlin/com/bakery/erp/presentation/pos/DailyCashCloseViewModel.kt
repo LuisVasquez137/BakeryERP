@@ -10,7 +10,6 @@ import com.bakery.erp.domain.SpotCashCheckRepository
 import com.bakery.erp.model.Branch
 import com.bakery.erp.model.BranchCapability
 import com.bakery.erp.model.BreadCount
-import com.bakery.erp.model.DailyCashClose
 import com.bakery.erp.model.SpotCashCheck
 import com.bakery.erp.model.User
 import com.bakery.erp.model.canAccessBranch
@@ -22,7 +21,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.datetime.DatePeriod
 import kotlinx.datetime.LocalDate
+import kotlinx.datetime.plus
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.atStartOfDayIn
 import kotlinx.datetime.toLocalDateTime
@@ -32,16 +33,10 @@ data class DailyCashCloseUiState(
     val selectedBranchId: String = "",
     val closeDate: String = "",
     val draft: DailyCashCloseDraft? = null,
-    val existing: DailyCashClose? = null,
-    val leftDenoms: Map<String, Int> = emptyMap(),
-    val depositDenoms: Map<String, Int> = emptyMap(),
     val breadCount: BreadCount? = null,
     val spotChecks: List<SpotCashCheck> = emptyList(),
-    val monthlyCloses: List<DailyCashClose> = emptyList(),
-    val yearMonth: String = "",
     val isLoading: Boolean = false,
-    val error: String? = null,
-    val isClosed: Boolean = false
+    val error: String? = null
 )
 
 class DailyCashCloseViewModel(
@@ -62,8 +57,7 @@ class DailyCashCloseViewModel(
         val key = "${today.year.toString().padStart(4, '0')}-" +
             "${today.monthNumber.toString().padStart(2, '0')}-" +
             "${today.dayOfMonth.toString().padStart(2, '0')}"
-        val ym = "${today.year.toString().padStart(4, '0')}-${today.monthNumber.toString().padStart(2, '0')}"
-        _uiState.update { it.copy(closeDate = key, yearMonth = ym) }
+        _uiState.update { it.copy(closeDate = key) }
     }
 
     fun loadBranches(companyId: String, currentUser: User) {
@@ -87,18 +81,24 @@ class DailyCashCloseViewModel(
 
     fun selectBranch(branchId: String) {
         if (branchId == _uiState.value.selectedBranchId) return
-        _uiState.update { it.copy(selectedBranchId = branchId, draft = null, existing = null) }
+        _uiState.update { it.copy(selectedBranchId = branchId, draft = null) }
     }
 
     fun setCloseDate(date: String) {
-        _uiState.update { it.copy(closeDate = date, draft = null, existing = null) }
+        _uiState.update { it.copy(closeDate = date, draft = null) }
     }
 
-    fun setYearMonth(ym: String) { _uiState.update { it.copy(yearMonth = ym) } }
+    /** Día anterior (-1) o siguiente (+1); no pasa de hoy. */
+    fun shiftDate(days: Int) {
+        val current = parseDate(_uiState.value.closeDate) ?: return
+        val today = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date
+        val next = current.plus(DatePeriod(days = days)).takeIf { it <= today } ?: return
+        setCloseDate(next.toString())
+    }
 
     /**
-     * Carga el draft (sesiones del día) + verifica si ya hay cierre + carga
-     * conteo de pan y spot checks del día.
+     * Resumen de cajas del día: los turnos de la sucursal (cerrados y abiertos), el conteo de
+     * pan y los cuadres sorpresa. Solo lectura: el dinero se cuenta y se saca en "Cerrar caja".
      */
     fun loadDayContext(companyId: String) {
         val branchId = _uiState.value.selectedBranchId
@@ -110,21 +110,15 @@ class DailyCashCloseViewModel(
             _uiState.update { it.copy(isLoading = true, error = null) }
             runCatching {
                 val draft = closeRepo.buildDraft(companyId, branchId, branchName, date)
-                val existing = closeRepo.getCloseForDate(companyId, branchId, date)
-                val left = existing?.let { closeRepo.getLeftDenominations(companyId, it.id) } ?: emptyMap()
-                val deposit = existing?.let { closeRepo.getDepositDenominations(companyId, it.id) } ?: emptyMap()
                 val breadCount = breadCountRepo.getCountForDate(companyId, branchId, date)
                 val (from, until) = dayBounds(date)
                 val spots = spotCheckRepo.getForBranchInRange(companyId, branchId, from, until)
-                BundleResult(draft, existing, left, deposit, breadCount, spots)
+                BundleResult(draft, breadCount, spots)
             }.onSuccess { r ->
                 _uiState.update {
                     it.copy(
                         isLoading = false,
                         draft = r.draft,
-                        existing = r.existing,
-                        leftDenoms = r.left,
-                        depositDenoms = r.deposit,
                         breadCount = r.breadCount,
                         spotChecks = r.spots
                     )
@@ -135,63 +129,15 @@ class DailyCashCloseViewModel(
         }
     }
 
-    fun updateLeftDenoms(denoms: Map<String, Int>) {
-        _uiState.update { it.copy(leftDenoms = denoms) }
-    }
-
-    fun updateDepositDenoms(denoms: Map<String, Int>) {
-        _uiState.update { it.copy(depositDenoms = denoms) }
-    }
-
-    fun closeDay(companyId: String, notes: String?, currentUser: User) {
-        val draft = _uiState.value.draft ?: return
-        viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, error = null, isClosed = false) }
-            runCatching {
-                closeRepo.closeDay(
-                    companyId,
-                    draft,
-                    _uiState.value.leftDenoms,
-                    _uiState.value.depositDenoms,
-                    notes,
-                    currentUser.id,
-                    currentUser.displayName
-                )
-            }.onSuccess { closed ->
-                _uiState.update {
-                    it.copy(isLoading = false, existing = closed, isClosed = true)
-                }
-            }.onFailure { err ->
-                _uiState.update { it.copy(isLoading = false, error = err.message) }
-            }
-        }
-    }
-
-    fun loadMonth(companyId: String) {
-        val branchId = _uiState.value.selectedBranchId
-        if (branchId.isEmpty()) return
-        viewModelScope.launch {
-            runCatching {
-                closeRepo.getClosesForMonth(companyId, branchId, _uiState.value.yearMonth)
-            }.onSuccess { list ->
-                _uiState.update { it.copy(monthlyCloses = list) }
-            }.onFailure { err ->
-                _uiState.update { it.copy(error = err.message) }
-            }
-        }
-    }
-
-    fun clearClosed() { _uiState.update { it.copy(isClosed = false) } }
     fun clearError() { _uiState.update { it.copy(error = null) } }
 
     private data class BundleResult(
         val draft: DailyCashCloseDraft,
-        val existing: DailyCashClose?,
-        val left: Map<String, Int>,
-        val deposit: Map<String, Int>,
         val breadCount: BreadCount?,
         val spots: List<SpotCashCheck>
     )
+
+    private fun parseDate(yyyyMmDd: String): LocalDate? = runCatching { LocalDate.parse(yyyyMmDd) }.getOrNull()
 
     private fun dayBounds(yyyyMmDd: String): Pair<Long, Long> {
         val tz = TimeZone.currentSystemDefault()

@@ -49,6 +49,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.Permission
 import com.bakery.erp.model.Preparation
+import com.bakery.erp.model.canAccessBranch
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.ui.AdaptiveContainer
@@ -68,6 +69,11 @@ fun PreparationListScreen(
     val authState by authViewModel.uiState.collectAsState()
     val companyId = authState.user?.orgId ?: ""
     val canEdit = authState.user?.hasPermission(Permission.EDIT_PREPARATIONS) == true
+    // Cada planta ve lo que hace ella; las que no tienen planta asignada les salen a todas.
+    val visible = state.preparationList.filter { p ->
+        val user = authState.user
+        p.branchIds.isEmpty() || user == null || p.branchIds.any { user.canAccessBranch(it) }
+    }
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(companyId) {
@@ -108,10 +114,10 @@ fun PreparationListScreen(
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             when {
-                state.isLoading && state.preparationList.isEmpty() ->
+                state.isLoading && visible.isEmpty() ->
                     CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
 
-                state.preparationList.isEmpty() ->
+                visible.isEmpty() ->
                     EmptyPreparationsPlaceholder()
 
                 else -> AdaptiveContainer {
@@ -120,7 +126,7 @@ fun PreparationListScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        items(state.preparationList, key = { it.id }) { prep ->
+                        items(visible, key = { it.id }) { prep ->
                             PreparationListCard(
                                 preparation = prep,
                                 onClick = { onNavigateToDetail(prep.id) }

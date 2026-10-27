@@ -20,6 +20,13 @@ import com.bakery.erp.util.fmtTrim
  * **El costo viaja con la mercadería** ([StockTransferLine.unitCost]): el pan sale al costo
  * promedio del origen y se mezcla con el del destino; un insumo perecedero lleva sus lotes
  * ([StockTransferLine.lots]) para que el aviso de caducidad siga funcionando del otro lado.
+ *
+ * **Pedido de la sucursal** (pan molde, rosca, pan tostado: lo que se hace para existencia y no
+ * entra en el pedido de producción). La sucursal que lo necesita lo pide para un día y un viaje
+ * ([StockTransferStatus.REQUESTED], sin mover stock); quien lo tiene lo envía con lo que de
+ * verdad manda y desde ahí es un traslado como cualquier otro. El pedido viaja en el camión del
+ * reparto: sale en el tablero de Reparto y en la hoja del repartidor, en su viaje
+ * ([carrierPlantIdOf]: si sale de Calvario, el camión de Bombero pasa a recogerlo).
  */
 data class StockTransfer(
     val id: String = "",
@@ -42,12 +49,29 @@ data class StockTransfer(
     val cancelledByUserId: String = "",
     val cancelledByName: String = "",
     val cancelledAt: Long = 0L,
-    val cancelReason: String = ""
+    val cancelReason: String = "",
+    /** Viaje del camión en que va ([DISPATCH_TRIP_FIRST]/[DISPATCH_TRIP_SECOND]); 0 = no va en el reparto. */
+    val trip: Int = 0,
+    /** Día en que se necesita (millis al inicio del día). 0 = traslado directo, sin pedido. */
+    val forDate: Long = 0L,
+    val requestedByUserId: String = "",
+    val requestedByName: String = "",
+    /** Cuándo lo pidió la sucursal. 0 = no nació de un pedido. */
+    val requestedAt: Long = 0L
 ) {
     /** Número corto para hablar del traslado por teléfono ("el traslado 7KQ2XA"). */
     val folio: String get() = id.takeLast(6).uppercase()
     val isInTransit: Boolean get() = status == StockTransferStatus.IN_TRANSIT
     val isReceived: Boolean get() = status == StockTransferStatus.RECEIVED
+    /** Pedido por la sucursal y todavía no enviado: no ha movido stock. */
+    val isRequested: Boolean get() = status == StockTransferStatus.REQUESTED
+    val wasRequested: Boolean get() = requestedAt > 0L
+    /** Pedido o en camino: lo que alguien todavía tiene que hacer. */
+    val isOpen: Boolean get() = isRequested || isInTransit
+    /** Va en el camión del reparto (tiene día y viaje). */
+    val ridesDelivery: Boolean get() = forDate > 0L && (trip == DISPATCH_TRIP_FIRST || trip == DISPATCH_TRIP_SECOND)
+    /** Fecha para ordenar y filtrar: el envío, o el pedido si todavía no se envía. */
+    val activityAt: Long get() = sentAt.takeIf { it > 0L } ?: requestedAt
     val sentValue: Double get() = lines.sumOf { it.quantity * it.unitCost }
     /** Lo que entró al destino, a costo. Es lo que mueve el reporte por sucursal. */
     val receivedValue: Double get() = if (isReceived) lines.sumOf { (it.receivedQuantity ?: 0.0) * it.unitCost } else 0.0
@@ -56,11 +80,14 @@ data class StockTransfer(
 }
 
 object StockTransferStatus {
+    /** Pedido por la sucursal que lo necesita; quien lo tiene todavía no lo envía. */
+    const val REQUESTED = "REQUESTED"
     const val IN_TRANSIT = "IN_TRANSIT"
     const val RECEIVED = "RECEIVED"
     const val CANCELLED = "CANCELLED"
 
     fun label(status: String) = when (status) {
+        REQUESTED -> "Pedido"
         IN_TRANSIT -> "En camino"
         RECEIVED -> "Recibido"
         CANCELLED -> "Cancelado"
@@ -91,7 +118,9 @@ data class StockTransferLine(
     /** Lo que contó el destino. null = todavía no se recibe. */
     val receivedQuantity: Double? = null,
     /** Lotes que salieron del origen (solo insumos perecederos), en orden de vencimiento. */
-    val lots: List<TransferLot> = emptyList()
+    val lots: List<TransferLot> = emptyList(),
+    /** Lo que pidió la sucursal (0 = no nació de un pedido). [quantity] es lo que se mandó. */
+    val requestedQuantity: Double = 0.0
 ) {
     val shortage: Double get() = receivedQuantity?.let { (quantity - it).coerceAtLeast(0.0) } ?: 0.0
     val surplus: Double get() = receivedQuantity?.let { (it - quantity).coerceAtLeast(0.0) } ?: 0.0
@@ -120,6 +149,63 @@ fun stockTransferSendError(transfer: StockTransfer): String? = when {
         "Un mismo producto está dos veces: júntalo en una línea"
     else -> null
 }
+
+/** Motivo por el que no se puede pedir, o null. */
+fun stockTransferRequestError(transfer: StockTransfer): String? = when {
+    transfer.destinationBranchId.isEmpty() -> "Elige para qué sucursal es"
+    transfer.originBranchId.isEmpty() -> "Elige a qué sucursal se lo pides"
+    transfer.originBranchId == transfer.destinationBranchId -> "No te lo puedes pedir a ti misma"
+    !transfer.ridesDelivery -> "Elige el día y el viaje del camión"
+    transfer.lines.none { it.requestedQuantity > 0.0 } -> "Agrega al menos un producto"
+    transfer.lines.any { it.requestedQuantity < 0.0 } -> "Hay una cantidad negativa"
+    transfer.lines.groupBy { it.kind to it.itemId }.any { it.value.size > 1 } ->
+        "Un mismo producto está dos veces: júntalo en una línea"
+    else -> null
+}
+
+/**
+ * El pedido listo para enviar con [sent] (una cantidad por línea, lo que de verdad se manda).
+ * Se quedan las líneas pedidas aunque se manden en 0: así la sucursal ve qué no le llegó.
+ */
+fun StockTransfer.sendingRequest(sent: List<Double>): StockTransfer =
+    copy(lines = lines.mapIndexed { i, l -> l.copy(quantity = sent.getOrElse(i) { 0.0 }.coerceAtLeast(0.0)) })
+
+/** Líneas pedidas que salieron con menos de lo pedido. */
+val StockTransfer.shortOfRequest: List<StockTransferLine>
+    get() = if (!wasRequested || isRequested) emptyList()
+    else lines.filter { it.requestedQuantity > it.quantity + STOCK_LOT_EPSILON }
+
+/**
+ * Planta cuyo camión lleva el pedido. Si el origen tiene ruta propia, es él (Bombero). Si no
+ * (Calvario guarda repostería pero no tiene camión), la planta que lo tiene en su ruta pasa a
+ * recogerlo; si nadie lo tiene en ruta, la que tiene en ruta al destino. Sin nada de eso, el
+ * mismo origen.
+ */
+fun carrierPlantIdOf(transfer: StockTransfer, branches: Collection<Branch>): String {
+    val origin = branches.firstOrNull { it.id == transfer.originBranchId }
+    if (origin != null && origin.deliveryRouteOrder.isNotEmpty()) return origin.id
+    val withRoute = branches.filter { it.deliveryRouteOrder.isNotEmpty() }.sortedBy { it.name.lowercase() }
+    return withRoute.firstOrNull { transfer.originBranchId in it.deliveryRouteOrder }?.id
+        ?: withRoute.firstOrNull { transfer.destinationBranchId in it.deliveryRouteOrder }?.id
+        ?: transfer.originBranchId
+}
+
+/** El camión de [carrierPlantId] tiene que pasar a recogerlo al origen (no sale de la planta). */
+fun StockTransfer.isPickupFor(carrierPlantId: String): Boolean = originBranchId != carrierPlantId
+
+/** Pedidos y traslados que van en el camión de [carrierPlantId] en el viaje [trip] del día. */
+fun transfersForTrip(
+    transfers: List<StockTransfer>,
+    branches: Collection<Branch>,
+    carrierPlantId: String,
+    trip: Int,
+    dayStart: Long,
+    dayEnd: Long
+): List<StockTransfer> =
+    transfers.filter {
+        it.ridesDelivery && it.trip == trip && it.forDate in dayStart until dayEnd &&
+            it.status != StockTransferStatus.CANCELLED && carrierPlantIdOf(it, branches) == carrierPlantId
+    }
 
 /** Motivo por el que no se puede recibir con [received] (una cantidad por línea), o null. */
 fun stockTransferReceiveError(transfer: StockTransfer, received: List<Double>): String? = when {
@@ -203,3 +289,8 @@ const val STOCK_TRANSFER_MOVEMENT_TYPE = "TRASLADO"
 /** "2 Saco 100 lb" o "12 unidad": cómo se muestra lo enviado. */
 fun StockTransferLine.quantityLabel(): String =
     displayQuantity.ifBlank { "${quantity.fmtTrim()} $unit".trim() }
+
+/** "10 Pan molde": lo pedido si todavía no se envía, lo enviado si ya salió. */
+fun StockTransfer.linesSummary(): String = lines.joinToString {
+    if (isRequested) "${it.requestedQuantity.fmtTrim()} ${it.itemName}" else "${it.quantityLabel()} ${it.itemName}"
+}

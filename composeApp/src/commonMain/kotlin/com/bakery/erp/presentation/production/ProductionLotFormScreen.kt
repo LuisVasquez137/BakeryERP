@@ -33,6 +33,8 @@ import com.bakery.erp.model.ProductionLotLine
 import com.bakery.erp.model.ProductionShift
 import com.bakery.erp.model.RecipeBatchCheck
 import com.bakery.erp.model.flourGramsAsPounds
+import com.bakery.erp.model.shortfallText
+import com.bakery.erp.model.progressText
 import com.bakery.erp.model.flourGramsForLines
 import com.bakery.erp.model.canAccessBranch
 import com.bakery.erp.model.toBaseUnit
@@ -704,8 +706,7 @@ fun ProductionLotFormScreen(
                                                 color = BrandColors.Primary
                                             )
                                             Text(
-                                                check.currentFlourGrams.flourGramsAsPounds() +
-                                                    " de " + check.minFlourGrams.flourGramsAsPounds() +
+                                                check.progressText() +
                                                     " · " + check.lines.joinToString(", ") { it.productName }
                                                         .ifEmpty { "nadie pidió esta masa directamente — solo relleno de otro producto" },
                                                 style = MaterialTheme.typography.labelSmall,
@@ -883,6 +884,22 @@ private fun DecorationRow(
     onBatchChange: (PreparationBatch) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
+    if (decoration.isCounted) {
+        // Bizcocho: no hay lote que elegir, al completar se toman los más viejos de la planta.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "${decoration.preparationName} · del inventario de bizcochos",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                "Necesita: ${(decoration.unitsPerProduct * plannedQuantity).fmt(2).trimEnd('0').trimEnd('.')}",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.Gray
+            )
+        }
+        return
+    }
     val totalNeeded = decoration.gramsPerUnit * plannedQuantity
     val selectedBatch = candidateBatches.find { it.id == decoration.batchId }
     val insufficient = selectedBatch != null && selectedBatch.remainingWeightGrams < totalNeeded

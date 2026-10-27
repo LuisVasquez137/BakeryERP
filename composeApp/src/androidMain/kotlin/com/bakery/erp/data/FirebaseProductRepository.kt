@@ -6,6 +6,7 @@ import com.bakery.erp.model.DoughFilling
 import com.bakery.erp.model.Product
 import com.bakery.erp.model.ProductCharacteristics
 import com.bakery.erp.model.ProductDecoration
+import com.bakery.erp.model.TransformExtra
 import dev.gitlive.firebase.firestore.DocumentSnapshot
 import dev.gitlive.firebase.firestore.FirebaseFirestore
 import dev.gitlive.firebase.firestore.Timestamp
@@ -117,6 +118,15 @@ class FirebaseProductRepository(
         "decorationIngredientIds" to decorations.map { it.ingredientId },
         "decorationIngredientNames" to decorations.map { it.ingredientName },
         "decorationGramsPerUnit" to decorations.map { it.gramsPerUnit },
+        "decorationUnitsPerProduct" to decorations.map { it.unitsPerProduct },
+        // Se hace de otro producto (pan tostado ← pan molde); extras en arreglos paralelos.
+        "transformFromProductId" to transformFromProductId,
+        "transformFromProductName" to transformFromProductName,
+        "transformYield" to transformYield,
+        "transformExtraIngredientIds" to transformExtras.map { it.ingredientId },
+        "transformExtraIngredientNames" to transformExtras.map { it.ingredientName },
+        "transformExtraQuantities" to transformExtras.map { it.quantityPerUnit },
+        "transformExtraUnits" to transformExtras.map { it.unit },
         "doughFillingRecipeIds" to doughFillings.map { it.recipeId },
         "doughFillingRecipeNames" to doughFillings.map { it.recipeName },
         "doughFillingRawWeightGrams" to doughFillings.map { it.rawWeightGrams },
@@ -134,6 +144,8 @@ class FirebaseProductRepository(
         "portionOfProductId" to portionOfProductId,
         "portionOfProductName" to portionOfProductName,
         "portionsPerWhole" to portionsPerWhole,
+        "isMadeForStock" to isMadeForStock,
+        "plantStockMinimum" to plantStockMinimum,
         "notes" to notes,
         "createdAt" to if (createdAt == 0L) System.currentTimeMillis() else createdAt,
         "updatedAt" to System.currentTimeMillis()
@@ -178,13 +190,34 @@ class FirebaseProductRepository(
             val ingredientIds = get<List<String>?>("decorationIngredientIds") ?: emptyList()
             val ingredientNames = get<List<String>?>("decorationIngredientNames") ?: emptyList()
             val gramsPerUnit = get<List<Double>?>("decorationGramsPerUnit") ?: emptyList()
+            // Bizcochos por pastel (1, o 1/24 de plancha). Productos viejos no lo tienen.
+            val unitsPerProduct = runCatching { get<List<Double>?>("decorationUnitsPerProduct") }.getOrNull() ?: emptyList()
             preparationIds.indices.map { i ->
                 ProductDecoration(
                     preparationId = preparationIds[i],
                     preparationName = preparationNames.getOrElse(i) { "" },
                     ingredientId = ingredientIds.getOrElse(i) { "" },
                     ingredientName = ingredientNames.getOrElse(i) { "" },
-                    gramsPerUnit = gramsPerUnit.getOrElse(i) { 0.0 }
+                    gramsPerUnit = gramsPerUnit.getOrElse(i) { 0.0 },
+                    unitsPerProduct = unitsPerProduct.getOrElse(i) { 0.0 }
+                )
+            }
+        }.getOrElse { emptyList() },
+        transformFromProductId = runCatching { get<String?>("transformFromProductId") }.getOrNull() ?: "",
+        transformFromProductName = runCatching { get<String?>("transformFromProductName") }.getOrNull() ?: "",
+        transformYield = runCatching { get<Double?>("transformYield") }.getOrNull()
+            ?: runCatching { get<Long?>("transformYield")?.toDouble() }.getOrNull() ?: 0.0,
+        transformExtras = runCatching {
+            val ids = get<List<String>?>("transformExtraIngredientIds") ?: emptyList()
+            val names = get<List<String>?>("transformExtraIngredientNames") ?: emptyList()
+            val qtys = get<List<Double>?>("transformExtraQuantities") ?: emptyList()
+            val units = get<List<String>?>("transformExtraUnits") ?: emptyList()
+            ids.indices.map { i ->
+                TransformExtra(
+                    ingredientId = ids[i],
+                    ingredientName = names.getOrElse(i) { "" },
+                    quantityPerUnit = qtys.getOrElse(i) { 0.0 },
+                    unit = units.getOrElse(i) { "" }
                 )
             }
         }.getOrElse { emptyList() },
@@ -214,6 +247,10 @@ class FirebaseProductRepository(
         portionOfProductId = runCatching { get<String?>("portionOfProductId") }.getOrNull() ?: "",
         portionOfProductName = runCatching { get<String?>("portionOfProductName") }.getOrNull() ?: "",
         portionsPerWhole = runCatching { get<Long?>("portionsPerWhole")?.toInt() }.getOrNull() ?: 0,
+        isMadeForStock = runCatching { get<Boolean?>("isMadeForStock") }.getOrNull() ?: false,
+        // La web guarda 20.0 como entero; se lee de las dos formas.
+        plantStockMinimum = runCatching { get<Double?>("plantStockMinimum") }.getOrNull()
+            ?: runCatching { get<Long?>("plantStockMinimum")?.toDouble() }.getOrNull() ?: 0.0,
         notes = get<String?>("notes"),
         createdAt = readTimestampAsMillis("createdAt"),
         updatedAt = readTimestampAsMillis("updatedAt")

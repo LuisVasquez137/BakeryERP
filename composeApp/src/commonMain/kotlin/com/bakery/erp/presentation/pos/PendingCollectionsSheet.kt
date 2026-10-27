@@ -69,7 +69,9 @@ fun PendingCollectionsSheet(
      * Pone la cuenta en el carrito para cobrarla junto con lo que el cliente lleve de
      * panadería: un solo pago y un solo vuelto.
      */
-    onAddToCart: (Sale) -> Unit = {}
+    onAddToCart: (Sale) -> Unit = {},
+    /** Se cobra por el diálogo de pago (ver `POSViewModel.chargePendingNow`). */
+    onChargeNow: (Sale) -> Unit = onCollect
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var confirming by remember { mutableStateOf<Sale?>(null) }
@@ -128,9 +130,8 @@ fun PendingCollectionsSheet(
     }
 
     confirming?.let { sale ->
-        // Solo una cuenta en efectivo se puede sumar al carrito: si en el restaurante ya se
-        // pasó una tarjeta, cobrarla otra vez en el mostrador le cobraría dos veces al cliente.
-        val cashOnly = sale.effectivePaymentBreakdown.keys.all { it == SalePaymentMethod.CASH }
+        // Toda cuenta pasa por el cobro, aunque ComandaYa la traiga con tarjeta: el mesero se
+        // puede equivocar de método y aquí se corrige. El cobro abre con el método que trae.
         val alreadyInCart = sale.id in inCartIds
         AlertDialog(
             onDismissRequest = { if (!isCollecting) confirming = null },
@@ -169,28 +170,18 @@ fun PendingCollectionsSheet(
                     )
                     Spacer(Modifier.size(10.dp))
                     Text(
-                        "Cobrar ahora registra que el dinero de esta cuenta entró a esta caja. " +
-                            "Si el cliente va a llevar pan, agregala al carrito y se cobra todo " +
-                            "junto, con un solo vuelto.",
+                        "Cobrar ahora abre el cobro con el método que marcó el restaurante: " +
+                            "confírmalo o corrígelo, con el vuelto y la factura. Si el cliente va " +
+                            "a llevar pan, agrégala al carrito y se cobra todo junto.",
                         style = MaterialTheme.typography.labelSmall,
                         color = BrandColors.MutedSlate
                     )
-                    if (!cashOnly) {
-                        Spacer(Modifier.size(6.dp))
-                        Text(
-                            "Se pagó con tarjeta o transferencia en el restaurante: solo se " +
-                                "puede recibir, no sumar al carrito.",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.SemiBold,
-                            color = BrandColors.AccentDeep
-                        )
-                    }
                 }
             },
             confirmButton = {
                 Column(horizontalAlignment = Alignment.End) {
                     Button(
-                        onClick = { onCollect(sale); confirming = null },
+                        onClick = { onChargeNow(sale); confirming = null },
                         enabled = !isCollecting && !alreadyInCart,
                         colors = ButtonDefaults.buttonColors(containerColor = BrandColors.Primary)
                     ) {
@@ -200,14 +191,12 @@ fun PendingCollectionsSheet(
                         }
                         Text("Cobrar ahora")
                     }
-                    if (cashOnly) {
-                        Spacer(Modifier.size(4.dp))
-                        OutlinedButton(
-                            onClick = { onAddToCart(sale); confirming = null },
-                            enabled = !isCollecting && !alreadyInCart
-                        ) {
-                            Text(if (alreadyInCart) "Ya está en el carrito" else "Agregar al carrito")
-                        }
+                    Spacer(Modifier.size(4.dp))
+                    OutlinedButton(
+                        onClick = { onAddToCart(sale); confirming = null },
+                        enabled = !isCollecting && !alreadyInCart
+                    ) {
+                        Text(if (alreadyInCart) "Ya está en el carrito" else "Agregar al carrito")
                     }
                     TextButton(onClick = { confirming = null }, enabled = !isCollecting) {
                         Text("Cancelar")

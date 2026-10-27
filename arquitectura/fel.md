@@ -83,6 +83,8 @@ defecto").
 - Los campos de factura van en `Sale.toMap()`: `collectPendingSale` reescribe la venta con
   `set()` y sin ellos recibir una cuenta le borraría la factura.
 - Historial y detalle de venta muestran `SaleInvoiceChip`.
+- **Sin internet** también se factura: la venta sube SOLICITADA cuando vuelve la red y el barrido (o la
+  misma caja) la certifica. Ver `pos-ventas.md`, "Factura sin internet".
 - **Sin detalle** (switch en `InvoiceSection`): una sola línea "Servicio de alimentos y/o
   bebidas" por el total, el mismo texto que ComandaYa (`DESCRIPCION_SIN_DETALLE`). Viaja en la
   venta (`Sale.invoiceWithoutDetail`, `CheckoutPayment.invoiceWithoutDetail`) para que el

@@ -117,10 +117,15 @@ fun ProductionLotLine.quantityToKnead(): Double = effectiveProducedQuantity() + 
  * nota de despacho—, y se suman acá para que `completeLot` tenga un solo lugar que
  * ingresa a la planta en vez de dos caminos que pueden divergir.
  */
-fun ProductionLotLine.plantIngestQuantity(): Double = plantRetainedQuantity + extraQuantity
+fun ProductionLotLine.plantIngestQuantity(lotIsForStock: Boolean = false): Double =
+    // En un lote para existencia no hay pedidos: todo lo bueno se queda, y es lo
+    // CONTADO, no lo planeado (si de 60 moldes salieron 55, entran 55).
+    if (lotIsForStock) producedQuantity + extraQuantity
+    else plantRetainedQuantity + extraQuantity
 
 /** Razón legible del ingreso a planta, para el Kardex de terminado. */
-fun ProductionLotLine.plantIngestReason(): String = when {
+fun ProductionLotLine.plantIngestReason(lotIsForStock: Boolean = false): String = when {
+    lotIsForStock -> "Producción para existencia ($recipeName)"
     plantRetainedQuantity > 0.0 && extraQuantity > 0.0 ->
         "Excedente por mínimo de amasada + producción extra ($recipeName)"
     extraQuantity > 0.0 ->

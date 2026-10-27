@@ -58,6 +58,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.bakery.erp.model.Product
 import com.bakery.erp.model.RecipeComponent
+import com.bakery.erp.model.batchSpec
+import com.bakery.erp.model.isBatch
+import com.bakery.erp.model.isProduct
+import com.bakery.erp.util.fmtTrim
 import com.bakery.erp.model.RecipeStep
 import com.bakery.erp.model.RecipeYield
 import com.bakery.erp.presentation.auth.AuthViewModel
@@ -194,7 +198,13 @@ fun RecipeDetailScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        DetailBadge(if (recipe.inputMode == "PERCENTAGE") "% panadero" else "Por peso")
+                        DetailBadge(
+                            when {
+                                recipe.isBatch -> "Por tanda"
+                                recipe.inputMode == "PERCENTAGE" -> "% panadero"
+                                else -> "Por peso"
+                            }
+                        )
                         StatusBadge(recipe.active)
                     }
 
@@ -232,14 +242,24 @@ fun RecipeDetailScreen(
                                 modifier = Modifier.width(nameColWidth)
                             )
                             Text(
-                                "Porcentaje",
+                                if (recipe.isBatch) "Por ${recipe.batchSpec?.label(1) ?: "tanda"}" else "Porcentaje",
                                 style = if (isLarge) MaterialTheme.typography.labelLarge
                                         else MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold
                             )
                         }
-                        components.forEach { ComponentDetailRow(it, isLarge, nameColWidth) }
-                        BaseGroupCaption(components, isLarge)
+                        components.forEach { ComponentDetailRow(it, isLarge, nameColWidth, recipe.isBatch) }
+                        val spec = recipe.batchSpec
+                        if (spec != null) {
+                            Text(
+                                text = "Salen ${spec.fullYield.fmtTrim(2)} de ${spec.label(1)}",
+                                style = if (isLarge) MaterialTheme.typography.bodyLarge
+                                        else MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(top = 6.dp)
+                            )
+                        } else BaseGroupCaption(components, isLarge)
                     } else {
                         Text(
                             text = "Sin ingredientes registrados",
@@ -289,7 +309,7 @@ fun RecipeDetailScreen(
 }
 
 @Composable
-private fun ComponentDetailRow(component: RecipeComponent, isLarge: Boolean, nameColWidth: Dp) {
+private fun ComponentDetailRow(component: RecipeComponent, isLarge: Boolean, nameColWidth: Dp, isBatch: Boolean = false) {
     val nameStyle = if (isLarge) MaterialTheme.typography.titleMedium
                     else MaterialTheme.typography.bodyMedium
     val pctStyle = if (isLarge) MaterialTheme.typography.titleMedium
@@ -319,7 +339,9 @@ private fun ComponentDetailRow(component: RecipeComponent, isLarge: Boolean, nam
             )
         }
         Text(
-            text = "${component.percentage.fmtPercentage()}%",
+            text = if (isBatch) "${component.inputQuantity.fmtTrim(2)} ${component.ingredientUnit}" +
+                (if (component.isProduct) " · del inventario" else "")
+            else "${component.percentage.fmtPercentage()}%",
             style = pctStyle,
             fontWeight = FontWeight.SemiBold,
             color = if (component.isBase) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface

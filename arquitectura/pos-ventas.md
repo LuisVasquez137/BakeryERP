@@ -82,7 +82,44 @@ contar sin autorización. Decisiones tomadas con él:
   - El detalle de un turno cerrado (`ShiftHandoverCard`) lista cada cobro con tarjeta y
     transferencia (hora, factura) — de qué turno es cada voucher — y qué entregó o retiró. Solo
     cerrado: abierto diría cuánto se lleva vendido.
-  - El `DailyCashClose` sigue aparte: la cadena no lo usa todavía.
+  - **Cierre del día con la cadena (26 oct 2026)**: antes sumaba `countedCash`/`expectedCash` de
+    todos los turnos y con entrega en la misma caja contaba dos veces el efectivo que pasó.
+    Ahora `model/DailyCashClose.kt::dayCashTotals`: lo que hay en gavetas = `carriedOutCash` del
+    último turno de cada caja (el que ningún turno tiene como `previousSessionId`), ya sin lo que
+    salió al banco/retiro al cerrar; diferencia = suma de las de cada turno; esperado = gavetas −
+    diferencia. Lo que salió al cerrar turnos se muestra aparte. Tests en `DayCashTotalsTest`.
+    Los `DailyCashClose` ya guardados no se recalculan.
+  - **El "Cierre del día" dejó de existir como pantalla (26 oct 2026, decisión del dueño)**: pedía
+    repartir otra vez el efectivo entre "queda" y "se lleva el owner", pero lo que la caja espera
+    al abrir sale de `carriedOutCash` del "Cerrar caja", así que sacar dinero ahí dejaba faltante
+    la apertura siguiente. Ahora es **Reportes → Resumen de cajas**
+    (`presentation/reports/CashDaySummaryScreen.kt`, ruta `reports/cashDay`), solo lectura: por
+    sucursal y día (flechas, no pasa de hoy), totales de venta, al banco/retirado al cerrar, lo que
+    quedó en gavetas y diferencias; abajo cada turno por caja (efectivo, vouchers, transferencias, PedidosYa, entrega) y
+    tocarlo abre el detalle. Incluye cajas abiertas (solo ventas). Retirar y dejar caja chica se
+    hace SOLO en "Cerrar caja" del último turno ("Nadie: es el cierre del día"). El permiso
+    `MANAGE_DAILY_CASH_CLOSE` se conserva (ver el resumen + cerrar caja ajena en el POS); el aviso de
+    caja olvidada lleva a "Punto de venta". `closeDay` y la colección `dailyCashCloses` quedan sin
+    uso (los de antes se pueden leer); la apertura ya no tendrá denominaciones sugeridas de ahí.
+  - **Cuadre de lo que no es efectivo al cerrar (26 oct 2026, primer día real en Democracia)**: el
+    cierre solo contaba efectivo y la encargada creyó que el esperado incluía los vouchers (el
+    fondo hacía que se pareciera al total vendido). Ahora la tarjeta "Lo que no es efectivo" pide
+    **suma de vouchers** (contra `expectedCardNow` = `carriedInCard + totalCardSales`, incluye
+    anuladas: el voucher se queda), **transferencias revisadas en el banco** (contra
+    `expectedTransferNow`) y **lo que dice la app de PedidosYa** (contra `totalPedidosYaSales`; no
+    pasa de turno). Cada uno es obligatorio si se cobró algo con ese método; si no, "(si hay)": un
+    cobro registrado con otro método sale como sobrante. Se guarda en la sesión
+    (`NonCashCount` → `countedCardVouchers`, `countedTransfers`, `countedPedidosYa`; null = no se
+    ingresó, distinto de 0), sale en el detalle, en Resumen de cajas y en la bitácora. Lógica en
+    `CashHandover.kt` (`closeCountDifference`, `closeCountProblem`), tests en `CashHandoverTest`.
+    Hubo un campo "cierre de lote de la terminal" opcional; el dueño lo quitó el mismo día por
+    sobrar (`terminalBatchTotal` ya no se lee).
+  - **Fondo para mañana (26 oct 2026)**: al elegir "Nadie: es el cierre del día" la pantalla
+    pregunta "¿Cuánto efectivo se queda para mañana?" (obligatorio, `leftForTomorrowProblem`) y
+    lo demás es el retiro/depósito (`closingWithdrawal`). Entregando a otro turno sigue el retiro
+    opcional. El primer día cerró una colaboradora sin `WITHDRAW_AT_CLOSE` ni `BANK_DEPOSIT`: la
+    pantalla escondía el retiro sin decir nada y todo quedó para mañana. Ahora, sin esos permisos,
+    avisa en rojo que todo se queda en la gaveta y qué permiso hace falta.
 - **Fase C (hecha oct 2026, sin probar en dispositivo): depósitos al banco con boleta**
   (`model/BankDeposit.kt`, `companies/{c}/bankDeposits`, plana; tests en `BankDepositTest`). La
   meta del dueño: que todo el dinero termine en el banco y nadie retire.
@@ -113,6 +150,18 @@ contar sin autorización. Decisiones tomadas con él:
     por las reglas). `bankDeposits` está en `isHistory` (no se borra) — regla en el repo.
   - **No hecho**: aviso automático "lleva N horas sin boleta" (requiere función programada) y
     "visto en el estado de cuenta" por parte del dueño.
+
+### POS: carrito a la derecha en tablet horizontal
+
+- `POSScreen` pasa a dos columnas (catálogo | `CartPanel`) con **ancho ≥ 840dp y en
+  horizontal**. Antes el umbral era 1000dp y una tablet de 11" en horizontal (≈900–1000dp, menos
+  con "tamaño de pantalla" grande) caía al diseño de teléfono: sin carrito a la derecha. En
+  vertical sigue el diseño de teléfono (barra azul + hoja del carrito).
+- El carrito tiene **ancho propio** (28% del ancho, entre 280 y 340dp) y el catálogo toma el
+  resto; con reparto por peso quedaba en ~200dp a 840dp. A 330–400dp se veía muy ancho en la
+  tablet de 11" (probado en tablet).
+- Junto al carrito las fichas bajan a **96dp de mínimo** (`ProductGrid.minTileWidth`; 118dp en
+  la vista de teléfono) para que quepan 6 por fila, como antes del cambio.
 
 ### POS: diálogo de cobro (`PaymentDialog`)
 
@@ -515,6 +564,43 @@ la bitácora de cajas y **lista de anuladas en el cuadre**. Lo que disuade es qu
   (`countsAsRevenue`) y el pan devuelto está en el estante.
 - Historial: filtro "Anuladas" y chip "Devolver por banco".
 
+### Cuenta del restaurante: "Cobrar ahora" pasa por el diálogo de pago (27 oct 2026)
+
+"Cobrar ahora" de una cuenta de ComandaYa en efectivo la recibía directo con el efectivo que
+ComandaYa pone por omisión, sin preguntar el método: una cuenta pagada con tarjeta en el mostrador
+sumaba como efectivo. Ahora (`POSViewModel.chargePendingNow`) la pone sola en el carrito y abre el
+diálogo de pago, igual que "Agregar al carrito" + Cobrar. Con otra venta en el carrito no se mezcla
+(avisa: cobrarla o ponerla en espera). Si se cancela el pago, la cuenta queda en el carrito.
+Decisión del dueño: **todas** las cuentas pasan por el cobro, también las que ComandaYa trae con
+tarjeta/transferencia (el mesero se puede equivocar de método); ya se pueden sumar al carrito. Con
+solo cuentas del restaurante en el carrito, el diálogo abre con el método que marcó ComandaYa
+(`PaymentDialog.initialMethod`); con pan, en efectivo. "Recibir" directo ya no se usa desde la hoja.
+
+### Cambiar forma de pago (26 oct 2026, sin probar en dispositivo)
+
+Primer día en Democracia: un cobro con tarjeta quedó como efectivo y la caja salió con faltante de
+efectivo y sobrante de vouchers por lo mismo. Ahora el detalle del cobro (historial y "Ventas de la
+caja") tiene **"Cambiar forma de pago"** (`model/SalePaymentChange.kt`, tests `SalePaymentChangeTest`).
+
+- Se corrige el **cobro entero a UN método** (efectivo, tarjeta, transferencia, PedidosYa); un pago
+  dividido mal registrado se pasa entero. El total no cambia; la factura tampoco.
+- Bloquea (`paymentChangeBlocker`): anulado, crédito, anticipo, caja no encontrada y **caja cerrada que
+  se entregó a otro turno** (los vouchers ya pasaron al siguiente). Caja cerrada como cierre del día sí
+  se corrige: además de los totales mueve `expectedCash`, `difference`, `expectedCardVouchers` y
+  `carriedOutCard/Transfer` (lo contado no cambia).
+- Permiso (`paymentChangePermission`): caja abierta `VOID_SALE`; cerrada `VIEW_CASH_AUDIT`.
+- `SaleRepository.changePaymentMethod`: venta primero en transacción con guarda (reintento = "ya está
+  en ese método"), escritura parcial + `originalPaymentMethod`/`paymentChangedAt/ByName`; después
+  `CashSessionRepository.applyTotalsDeltas` (sumas en el servidor) y el resumen del día
+  (`daily - antes + después`, sin líneas). `saleTotalsDeltas` y la corrección usan el mismo
+  `sessionTotalField`. Bitácora `PAYMENT_CHANGE` + push `SALE_PAYMENT_CHANGED` al dueño.
+- **Historial**: chips por forma de pago (solo los métodos del día; un pago dividido sale en cada
+  uno) y la línea de resumen suma lo que se ve; con método elegido suma solo esa parte de cada
+  cobro ("Caja 1 + Tarjeta" = lo que debería haber en vouchers), sin anuladas. Los montos siguen
+  ocultos en "Ventas de la caja" (decisión anterior).
+- **Color por método** (`ui/theme/PaymentMethodTone.kt`): efectivo verde, tarjeta azul,
+  transferencia morado, PedidosYa naranja; chips en la lista, el detalle y los filtros.
+
 ## Sacar del mostrador: merma, accidente, regalo (oct 2026)
 
 Con la caja abierta no había cómo dar de baja pan: todo esperaba al conteo de cierre y ahí
@@ -585,9 +671,23 @@ error y la venta no existe; sin acuse = venta "por subir" y el cobro sigue.
   Igual en `branchStocks` (antes `updateBranchStock` lo topaba en 0; la venta ya no pasa por ahí).
 
 **Necesita internet (bloqueado con mensaje, `requireOnline`)**: crédito, anticipos (aplicar/recibir/devolver),
-cuentas del restaurante, facturar (fase 2: cola de FEL), cuentas en espera, abonos, adelantos, porcionar,
-anular venta/factura, **cerrar caja** (además exige `pendingSales == 0`). Sin internet la sesión se revalida
-contra lo último que trajo su listener.
+cuentas del restaurante, cuentas en espera, abonos, adelantos, porcionar, anular venta/factura, facturar desde
+el historial, **cerrar caja** (además exige `pendingSales == 0`). Sin internet la sesión se revalida contra lo
+último que trajo su listener.
+
+**Factura sin internet (paso 2)**: sí se puede. No hizo falta cola nueva: la venta ya nace `SOLICITADA` con el
+receptor adentro (`fel.md`, fase 3a) y viaja en el mismo batch. Al subir, `felReintentarPendientes` la barre
+(cada 5 min, las de más de 2 min) y la certifica con la fecha del momento en que se emite. El POS además la pide
+él mismo (`queueOfflineInvoice` → `flushOfflineInvoices`) apenas hay red y `pendingSales == 0`, para no esperar
+el barrido; si coinciden, el candado del DTE deja pasar una.
+- El acuse dice "Factura pendiente — se emite sola al volver"; el ticket impreso sale sin factura y con el pie
+  `OFFLINE_INVOICE_FOOTER` ("Factura electrónica en trámite…"). La factura se reimprime desde el historial.
+- La consulta del NIT a la SAT no se intenta sin red (se colgaría): el nombre se escribe a mano. El dígito
+  verificador y el límite de CF se validan igual en el equipo.
+- Un rechazo al emitir (NIT que no existe, por ejemplo) se avisa en el POS si la caja sigue abierta; si no, queda
+  RECHAZADO en el historial para "Facturar de nuevo".
+- La fecha de la factura es la de emisión, no la del cobro: una venta de las 23:50 que sube al día siguiente sale
+  con fecha del día siguiente.
 
 **Web**: la cola de Firestore vive en memoria (recargar = perder ventas), así que `offlineSalesSupported = false`
 en `jsMain/di/PlatformInitializer.kt` y el POS web no cobra sin conexión. Fase 3: caché persistente (IndexedDB)

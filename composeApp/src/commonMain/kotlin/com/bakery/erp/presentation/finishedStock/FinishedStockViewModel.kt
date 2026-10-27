@@ -28,6 +28,15 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import com.bakery.erp.model.isPortion
 import com.bakery.erp.model.PortioningRequest
+import com.bakery.erp.model.StockMovement
+import com.bakery.erp.model.TransformationRequest
+import com.bakery.erp.model.gramsToUnitOrNull
+import com.bakery.erp.model.isTransformed
+import com.bakery.erp.model.toGramsOrNull
+import com.bakery.erp.model.transformExtrasFor
+import com.bakery.erp.domain.transformExtrasCost
+import com.bakery.erp.util.fmtTrim
+import kotlin.time.Clock
 
 data class FinishedStockUiState(
     val branches: List<Branch> = emptyList(),
@@ -49,6 +58,15 @@ data class FinishedStockUiState(
     /** Productos porción activos ("Porción de selva negra"), para "Porcionar pastel". */
     val portionProducts: List<Product> = emptyList(),
     val isPortioning: Boolean = false,
+    /** Lo que se hace de otro producto (pan tostado ← molde), para "Transformar". */
+    val transformProducts: List<Product> = emptyList(),
+    val isTransforming: Boolean = false,
+    /**
+     * Catálogo activo que se puede ajustar en tienda (sin los de insumo). "Agregar producto" elige
+     * de acá: un pan de planta no tiene documento de stock en la sucursal hasta su primer despacho,
+     * así que en [stocks] no está y su conteo inicial no tenía por dónde entrar.
+     */
+    val catalog: List<Product> = emptyList(),
     /** Aviso de un corte que salió bien, para el snackbar. */
     val notice: String? = null
 )
@@ -145,6 +163,9 @@ class FinishedStockViewModel(
                             isLoading = false,
                             stocks = (list + zeros).sortedBy { s -> s.productName },
                             portionProducts = products.filter { p -> p.active && p.isPortion },
+                            transformProducts = products.filter { p -> p.active && p.isTransformed },
+                            catalog = products.filter { p -> p.active && !p.isIngredientBacked }
+                                .sortedBy { p -> p.name.lowercase() },
                             rows = buildStoreInventoryRows(list, products, ingredientStock)
                         )
                     }
@@ -162,7 +183,10 @@ class FinishedStockViewModel(
     }
 
     /** Registra una merma o ajuste manual. `signedDelta` < 0 para salidas (merma, ajuste por menos),
-     *  > 0 para ingresos puntuales (raros — ajuste por más, encontrado). */
+     *  > 0 para ingresos puntuales (ajuste por más, encontrado, conteo inicial).
+     *
+     *  [unitCost] es el costo con que entra un ingreso. Tiene que ser el promedio que ya tenía el
+     *  producto: entrar a 0 diluye el promedio y, con el stock en 0, lo deja en 0. */
     fun registerAdjustment(
         companyId: String,
         productId: String,
@@ -172,7 +196,8 @@ class FinishedStockViewModel(
         signedDelta: Double,
         type: String,
         reason: String,
-        currentUser: User
+        currentUser: User,
+        unitCost: Double = 0.0
     ) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
@@ -193,7 +218,7 @@ class FinishedStockViewModel(
                         branchName = branchName,
                         type = type,
                         quantity = signedDelta,
-                        unitPriceAtMovement = 0.0,
+                        unitPriceAtMovement = if (signedDelta > 0) unitCost else 0.0,
                         referenceType = refType,
                         referenceId = "",
                         reason = reason.trim().ifEmpty { null },
@@ -237,6 +262,89 @@ class FinishedStockViewModel(
                     it.copy(isPortioning = false, notice = "$n × ${portion.name} al inventario")
                 }
             }.onFailure { err -> _uiState.update { it.copy(isPortioning = false, error = err.message) } }
+        }
+    }
+
+    /**
+     * Hace [produced] de [product] usando [sourceUnits] del original (ver
+     * `FinishedStockRepository.applyTransformation`). Primero el inventario de pan (valida
+     * existencias); después los insumos agregados, con la misma referencia en su Kardex. Los
+     * suministros que no se cuentan (la bolsa, si no lleva stock) no se descuentan.
+     */
+    fun transform(
+        companyId: String,
+        product: Product,
+        sourceUnits: Double,
+        produced: Double,
+        note: String?,
+        currentUser: User
+    ) {
+        val st = _uiState.value
+        if (st.isTransforming) return
+        val branch = st.branches.firstOrNull { it.id == st.selectedBranchId } ?: return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isTransforming = true, error = null) }
+            runCatching {
+                val ingredientsById = if (product.transformExtras.isEmpty()) emptyMap()
+                else ingredientRepository.getIngredients(companyId).associateBy { it.id }
+                val extras = product.transformExtrasFor(produced)
+                val extrasCost = transformExtrasCost(extras, ingredientsById)
+                val userName = currentUser.displayName.ifBlank { currentUser.email }
+                val referenceId = repository.applyTransformation(
+                    companyId,
+                    TransformationRequest(
+                        branchId = branch.id,
+                        branchName = branch.name,
+                        product = product,
+                        sourceUnits = sourceUnits,
+                        producedUnits = produced,
+                        userId = currentUser.id,
+                        userName = userName,
+                        note = note
+                    ),
+                    extrasCost.cost
+                )
+                val warnings = mutableListOf<String>()
+                val now = Clock.System.now().toEpochMilliseconds()
+                for ((extra, qty) in extras) {
+                    val ing = ingredientsById[extra.ingredientId] ?: continue
+                    if (!ing.tracksStock) continue
+                    val inBase = toGramsOrNull(qty, extra.unit, ing.unitWeightGrams)
+                        ?.let { gramsToUnitOrNull(it, ing.effectiveBaseUnit, ing.unitWeightGrams) }
+                        ?: if (extra.unit == ing.effectiveBaseUnit) qty else null
+                    if (inBase == null) {
+                        warnings += "${ing.name}: no se pudo pasar a ${ing.effectiveBaseUnit}"
+                        continue
+                    }
+                    runCatching {
+                        val before = ingredientRepository.updateBranchStock(
+                            companyId, ing.id, ing.name, branch.id, branch.name, -inBase
+                        )
+                        ingredientRepository.addStockMovement(
+                            companyId, ing.id, StockMovement(
+                                type = "PRODUCCION",
+                                quantity = -inBase,
+                                balanceBefore = before,
+                                balanceAfter = (before - inBase).coerceAtLeast(0.0),
+                                branchId = branch.id,
+                                branchName = branch.name,
+                                reference = referenceId,
+                                date = now,
+                                createdByUserId = currentUser.id,
+                                createdByUserName = userName,
+                                createdByEmployeeId = currentUser.operatorEmployeeId
+                            )
+                        )
+                    }.onFailure { warnings += "${ing.name}: ${it.message}" }
+                }
+                if (extrasCost.missingPrices.isNotEmpty()) {
+                    warnings += "sin precio (no suman al costo): ${extrasCost.missingPrices.joinToString(", ")}"
+                }
+                "${produced.fmtTrim()} × ${product.name} al inventario" +
+                    if (warnings.isEmpty()) "" else ". ${warnings.joinToString("; ")}"
+            }.onSuccess { msg ->
+                _uiState.update { it.copy(isTransforming = false, notice = msg) }
+            }.onFailure { err -> _uiState.update { it.copy(isTransforming = false, error = err.message) } }
         }
     }
 

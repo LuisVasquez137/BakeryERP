@@ -51,6 +51,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -59,6 +60,7 @@ import com.bakery.erp.model.POSCategory
 import androidx.compose.material.icons.filled.People
 import com.bakery.erp.model.expectedCashNow
 import com.bakery.erp.model.SalePaymentMethod
+import com.bakery.erp.model.effectivePaymentBreakdown
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.model.Permission
 import com.bakery.erp.model.groupDisplayName
@@ -344,7 +346,13 @@ fun POSScreen(
 
     CompositionLocalProvider(LocalCartFlight provides cartFlight) {
     BoxWithConstraints {
-        val wide = maxWidth >= 1000.dp
+        // Tablet horizontal = carrito fijo a la derecha. Con 1000dp de umbral una tablet de 11"
+        // (≈900–1000dp en horizontal, más si tiene la letra grande) caía al diseño de teléfono y
+        // el carrito desaparecía. 840dp es el "expandido" de Material; en vertical sigue igual.
+        val wide = maxWidth >= 840.dp && maxWidth > maxHeight
+        // Ancho propio para el carrito: con reparto por peso quedaba en ~200dp a 840dp. A 330dp
+        // en la tablet de 11" se veía muy ancho y al catálogo le cabían solo 4 fichas.
+        val cartWidth = (maxWidth * 0.28f).coerceIn(280.dp, 340.dp)
         // Teléfono (sobre todo en vertical): no caben cinco acciones en la barra. Las dos que
         // no son de uso continuo se van a un menú.
         val compact = maxWidth < 700.dp
@@ -562,7 +570,7 @@ fun POSScreen(
 
             if (wide) {
                 Row(Modifier.fillMaxSize().padding(padding)) {
-                    Column(Modifier.weight(3f).fillMaxHeight()) {
+                    Column(Modifier.weight(1f).fillMaxHeight()) {
                         resale?.let { ResellerSaleBanner(it, onEnd = { viewModel.endResellerSale() }) }
                         HeldCartsBar(
                             held = state.heldCarts,
@@ -601,6 +609,8 @@ fun POSScreen(
                                 onGroupClick = { groupQuantityFor = it },
                                 priceOf = { viewModel.unitPriceFor(it) },
                                 groupPriceOf = { viewModel.groupPriceFor(it) },
+                                // Junto al carrito: fichas más chicas para que quepan 6 por fila.
+                                minTileWidth = 96.dp,
                                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
                             )
                         }
@@ -621,7 +631,7 @@ fun POSScreen(
                         highlightAt = highlightAt,
                         // Sin `cartFlightTarget`: en horizontal el carrito ya está a la vista y
                         // el vuelo cruzando la pantalla distrae. Basta con que el renglón aparezca.
-                        modifier = Modifier.weight(0.95f).fillMaxHeight().padding(10.dp)
+                        modifier = Modifier.width(cartWidth).fillMaxHeight().padding(10.dp)
                     )
                 }
             } else {
@@ -896,6 +906,14 @@ fun POSScreen(
         PaymentDialog(
             onDismiss = { paymentOpen = false; paymentDiscountAccount = null },
             total = viewModel.cartTotal(),
+            // Solo cuentas del restaurante en el carrito: abre con el método que marcó ComandaYa
+            // (si es uno solo y todas coinciden) y la cajera confirma o corrige. Con pan, efectivo.
+            initialMethod = state.cart.takeIf { c -> c.all { it.isRestaurant } }.orEmpty()
+                .mapNotNull { line -> state.pendingCollections.firstOrNull { it.id == line.pendingSaleId } }
+                .map { s -> s.effectivePaymentBreakdown.keys.singleOrNull() }
+                .distinct().singleOrNull()
+                ?.takeIf { it in com.bakery.erp.model.SalePaymentMethod.checkout }
+                ?: com.bakery.erp.model.SalePaymentMethod.CASH,
             onConfirm = { method, tendered, bills, invoice, split ->
                 paymentOpen = false
                 cartSheetOpen = false
@@ -1052,6 +1070,10 @@ fun POSScreen(
             onAddToCart = { sale ->
                 viewModel.addPendingToCart(sale)
                 pendingSheetOpen = false
+            },
+            onChargeNow = { sale ->
+                pendingSheetOpen = false
+                if (viewModel.chargePendingNow(sale)) paymentOpen = true
             }
         )
     }
@@ -1317,6 +1339,8 @@ private fun ProductGrid(
     /** Precio que muestra cada ficha: el público o el del revendedor. Null = sin precio. */
     priceOf: (Product) -> Double? = { it.salePrice },
     groupPriceOf: (POSCategory) -> Double? = { it.groupUnitPrice },
+    /** Ancho mínimo de cada ficha; define cuántas caben por fila. */
+    minTileWidth: Dp = 118.dp,
     modifier: Modifier = Modifier
 ) {
     if (products.isEmpty() && groups.isEmpty()) {
@@ -1374,7 +1398,7 @@ private fun ProductGrid(
         return
     }
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(minSize = 118.dp),
+        columns = GridCells.Adaptive(minSize = minTileWidth),
         modifier = modifier,
         contentPadding = PaddingValues(4.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),

@@ -84,6 +84,8 @@ import com.bakery.erp.model.Recipe
 import com.bakery.erp.model.RecipeComponent
 import com.bakery.erp.model.RecipeStep
 import com.bakery.erp.model.RecipeYield
+import com.bakery.erp.model.RECIPE_MODE_BATCH
+import com.bakery.erp.presentation.pos.ProductPickerDialog
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.presentation.ingredients.IngredientViewModel
 import com.bakery.erp.presentation.products.ProductViewModel
@@ -101,7 +103,10 @@ private data class ComponentEntry(
     val ingredientUnit: String = "",
     val rawInput: String = "",
     val isBase: Boolean = false,
-    val order: Int = 0
+    val order: Int = 0,
+    /** Receta por tanda: producto del inventario (pan molde) en vez de insumo. */
+    val productId: String = "",
+    val productName: String = ""
 )
 
 private data class StepEntry(
@@ -146,10 +151,13 @@ private fun RecipeComponent.toComponentEntry(inputMode: String) = ComponentEntry
     ingredientId = ingredientId,
     ingredientName = ingredientName,
     ingredientUnit = ingredientUnit,
-    rawInput = if (inputMode == "WEIGHT" && inputQuantity > 0.0) inputQuantity.asInputText()
+    rawInput = if ((inputMode == "WEIGHT" || inputMode == RECIPE_MODE_BATCH) && inputQuantity > 0.0)
+                   inputQuantity.asInputText()
                else percentage.asInputText(),
     isBase = isBase,
-    order = order
+    order = order,
+    productId = productId,
+    productName = productName
 )
 
 private fun RecipeYield.toYieldEntry() = YieldEntry(
@@ -186,6 +194,18 @@ private fun toPercentageComponents(
     unitWeightById: Map<String, Double>
 ): List<RecipeComponent> {
     if (components.isEmpty()) return emptyList()
+    // Por tanda no hay %: se guarda lo que se escribió, para una tanda entera.
+    if (inputMode == RECIPE_MODE_BATCH) return components.mapIndexed { i, c ->
+        RecipeComponent(
+            id = c.id, stageId = "",
+            ingredientId = if (c.productId.isNotEmpty()) "" else c.ingredientId,
+            ingredientName = if (c.productId.isNotEmpty()) c.productName else c.ingredientName,
+            ingredientUnit = c.ingredientUnit,
+            inputQuantity = c.rawInput.replace(',', '.').toDoubleOrNull() ?: 0.0,
+            productId = c.productId, productName = c.productName,
+            isBase = false, order = i
+        )
+    }
     return if (inputMode == "WEIGHT") {
         // El 100% = suma de pesos de las harinas marcadas como base.
         val baseNorm = components.filter { it.isBase }
@@ -232,12 +252,21 @@ private fun toPercentageComponents(
  */
 private fun convertComponentsForModeSwitch(
     components: List<ComponentEntry>,
+    fromMode: String,
     toMode: String,
     unitWeightById: Map<String, Double>
 ): List<ComponentEntry> {
-    if (toMode == "WEIGHT") {
-        return components.map { it.copy(rawInput = "") }
+    // Entre "por peso" y "por tanda" las cantidades son reales en los dos: se conservan.
+    // Los productos del inventario solo existen en la receta por tanda.
+    if (toMode == RECIPE_MODE_BATCH) {
+        return if (fromMode == "WEIGHT") components else components.map { it.copy(rawInput = "") }
     }
+    val ingredientsOnly = components.filter { it.productId.isEmpty() }
+    if (toMode == "WEIGHT") {
+        return if (fromMode == RECIPE_MODE_BATCH) ingredientsOnly
+        else ingredientsOnly.map { it.copy(rawInput = "") }
+    }
+    if (fromMode == RECIPE_MODE_BATCH) return ingredientsOnly.map { it.copy(rawInput = "") }
     val baseNorm = components.filter { it.isBase }.sumOf { it.gramsOrNull(unitWeightById) ?: 0.0 }
     if (baseNorm <= 0.0) return components.map { it.copy(rawInput = "") }
     return components.map { c ->
@@ -282,6 +311,27 @@ private fun validateBase(
         if (kotlin.math.abs(sum - 100.0) > 0.5)
             "Los % de las harinas base deben sumar 100 (suman ${sum.fmt(1)})" else null
     }
+}
+
+/**
+ * Receta por tanda: cantidades > 0, lo que rinde, y cada insumo en una unidad que se pueda
+ * pasar a peso — si no, al completar el lote no hay forma de descontarlo del inventario.
+ */
+private fun validateBatch(
+    comps: List<ComponentEntry>,
+    fullYield: Double?,
+    unitWeightById: Map<String, Double>
+): String? {
+    if (comps.isEmpty()) return "Agrega lo que lleva la receta"
+    val missing = comps.filter { (it.rawInput.replace(',', '.').toDoubleOrNull() ?: 0.0) <= 0.0 }
+    if (missing.isNotEmpty())
+        return "Falta cantidad en: " + missing.joinToString(", ") { it.productName.ifEmpty { it.ingredientName } }
+    val noWeight = comps.filter { it.productId.isEmpty() && it.gramsOrNull(unitWeightById) == null }
+    if (noWeight.isNotEmpty())
+        return "Definí el peso de una unidad en Insumos para: " +
+            noWeight.joinToString(", ") { it.ingredientName } + ". Sin eso no se puede descontar."
+    if (fullYield == null || fullYield <= 0.0) return "Indica cuántos salen de una tanda"
+    return null
 }
 
 // ── Pantalla principal ────────────────────────────────────────────────────────
@@ -364,6 +414,12 @@ private fun RecipeFormContent(
         )
     }
     var notes by rememberSaveable { mutableStateOf(existing?.notes ?: "") }
+    // Receta por tanda: cuánto rinde y cómo se llama la tanda.
+    var batchYield by rememberSaveable {
+        mutableStateOf(existing?.batchYield?.takeIf { it > 0.0 }?.asInputText() ?: "")
+    }
+    var batchUnitName by rememberSaveable { mutableStateOf(existing?.batchUnitName ?: "") }
+    var showProductComponentPicker by remember { mutableStateOf(false) }
     var active by rememberSaveable { mutableStateOf(existing?.active ?: true) }
     // Mínimo de la amasadora, en libras (internamente gramos). Vacío = sin mínimo.
     var minBatchFlourLb by rememberSaveable {
@@ -444,13 +500,16 @@ private fun RecipeFormContent(
             inputMode = inputMode,
             notes = notes.trim().ifEmpty { null },
             minBatchFlourGrams = minBatchFlourLb.replace(',', '.').toDoubleOrNull()
-                ?.takeIf { it > 0.0 }
+                ?.takeIf { it > 0.0 && inputMode != RECIPE_MODE_BATCH }
                 ?.let { it * GRAMS_PER_LB_RECIPE }
                 ?: 0.0,
             kneadingTimeSeconds = kneadingMinutes.replace(',', '.').toDoubleOrNull()
                 ?.takeIf { it > 0.0 }
                 ?.let { (it * 60).toInt() }
                 ?: 0,
+            batchYield = if (inputMode == RECIPE_MODE_BATCH)
+                batchYield.replace(',', '.').toDoubleOrNull() ?: 0.0 else 0.0,
+            batchUnitName = if (inputMode == RECIPE_MODE_BATCH) batchUnitName.trim() else "",
             active = active,
             components = builtComponents,
             steps = builtSteps,
@@ -472,11 +531,36 @@ private fun RecipeFormContent(
                     ingredientId = ing.id,
                     ingredientName = ing.name,
                     ingredientUnit = ing.allowedUnits.firstOrNull() ?: "",
-                    isBase = components.none { it.isBase },
+                    isBase = inputMode != RECIPE_MODE_BATCH && components.none { it.isBase },
                     order = components.size
                 )
             },
             onDismiss = { showIngredientPicker = false }
+        )
+    }
+
+    if (showProductComponentPicker) {
+        val yieldIds = yields.map { it.productId }.toSet()
+        val usedIds = components.map { it.productId }.toSet()
+        ProductPickerDialog(
+            title = "¿Qué producto del inventario lleva?",
+            // Lo que sale de esta receta no puede ser también su ingrediente.
+            products = productState.productList
+                .filter { it.active && it.id !in yieldIds && it.id !in usedIds }
+                .sortedBy { it.name },
+            stockOf = null,
+            showSearch = true,
+            onDismiss = { showProductComponentPicker = false },
+            onSelect = { p ->
+                components = components + ComponentEntry(
+                    id = generateEntryId(),
+                    ingredientUnit = p.unit.ifBlank { "unidad" },
+                    order = components.size,
+                    productId = p.id,
+                    productName = p.name
+                )
+                showProductComponentPicker = false
+            }
         )
     }
 
@@ -574,7 +658,7 @@ private fun RecipeFormContent(
                         selected = inputMode == "PERCENTAGE",
                         onClick = {
                             if (inputMode != "PERCENTAGE") {
-                                components = convertComponentsForModeSwitch(components, "PERCENTAGE", unitWeightById)
+                                components = convertComponentsForModeSwitch(components, inputMode, "PERCENTAGE", unitWeightById)
                                 inputMode = "PERCENTAGE"
                             }
                         },
@@ -585,17 +669,34 @@ private fun RecipeFormContent(
                         selected = inputMode == "WEIGHT",
                         onClick = {
                             if (inputMode != "WEIGHT") {
-                                components = convertComponentsForModeSwitch(components, "WEIGHT", unitWeightById)
+                                components = convertComponentsForModeSwitch(components, inputMode, "WEIGHT", unitWeightById)
                                 inputMode = "WEIGHT"
                                 formError = "Los % no traen un peso absoluto — reescribe los pesos reales de esta amasada."
                             }
                         },
                         modifier = Modifier.weight(1f)
                     )
+                    InputModeButton(
+                        label = "Por tanda",
+                        selected = inputMode == RECIPE_MODE_BATCH,
+                        onClick = {
+                            if (inputMode != RECIPE_MODE_BATCH) {
+                                components = convertComponentsForModeSwitch(components, inputMode, RECIPE_MODE_BATCH, unitWeightById)
+                                    .map { it.copy(isBase = false) }
+                                inputMode = RECIPE_MODE_BATCH
+                            }
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
                 }
                 Text(
-                    text = if (inputMode == "PERCENTAGE") "Ingresa porcentajes del panadero (base = 100%)"
-                           else "Ingresa pesos reales; se guardará en % automáticamente",
+                    text = when (inputMode) {
+                        "PERCENTAGE" -> "Ingresa porcentajes del panadero (base = 100%)"
+                        RECIPE_MODE_BATCH -> "Para lo que no es masa de pan (torta de leche): escribe la " +
+                            "receta de una tanda tal como la haces. Puede llevar productos del " +
+                            "inventario, como el pan molde."
+                        else -> "Ingresa pesos reales; se guardará en % automáticamente"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
                     modifier = Modifier.padding(top = 4.dp)
@@ -633,7 +734,11 @@ private fun RecipeFormContent(
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary)
                 Text(
-                    text = if (inputMode == "PERCENTAGE") "(% panadero)" else "(peso → se convierte a %)",
+                    text = when (inputMode) {
+                        "PERCENTAGE" -> "(% panadero)"
+                        RECIPE_MODE_BATCH -> "(para una tanda)"
+                        else -> "(peso → se convierte a %)"
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -641,12 +746,24 @@ private fun RecipeFormContent(
 
             if (components.isEmpty()) {
                 Text(
-                    text = "Sin ingredientes. Marca como base la(s) harina(s): su suma = 100%.",
+                    text = if (inputMode == RECIPE_MODE_BATCH) "Sin ingredientes."
+                           else "Sin ingredientes. Marca como base la(s) harina(s): su suma = 100%.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else {
                 components.forEach { comp ->
+                    if (comp.productId.isNotEmpty()) {
+                        ProductComponentRow(
+                            comp = comp,
+                            onUpdate = { updated ->
+                                components = components.map { c -> if (c.id == updated.id) updated else c }
+                            },
+                            onDelete = { components = components.filter { it.id != comp.id } }
+                        )
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        return@forEach
+                    }
                     ComponentRow(
                         comp = comp,
                         inputMode = inputMode,
@@ -669,6 +786,22 @@ private fun RecipeFormContent(
                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
                 Text("Agregar ingrediente")
+            }
+            if (inputMode == RECIPE_MODE_BATCH) {
+                OutlinedButton(
+                    onClick = { showProductComponentPicker = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Agregar producto del inventario (pan molde…)")
+                }
+                BatchYieldSection(
+                    fullYield = batchYield,
+                    onFullYieldChange = { batchYield = it },
+                    unitName = batchUnitName,
+                    onUnitNameChange = { batchUnitName = it }
+                )
             }
 
             SectionDivider()
@@ -706,6 +839,8 @@ private fun RecipeFormContent(
                 Text("Agregar producto")
             }
 
+            // Mínimo de amasadora y timer son de masa de pan: la tanda no los usa.
+            if (inputMode != RECIPE_MODE_BATCH) {
             SectionDivider()
 
             SectionHeader("Mínimo de la amasadora")
@@ -775,6 +910,7 @@ private fun RecipeFormContent(
                 },
                 colors = recipeFieldColors()
             )
+            }
 
             SectionDivider()
 
@@ -794,7 +930,11 @@ private fun RecipeFormContent(
                 onClick = {
                     var hasError = false
                     if (name.isBlank()) { nameError = true; hasError = true }
-                    val err = validateBase(components, inputMode, unitWeightById)
+                    val err = if (inputMode == RECIPE_MODE_BATCH) validateBatch(
+                        components,
+                        batchYield.replace(',', '.').toDoubleOrNull(),
+                        unitWeightById
+                    ) else validateBase(components, inputMode, unitWeightById)
                     if (err != null) { formError = err; hasError = true }
                     if (yields.isEmpty()) {
                         formError = "Agrega al menos un producto que genera la receta"
@@ -869,7 +1009,12 @@ private fun ComponentRow(
     onDelete: () -> Unit
 ) {
     var showIngredientPicker by remember { mutableStateOf(false) }
-    val inputLabel = if (inputMode == "PERCENTAGE") "%" else "Peso"
+    val inputLabel = when (inputMode) {
+        "PERCENTAGE" -> "%"
+        RECIPE_MODE_BATCH -> "Cant."
+        else -> "Peso"
+    }
+    val realQuantities = inputMode == "WEIGHT" || inputMode == RECIPE_MODE_BATCH
 
     if (showIngredientPicker) {
         IngredientPickerDialog(
@@ -911,7 +1056,7 @@ private fun ComponentRow(
                 singleLine = true
             )
 
-            if (inputMode == "WEIGHT" && comp.ingredientUnit.isNotEmpty()) {
+            if (realQuantities && comp.ingredientUnit.isNotEmpty()) {
                 var unitExpanded by remember { mutableStateOf(false) }
                 // Un insumo contado con peso unitario acepta también gr/oz/lb:
                 // "6 unidad" y "10.6 oz" de huevo son lo mismo y dan el mismo %.
@@ -968,7 +1113,7 @@ private fun ComponentRow(
         // Equivalencia en vivo: confirma que el insumo contado sí entró como peso,
         // y avisa de una vez si le falta el peso unitario en lugar de dejar que
         // el error aparezca hasta el guardado.
-        if (inputMode == "WEIGHT" && comp.ingredientUnit.isNotEmpty()) {
+        if (realQuantities && comp.ingredientUnit.isNotEmpty()) {
             val ing = ingredients.find { it.id == comp.ingredientId }
             val typed = comp.rawInput.replace(',', '.').toDoubleOrNull()
             val grams = if (typed != null && typed > 0.0)
@@ -997,6 +1142,8 @@ private fun ComponentRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
+            // Por tanda no hay harina base: el borrar queda solo, a la derecha.
+            if (inputMode == RECIPE_MODE_BATCH) Spacer(Modifier.weight(1f)) else
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
@@ -1025,6 +1172,90 @@ private fun ComponentRow(
                     tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
             }
         }
+    }
+}
+
+// ── Receta por tanda ─────────────────────────────────────────────────────────
+
+/** Fila de un producto del inventario dentro de la receta por tanda (el pan molde). */
+@Composable
+private fun ProductComponentRow(
+    comp: ComponentEntry,
+    onUpdate: (ComponentEntry) -> Unit,
+    onDelete: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(comp.productName, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            Text(
+                "Producto · sale del inventario de la planta",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        OutlinedTextField(
+            value = comp.rawInput,
+            onValueChange = { onUpdate(comp.copy(rawInput = it)) },
+            label = { Text("Cant.") },
+            colors = recipeFieldColors(),
+            modifier = Modifier.width(96.dp),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            singleLine = true
+        )
+        Text(comp.ingredientUnit, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+        IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
+            Icon(Icons.Default.Delete, contentDescription = "Eliminar",
+                tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
+        }
+    }
+}
+
+/**
+ * Cuánto rinde la tanda. Siempre se hace entera: las sucursales piden los pedazos que quieren y
+ * al armar el lote la encargada reparte lo que sobra de completar la bandeja.
+ */
+@Composable
+private fun BatchYieldSection(
+    fullYield: String,
+    onFullYieldChange: (String) -> Unit,
+    unitName: String,
+    onUnitNameChange: (String) -> Unit
+) {
+    val decimal = Regex("^\\d*[.,]?\\d*$")
+    Column(Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Rinde", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary)
+        OutlinedTextField(
+            value = unitName,
+            onValueChange = onUnitNameChange,
+            label = { Text("¿Cómo se llama la tanda?") },
+            placeholder = { Text("bandeja") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            colors = recipeFieldColors()
+        )
+        val unit = unitName.trim().ifEmpty { "tanda" }
+        OutlinedTextField(
+            value = fullYield,
+            onValueChange = { if (it.isEmpty() || it.matches(decimal)) onFullYieldChange(it) },
+            label = { Text("Salen de 1 $unit *") },
+            placeholder = { Text("35") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            colors = recipeFieldColors()
+        )
+        Text(
+            "Siempre se hace la $unit entera. Las sucursales piden los que quieran; al armar el " +
+                "lote, si lo pedido no completa la $unit, la encargada reparte lo que sobra " +
+                "o lo deja en la planta.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

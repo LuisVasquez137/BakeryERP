@@ -16,6 +16,7 @@ import com.bakery.erp.model.StockTransferStatus
 import com.bakery.erp.model.TransferLot
 import com.bakery.erp.model.lotsForReceived
 import com.bakery.erp.model.stockTransferReceiveError
+import com.bakery.erp.model.stockTransferRequestError
 import com.bakery.erp.model.stockTransferSendError
 import com.bakery.erp.model.transferLotsFrom
 import dev.gitlive.firebase.firestore.DocumentSnapshot
@@ -35,8 +36,29 @@ class FirebaseStockTransferRepository(
 
     private fun col(companyId: String) = firestore.collection("companies/$companyId/stockTransfers")
 
+    override suspend fun request(companyId: String, transfer: StockTransfer): StockTransfer {
+        val lines = transfer.lines.filter { it.requestedQuantity > 0.0 }.map { it.copy(quantity = 0.0) }
+        val draft = transfer.copy(lines = lines)
+        stockTransferRequestError(draft)?.let { throw IllegalStateException(it) }
+        val saved = draft.copy(
+            id = col(companyId).document.id,
+            status = StockTransferStatus.REQUESTED,
+            note = transfer.note.trim(),
+            requestedAt = Clock.System.now().toEpochMilliseconds()
+        )
+        col(companyId).document(saved.id).set(saved.toMap())
+        return saved
+    }
+
     override suspend fun send(companyId: String, transfer: StockTransfer): StockTransfer {
-        val lines = transfer.lines.filter { it.quantity > 0.0 }
+        // Un pedido se envía sobre el mismo documento: se vuelve a leer para que un segundo toque
+        // (u otra persona a la vez) choque con "ya está en camino" en vez de sacar el stock dos veces.
+        if (transfer.wasRequested) {
+            val current = get(companyId, transfer.id) ?: throw IllegalStateException("No se encontró el pedido")
+            check(current.isRequested) { "Este pedido ya está ${StockTransferStatus.label(current.status).lowercase()}" }
+        }
+        // Las líneas pedidas se quedan aunque vayan en 0: la sucursal ve qué no le llegó.
+        val lines = transfer.lines.filter { it.quantity > 0.0 || it.requestedQuantity > 0.0 }
         stockTransferSendError(transfer.copy(lines = lines))?.let { throw IllegalStateException(it) }
         val now = Clock.System.now().toEpochMilliseconds()
 
@@ -59,6 +81,7 @@ class FirebaseStockTransferRepository(
             status = StockTransferStatus.IN_TRANSIT,
             lines = priced,
             note = transfer.note.trim(),
+            // Un pedido trae sentAt 0; un reintento del envío directo trae el suyo.
             sentAt = transfer.sentAt.takeIf { it > 0 } ?: now
         )
         // 1. Encabezado antes que el stock.
@@ -66,7 +89,7 @@ class FirebaseStockTransferRepository(
 
         // 2. Sale del origen, en serie (applyMovement y updateBranchStock leen-modifican-escriben).
         val reason = "Traslado ${saved.folio} a ${saved.destinationBranchName}" + noteSuffix(saved.note)
-        saved.lines.forEach { line ->
+        saved.lines.filter { it.quantity > 0.0 }.forEach { line ->
             moveLine(
                 companyId, line, saved, saved.originBranchId, saved.originBranchName,
                 delta = -line.quantity, lots = emptyList(), reason = reason,
@@ -119,7 +142,7 @@ class FirebaseStockTransferRepository(
         companyId: String, transferId: String, byUserId: String, byName: String, reason: String
     ): StockTransfer {
         val current = get(companyId, transferId) ?: throw IllegalStateException("No se encontró el traslado")
-        check(current.isInTransit) { "Este traslado ya está ${StockTransferStatus.label(current.status).lowercase()}" }
+        check(current.isOpen) { "Este traslado ya está ${StockTransferStatus.label(current.status).lowercase()}" }
         val now = Clock.System.now().toEpochMilliseconds()
         col(companyId).document(transferId).update(firestoreSafeOf(
             "status" to StockTransferStatus.CANCELLED,
@@ -129,9 +152,9 @@ class FirebaseStockTransferRepository(
             "cancelReason" to reason.trim()
         ))
         // Corregir = escribir la diferencia: el stock vuelve con un movimiento de regreso, la
-        // salida queda en el Kardex.
+        // salida queda en el Kardex. Un pedido sin enviar no movió nada.
         val why = "Traslado ${current.folio} cancelado" + noteSuffix(reason)
-        current.lines.forEach { line ->
+        if (current.isInTransit) current.lines.filter { it.quantity > 0.0 }.forEach { line ->
             moveLine(
                 companyId, line, current, current.originBranchId, current.originBranchName,
                 delta = line.quantity, lots = line.lots, reason = why,
@@ -234,8 +257,8 @@ class FirebaseStockTransferRepository(
         branchIds: List<String>, fromMillis: Long, untilMillis: Long
     ): List<StockTransfer> =
         filter { branchIds.isEmpty() || it.originBranchId in branchIds || it.destinationBranchId in branchIds }
-            .filter { it.isInTransit || it.sentAt in fromMillis until untilMillis }
-            .sortedByDescending { it.sentAt }
+            .filter { it.isOpen || it.activityAt in fromMillis until untilMillis }
+            .sortedByDescending { it.activityAt }
 
     override suspend fun getReceivedInRange(companyId: String, fromMillis: Long, untilMillis: Long): List<StockTransfer> =
         col(companyId).where { "status" equalTo StockTransferStatus.RECEIVED }.get().documents
@@ -290,7 +313,13 @@ class FirebaseStockTransferRepository(
             "cancelledByUserId" to cancelledByUserId,
             "cancelledByName" to cancelledByName,
             "cancelledAt" to cancelledAt,
-            "cancelReason" to cancelReason
+            "cancelReason" to cancelReason,
+            "trip" to trip,
+            "forDate" to forDate,
+            "requestedByUserId" to requestedByUserId,
+            "requestedByName" to requestedByName,
+            "requestedAt" to requestedAt,
+            "lineRequestedQuantities" to lines.map { it.requestedQuantity }
         )
     }
 
@@ -320,6 +349,7 @@ class FirebaseStockTransferRepository(
         val display = strings("lineDisplayQuantities")
         val costs = numbers("lineUnitCosts")
         val received = numbers("lineReceivedQuantities")
+        val requested = numbers("lineRequestedQuantities")
         val lotLine = numbers("lotLineIndexes").map { it.toInt() }
         val lotExpiry = numbers("lotExpiries")
         val lotCode = strings("lotCodes")
@@ -350,7 +380,8 @@ class FirebaseStockTransferRepository(
                     displayQuantity = display.getOrElse(i) { "" },
                     unitCost = costs.getOrElse(i) { 0.0 },
                     receivedQuantity = received.getOrNull(i),
-                    lots = lotsByLine[i].orEmpty()
+                    lots = lotsByLine[i].orEmpty(),
+                    requestedQuantity = requested.getOrElse(i) { 0.0 }
                 )
             },
             note = str("note"),
@@ -366,7 +397,13 @@ class FirebaseStockTransferRepository(
             cancelledByUserId = str("cancelledByUserId"),
             cancelledByName = str("cancelledByName"),
             cancelledAt = millis("cancelledAt"),
-            cancelReason = str("cancelReason")
+            cancelReason = str("cancelReason"),
+            trip = runCatching { get<Int?>("trip") }.getOrNull()
+                ?: runCatching { get<Double?>("trip")?.toInt() }.getOrNull() ?: 0,
+            forDate = millis("forDate"),
+            requestedByUserId = str("requestedByUserId"),
+            requestedByName = str("requestedByName"),
+            requestedAt = millis("requestedAt")
         )
     }
 }

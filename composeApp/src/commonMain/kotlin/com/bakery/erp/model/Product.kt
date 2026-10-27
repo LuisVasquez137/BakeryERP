@@ -140,6 +140,25 @@ data class Product(
     val portionOfProductName: String = "",
     /** Porciones que salen normalmente de un entero. Se puede cambiar al cortar. */
     val portionsPerWhole: Int = 0,
+    /**
+     * Se hace por adelantado y se guarda en la planta en vez de hornearse por pedido:
+     * pan molde, rosca de panela. Solo lo pide la planta que lo guarda, en su propio pedido
+     * (`isOrderableIn`); las demás sucursales lo piden por traslado. La planta que lo guarda
+     * es la que lo tiene asignado (`Branch.assignedProductIds`).
+     */
+    val isMadeForStock: Boolean = false,
+    /** Existencia mínima en la planta: por debajo sale el aviso "toca hacer". 0 = sin aviso. */
+    val plantStockMinimum: Double = 0.0,
+    /**
+     * Se hace transformando otro producto que ya está en el inventario: pan tostado ← pan
+     * molde, pirujo con ajo ← pirujo de mantequilla. Vacío = no. Ver `model/Transformation.kt`.
+     */
+    val transformFromProductId: String = "",
+    val transformFromProductName: String = "",
+    /** Cuántos salen normalmente de 1 del original (1.5 empaques por molde). Al hacerlo se anota lo real. */
+    val transformYield: Double = 0.0,
+    /** Insumos que se agregan por cada uno que sale (la bolsa, la mantequilla y el ajo). */
+    val transformExtras: List<TransformExtra> = emptyList(),
     val notes: String? = null,
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L
@@ -155,6 +174,18 @@ val Product.isIngredientBacked: Boolean
 /** `true` si el producto es la porción de otro (ver [Product.portionOfProductId]). */
 val Product.isPortion: Boolean
     get() = portionOfProductId.isNotEmpty()
+
+/** `true` si se hace transformando otro producto (ver [Product.transformFromProductId]). */
+val Product.isTransformed: Boolean
+    get() = transformFromProductId.isNotEmpty() && transformYield > 0.0
+
+/**
+ * `true` si cualquier sucursal lo pide a planta en su pedido diario. La porción se corta en
+ * la tienda y lo que se hace para existencia solo lo pide la planta que lo guarda: para el
+ * form de pedido usar `isOrderableIn`, que sabe quién pide.
+ */
+val Product.isOrderedFromPlant: Boolean
+    get() = !isPortion && !isMadeForStock
 
 /** Unidades del insumo que consume una venta de N piezas. Nunca cero. */
 fun Product.ingredientUnitsFor(quantity: Double): Double =

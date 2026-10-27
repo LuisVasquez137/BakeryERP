@@ -35,6 +35,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -94,6 +95,8 @@ import com.bakery.erp.model.listRulePrice
 import com.bakery.erp.model.Product
 import com.bakery.erp.model.ProductCharacteristics
 import com.bakery.erp.model.ProductDecoration
+import com.bakery.erp.model.TransformExtra
+import com.bakery.erp.model.isTransformed
 import com.bakery.erp.model.Recipe
 import com.bakery.erp.model.Supplier
 import com.bakery.erp.model.PurchaseFormat
@@ -225,6 +228,20 @@ fun ProductFormScreen(
     var portionsPerWhole by rememberSaveable {
         mutableStateOf(existingProduct?.portionsPerWhole?.takeIf { it > 0 }?.toString() ?: "")
     }
+    // Se hace por adelantado y se guarda en la planta (pan molde): no se pide a planta.
+    var isMadeForStock by rememberSaveable { mutableStateOf(existingProduct?.isMadeForStock ?: false) }
+    var plantStockMinimum by rememberSaveable {
+        mutableStateOf(existingProduct?.plantStockMinimum?.takeIf { it > 0.0 }?.fmtTrim(2) ?: "")
+    }
+    // Se hace transformando otro producto (pan tostado ← pan molde). Vacío = no.
+    var transformFromId by rememberSaveable { mutableStateOf(existingProduct?.transformFromProductId ?: "") }
+    var transformFromName by rememberSaveable { mutableStateOf(existingProduct?.transformFromProductName ?: "") }
+    var transformYield by rememberSaveable {
+        mutableStateOf(existingProduct?.transformYield?.takeIf { it > 0.0 }?.fmtTrim(2) ?: "")
+    }
+    var transformExtras by remember(existingProduct?.id) {
+        mutableStateOf(existingProduct?.transformExtras ?: emptyList())
+    }
     // Al crear (productId==null) se pide el tipo antes de mostrar el form.
     var typeChosen by rememberSaveable { mutableStateOf(productId != null) }
     var selectedImageBytes by remember { mutableStateOf<ByteArray?>(null) }
@@ -286,6 +303,8 @@ fun ProductFormScreen(
         formError?.let { snackbarHostState.showSnackbar(it); formError = null }
     }
 
+    val transforms = isInHouseProduced && portionOfProductId.isEmpty() && transformFromId.isNotEmpty()
+
     fun buildProduct(): Product {
         val rawNumeric = rawWeightInput.toDoubleOrNull()
         val rawGrams = rawNumeric?.let { if (rawWeightUnit == "oz") it.ozToGrams() else it }
@@ -331,7 +350,7 @@ fun ProductFormScreen(
             ) else BakingTechnicalSheet(),
             decorations = if (isInHouseProduced)
                 decorations.filter {
-                    (it.preparationId.isNotEmpty() || it.ingredientId.isNotEmpty()) && it.gramsPerUnit > 0.0
+                    (it.preparationId.isNotEmpty() || it.ingredientId.isNotEmpty()) && it.hasAmount
                 }
             else emptyList(),
             doughFillings = if (isInHouseProduced)
@@ -358,7 +377,18 @@ fun ProductFormScreen(
             portionOfProductName = if (isInHouseProduced && portionOfProductId.isNotEmpty()) portionOfProductName else "",
             portionsPerWhole = if (isInHouseProduced && portionOfProductId.isNotEmpty())
                 portionsPerWhole.toIntOrNull()?.takeIf { it > 0 } ?: 0
-            else 0
+            else 0,
+            // La porción se corta en la tienda: nunca se hace por adelantado en planta.
+            // Lo que se hace de otro producto también se guarda hecho y se pide por traslado.
+            isMadeForStock = isInHouseProduced && portionOfProductId.isEmpty() && (isMadeForStock || transforms),
+            transformFromProductId = if (transforms) transformFromId else "",
+            transformFromProductName = if (transforms) transformFromName else "",
+            transformYield = if (transforms) transformYield.replace(',', '.').toDoubleOrNull() ?: 0.0 else 0.0,
+            transformExtras = if (transforms) transformExtras.filter { it.ingredientId.isNotEmpty() && it.quantityPerUnit > 0.0 }
+            else emptyList(),
+            plantStockMinimum = if (isInHouseProduced && portionOfProductId.isEmpty() && (isMadeForStock || transforms))
+                plantStockMinimum.replace(',', '.').toDoubleOrNull()?.takeIf { it > 0.0 } ?: 0.0
+            else 0.0
         ).withDerivedPurchaseReference()
     }
 
@@ -380,18 +410,28 @@ fun ProductFormScreen(
             selectedTab = 0
             return
         }
+        if (transforms) {
+            val yieldValue = transformYield.replace(',', '.').toDoubleOrNull() ?: 0.0
+            val missingQty = transformExtras.filter { it.quantityPerUnit <= 0.0 }
+            if (yieldValue <= 0.0 || missingQty.isNotEmpty()) {
+                formError = if (yieldValue <= 0.0) "Indica cuántos salen de un $transformFromName"
+                else "Falta la cantidad por unidad de: ${missingQty.joinToString(", ") { it.ingredientName }}"
+                selectedTab = 0
+                return
+            }
+        }
         // Un adorno/relleno elegido sin gramos por unidad se descartaba en silencio
         // al guardar (parecía que "no guardaba" el adorno). Ahora bloquea el guardado
         // y avisa cuál falta, en vez de perderlo sin decir nada.
         if (isInHouseProduced) {
             val incomplete = decorations.filter {
-                (it.preparationId.isNotEmpty() || it.ingredientId.isNotEmpty()) && it.gramsPerUnit <= 0.0
+                (it.preparationId.isNotEmpty() || it.ingredientId.isNotEmpty()) && !it.hasAmount
             }
             if (incomplete.isNotEmpty()) {
                 val names = incomplete.joinToString(", ") {
                     it.preparationName.ifEmpty { it.ingredientName }.ifEmpty { "(sin nombre)" }
                 }
-                formError = "Falta el peso por unidad en: $names"
+                formError = "Falta cuánto lleva de: $names"
                 selectedTab = 2
                 return
             }
@@ -539,6 +579,38 @@ fun ProductFormScreen(
                                         portionsPerWhole = portionsPerWhole,
                                         onPortionsPerWholeChange = { portionsPerWhole = it.filter(Char::isDigit).take(3) }
                                     )
+                                    // Un producto ya marcado sigue mostrando su sección aunque apaguen la
+                                    // opción: si no, no habría cómo desmarcarlo.
+                                    val showMadeForStock = authState.usesMadeForStock ||
+                                        existingProduct?.isMadeForStock == true
+                                    if (showMadeForStock && portionOfProductId.isEmpty()) {
+                                        TransformFromSection(
+                                            sources = state.productList.filter {
+                                                it.active && !it.isPortion && !it.isTransformed &&
+                                                    it.id != existingProduct?.id
+                                            }.sortedBy { it.name.lowercase() },
+                                            ingredients = ingredientState.ingredientList.filter { it.active },
+                                            sourceId = transformFromId,
+                                            sourceName = transformFromName,
+                                            onSourceChange = { id, nm -> transformFromId = id; transformFromName = nm },
+                                            yieldText = transformYield,
+                                            onYieldChange = { v ->
+                                                transformYield = v.filter { c -> c.isDigit() || c == '.' || c == ',' }.take(6)
+                                            },
+                                            extras = transformExtras,
+                                            onExtrasChange = { transformExtras = it }
+                                        )
+                                    }
+                                    if (showMadeForStock && portionOfProductId.isEmpty() && transformFromId.isEmpty()) {
+                                        MadeForStockSection(
+                                            isMadeForStock = isMadeForStock,
+                                            onMadeForStockChange = { isMadeForStock = it },
+                                            minimum = plantStockMinimum,
+                                            onMinimumChange = { v ->
+                                                plantStockMinimum = v.filter { c -> c.isDigit() || c == '.' || c == ',' }.take(6)
+                                            }
+                                        )
+                                    }
                                 }
                             }
                             "Precios" -> {
@@ -570,7 +642,7 @@ fun ProductFormScreen(
                                     decorations = decorations,
                                     onDecorationsChange = { decorations = it },
                                     availableDecorations = preparationState.preparationList.filter {
-                                        it.active && it.usage == PreparationUsage.DECORATION
+                                        it.active && (it.usage == PreparationUsage.DECORATION || it.usage == PreparationUsage.BASE)
                                     },
                                     availableIngredients = ingredientState.ingredientList.filter { it.active }
                                 )
@@ -1572,6 +1644,217 @@ private fun PortionOfSection(
     }
 }
 
+/**
+ * "Se hace de otro producto": pan tostado ← pan molde, pirujo con ajo ← pirujo de mantequilla.
+ * Se guarda hecho en la planta y se pide por traslado (queda como "para existencia"); al hacerlo
+ * se anota lo que salió (ver `model/Transformation.kt`).
+ */
+@Composable
+private fun TransformFromSection(
+    sources: List<Product>,
+    ingredients: List<Ingredient>,
+    sourceId: String,
+    sourceName: String,
+    onSourceChange: (id: String, name: String) -> Unit,
+    yieldText: String,
+    onYieldChange: (String) -> Unit,
+    extras: List<TransformExtra>,
+    onExtrasChange: (List<TransformExtra>) -> Unit
+) {
+    var showSourcePicker by remember { mutableStateOf(false) }
+    var showIngredientPicker by remember { mutableStateOf(false) }
+    val linked = sourceId.isNotEmpty()
+
+    Spacer(Modifier.height(8.dp))
+    HorizontalDivider()
+    Spacer(Modifier.height(12.dp))
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Se hace de otro producto",
+                    color = BrandColors.Primary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    text = if (linked)
+                        "Se hace con ${sourceName.ifEmpty { "otro producto" }} del inventario. Se guarda hecho " +
+                            "en la planta que lo tiene asignado y las sucursales lo piden por traslado."
+                    else "Actívalo para el pan tostado (sale del pan molde) o el pirujo con ajo: se " +
+                        "transforma lo que ya hay y el costo pasa del original al nuevo.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = linked,
+                onCheckedChange = { on ->
+                    if (on) showSourcePicker = true
+                    else { onSourceChange("", ""); onExtrasChange(emptyList()) }
+                }
+            )
+        }
+        if (linked) {
+            OutlinedButton(onClick = { showSourcePicker = true }, modifier = Modifier.fillMaxWidth()) {
+                Text("Se hace de: $sourceName")
+            }
+            OutlinedTextField(
+                value = yieldText,
+                onValueChange = onYieldChange,
+                label = { Text("Salen de 1 $sourceName *") },
+                placeholder = { Text("Ej: 1.5") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                supportingText = { Text("Lo normal. Al hacerlo se anota lo que de verdad salió.") }
+            )
+            Text(
+                "Insumos que se agregan a cada uno (bolsa, mantequilla, ajo)",
+                style = MaterialTheme.typography.labelMedium,
+                color = BrandColors.Primary
+            )
+            extras.forEachIndexed { idx, extra ->
+                val units = ingredients.firstOrNull { it.id == extra.ingredientId }?.allowedUnits
+                    ?.ifEmpty { null } ?: listOf(extra.unit)
+                TransformExtraRow(
+                    extra = extra,
+                    units = units,
+                    onChange = { changed -> onExtrasChange(extras.mapIndexed { i, e -> if (i == idx) changed else e }) },
+                    onRemove = { onExtrasChange(extras.filterIndexed { i, _ -> i != idx }) }
+                )
+            }
+            TextButton(onClick = { showIngredientPicker = true }) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Agregar insumo")
+            }
+        }
+    }
+
+    if (showSourcePicker) {
+        ProductPickerDialog(
+            title = "¿De qué producto se hace?",
+            products = sources,
+            stockOf = null,
+            showSearch = true,
+            onDismiss = { showSourcePicker = false },
+            onSelect = { p ->
+                onSourceChange(p.id, p.name)
+                if (yieldText.isBlank()) onYieldChange("1")
+                showSourcePicker = false
+            }
+        )
+    }
+    if (showIngredientPicker) {
+        IngredientPickerDialog(
+            ingredients = ingredients,
+            alreadyAddedIds = extras.map { it.ingredientId }.toSet(),
+            onPick = { ing ->
+                onExtrasChange(
+                    extras + TransformExtra(
+                        ingredientId = ing.id,
+                        ingredientName = ing.name,
+                        quantityPerUnit = 0.0,
+                        unit = ing.effectiveBaseUnit.ifEmpty { ing.allowedUnits.firstOrNull() ?: "gr" }
+                    )
+                )
+                showIngredientPicker = false
+            },
+            onDismiss = { showIngredientPicker = false }
+        )
+    }
+}
+
+@Composable
+private fun TransformExtraRow(
+    extra: TransformExtra,
+    units: List<String>,
+    onChange: (TransformExtra) -> Unit,
+    onRemove: () -> Unit
+) {
+    var qtyText by remember(extra.ingredientId) {
+        mutableStateOf(extra.quantityPerUnit.takeIf { it > 0.0 }?.fmtTrim(3) ?: "")
+    }
+    var unitMenu by remember { mutableStateOf(false) }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(extra.ingredientName, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        OutlinedTextField(
+            value = qtyText,
+            onValueChange = { v ->
+                qtyText = v.filter { c -> c.isDigit() || c == '.' || c == ',' }.take(8)
+                onChange(extra.copy(quantityPerUnit = qtyText.replace(',', '.').toDoubleOrNull() ?: 0.0))
+            },
+            label = { Text("Por unidad") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.width(110.dp)
+        )
+        Box {
+            OutlinedButton(onClick = { unitMenu = true }) { Text(extra.unit.ifEmpty { "u." }) }
+            DropdownMenu(expanded = unitMenu, onDismissRequest = { unitMenu = false }) {
+                units.forEach { u ->
+                    DropdownMenuItem(text = { Text(u) }, onClick = { onChange(extra.copy(unit = u)); unitMenu = false })
+                }
+            }
+        }
+        IconButton(onClick = onRemove) {
+            Icon(Icons.Default.Delete, contentDescription = "Quitar", tint = MaterialTheme.colorScheme.error)
+        }
+    }
+}
+
+/**
+ * "Se hace para existencia": pan molde, rosca. Se hornea por adelantado en un lote para
+ * existencia y la sucursal lo pide por traslado, así que no aparece en su pedido. La planta
+ * que lo guarda es la que lo tiene asignado en Sucursales (ver `model/MadeForStock.kt`).
+ */
+@Composable
+private fun MadeForStockSection(
+    isMadeForStock: Boolean,
+    onMadeForStockChange: (Boolean) -> Unit,
+    minimum: String,
+    onMinimumChange: (String) -> Unit
+) {
+    Spacer(Modifier.height(8.dp))
+    HorizontalDivider()
+    Spacer(Modifier.height(12.dp))
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Se hace para existencia",
+                    color = BrandColors.Primary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    text = if (isMadeForStock)
+                        "Se hornea por adelantado y se guarda en la planta que lo tiene asignado. " +
+                            "No aparece en el pedido de las sucursales."
+                    else "Actívalo para el pan molde y similares: se hace antes de que lo pidan y " +
+                        "las sucursales lo piden de lo que ya hay.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(checked = isMadeForStock, onCheckedChange = onMadeForStockChange)
+        }
+        if (isMadeForStock) {
+            OutlinedTextField(
+                value = minimum,
+                onValueChange = onMinimumChange,
+                label = { Text("Mínimo en planta") },
+                placeholder = { Text("Ej: 20") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                supportingText = { Text("Si quedan menos, el inicio avisa que toca hacer. Vacío = sin aviso.") }
+            )
+        }
+    }
+}
+
 @Composable
 private fun SectionDivider() {
     HorizontalDivider(
@@ -1629,7 +1912,9 @@ private fun DecorationsTabContent(
                     decorations + ProductDecoration(
                         preparationId = prep.id,
                         preparationName = prep.name,
-                        gramsPerUnit = 0.0
+                        gramsPerUnit = 0.0,
+                        // Bizcocho: por defecto el pastel lleva uno entero.
+                        unitsPerProduct = if (prep.isCounted) 1.0 else 0.0
                     )
                 )
                 showPicker = false
@@ -1651,9 +1936,9 @@ private fun DecorationsTabContent(
     SectionHeader("Adornos y rellenos del producto")
     Text(
         "Lo que se aplica al producto terminado, además de la masa. Puede ser algo que " +
-            "preparamos nosotros (concha, relleno de esponja) o un insumo que ya compramos " +
-            "hecho (relleno de higo en manga, mermelada). Indica los gramos por unidad — " +
-            "al producir, el sistema descuenta automáticamente.",
+            "preparamos nosotros (concha, relleno de esponja, el bizcocho del pastel) o un insumo " +
+            "que ya compramos hecho (relleno de higo en manga, mermelada). Indica los gramos por " +
+            "unidad, o del bizcocho cuántos salen de uno — al producir, el sistema descuenta automáticamente.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
@@ -1680,6 +1965,19 @@ private fun DecorationsTabContent(
         decorations.forEachIndexed { idx, deco ->
             DecorationRow(
                 decoration = deco,
+                // Bizcocho por lo que ES la preparación, no por el número: al borrar el "1"
+                // para escribir 24, unitsPerProduct queda en 0 y el campo saltaba a gramos.
+                isCountedPreparation = deco.isCounted ||
+                    availableDecorations.any { it.id == deco.preparationId && it.isCounted },
+                onPortionsChange = { portions ->
+                    // "De 1 plancha salen 24" → 1/24 de plancha por pastelito.
+                    val n = portions.filter { it.isDigit() }.toIntOrNull()?.takeIf { it > 0 }
+                    onDecorationsChange(
+                        decorations.mapIndexed { i, d ->
+                            if (i == idx) d.copy(unitsPerProduct = n?.let { 1.0 / it } ?: 0.0) else d
+                        }
+                    )
+                },
                 onGramsChange = { grams ->
                     onDecorationsChange(
                         decorations.mapIndexed { i, d ->
@@ -1716,9 +2014,13 @@ private fun DecorationsTabContent(
 @Composable
 private fun DecorationRow(
     decoration: ProductDecoration,
+    isCountedPreparation: Boolean,
+    onPortionsChange: (String) -> Unit,
     onGramsChange: (String) -> Unit,
     onRemove: () -> Unit
 ) {
+    val portionsText = if (decoration.unitsPerProduct > 0.0)
+        kotlin.math.round(1.0 / decoration.unitsPerProduct).toLong().toString() else ""
     val gramsText = if (decoration.gramsPerUnit > 0.0)
         if (decoration.gramsPerUnit == decoration.gramsPerUnit.toLong().toDouble())
             decoration.gramsPerUnit.toLong().toString()
@@ -1742,12 +2044,27 @@ private fun DecorationRow(
                 Text(
                     text = if (decoration.isIngredientSourced)
                         "Insumo — se compra ya hecho, se descuenta de Compras"
+                    else if (isCountedPreparation)
+                        if (portionsText == "1") "Bizcocho — lleva uno entero"
+                        else "Bizcocho — de uno salen ${portionsText.ifEmpty { "?" }} porciones"
                     else "Preparación — hay que producir su lote antes",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            OutlinedTextField(
+            if (isCountedPreparation) {
+                OutlinedTextField(
+                    value = portionsText,
+                    onValueChange = onPortionsChange,
+                    // Cuántos de este producto salen de UN bizcocho: pastel de frutas 1,
+                    // porción de tres leches 24 de una plancha.
+                    label = { Text("Porciones") },
+                    supportingText = { Text("por bizcocho") },
+                    modifier = Modifier.width(120.dp),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true
+                )
+            } else OutlinedTextField(
                 value = gramsText,
                 onValueChange = onGramsChange,
                 label = { Text("g / unidad") },

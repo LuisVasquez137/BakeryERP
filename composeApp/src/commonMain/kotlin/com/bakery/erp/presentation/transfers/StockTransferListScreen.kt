@@ -22,6 +22,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -53,7 +55,7 @@ import com.bakery.erp.model.StockTransferStatus
 import com.bakery.erp.model.User
 import com.bakery.erp.model.canAccessBranch
 import com.bakery.erp.model.hasPermission
-import com.bakery.erp.model.quantityLabel
+import com.bakery.erp.model.linesSummary
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.ui.AdaptiveContainer
 import com.bakery.erp.ui.theme.BrandChip
@@ -77,6 +79,7 @@ fun StockTransferListScreen(
     initialBranchId: String?,
     onNavigateBack: () -> Unit,
     onNew: () -> Unit,
+    onRequest: () -> Unit,
     onOpen: (transferId: String) -> Unit,
     authViewModel: AuthViewModel,
     viewModel: StockTransferViewModel
@@ -87,6 +90,8 @@ fun StockTransferListScreen(
     val companyId = user?.orgId.orEmpty()
     val snackbar = remember { SnackbarHostState() }
     val canSend = user?.hasPermission(Permission.SEND_STOCK_TRANSFER) == true
+    val canRequest = authState.usesMadeForStock && user?.canRequestTransfers() == true
+    var showNewMenu by remember { mutableStateOf(false) }
 
     var branchId by rememberSaveable { mutableStateOf(initialBranchId.orEmpty()) }
     var days by rememberSaveable { mutableStateOf(7) }
@@ -107,8 +112,11 @@ fun StockTransferListScreen(
     val visibleBranches = remember(state.branches, user?.id) {
         state.branches.filter { user?.canAccessBranch(it.id) == true }
     }
+    // Lo que me toca mandar primero; después lo que pedí y espero.
+    val requested = state.list.filter { it.isRequested }
+        .sortedWith(compareByDescending<StockTransfer> { user?.canSendRequest(it) == true }.thenBy { it.forDate }.thenBy { it.trip })
     val inTransit = state.list.filter { it.isInTransit }
-    val done = state.list.filter { !it.isInTransit }
+    val done = state.list.filter { !it.isOpen }
 
     Scaffold(
         topBar = {
@@ -127,14 +135,31 @@ fun StockTransferListScreen(
             )
         },
         floatingActionButton = {
-            if (canSend) ExtendedFloatingActionButton(
-                onClick = onNew,
-                containerColor = BrandColors.Accent,
-                contentColor = BrandColors.OnAccent,
-                modifier = Modifier.navigationBarsPadding(),
-                icon = { Icon(Icons.Default.Add, null) },
-                text = { Text("Nuevo traslado") }
-            )
+            if (canSend || canRequest) Box(Modifier.navigationBarsPadding()) {
+                ExtendedFloatingActionButton(
+                    onClick = {
+                        when {
+                            canSend && canRequest -> showNewMenu = true
+                            canSend -> onNew()
+                            else -> onRequest()
+                        }
+                    },
+                    containerColor = BrandColors.Accent,
+                    contentColor = BrandColors.OnAccent,
+                    icon = { Icon(Icons.Default.Add, null) },
+                    text = { Text(if (canSend) "Nuevo traslado" else "Pedir") }
+                )
+                DropdownMenu(expanded = showNewMenu, onDismissRequest = { showNewMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Enviar a otra sucursal") },
+                        onClick = { showNewMenu = false; onNew() }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Pedir a otra sucursal") },
+                        onClick = { showNewMenu = false; onRequest() }
+                    )
+                }
+            }
         },
         snackbarHost = { SnackbarHost(snackbar) },
         containerColor = BrandColors.Ivory
@@ -164,11 +189,17 @@ fun StockTransferListScreen(
                 } else if (state.list.isEmpty()) {
                     item {
                         Text(
-                            "No hay traslados en este periodo." + if (canSend) " Para mandar algo a otra sucursal, toca \"Nuevo traslado\"." else "",
+                            "No hay traslados en este periodo." +
+                                if (canSend) " Para mandar algo a otra sucursal, toca \"Nuevo traslado\"."
+                                else if (canRequest) " Para pedir pan molde o rosca, toca \"Pedir\"." else "",
                             color = BrandColors.MutedSlate,
                             modifier = Modifier.padding(24.dp)
                         )
                     }
+                }
+                if (requested.isNotEmpty()) {
+                    item { Header("Pedidos") }
+                    items(requested, key = { it.id }) { t -> TransferCard(t, user) { onOpen(t.id) } }
                 }
                 if (inTransit.isNotEmpty()) {
                     item { Header("En camino") }
@@ -195,6 +226,7 @@ private fun Header(text: String) {
 @Composable
 private fun TransferCard(t: StockTransfer, user: User?, onClick: () -> Unit) {
     val toReceive = user?.canReceive(t) == true
+    val toSend = user?.canSendRequest(t) == true
     Card(
         colors = CardDefaults.cardColors(containerColor = Color.White),
         shape = RoundedCornerShape(12.dp),
@@ -207,15 +239,20 @@ private fun TransferCard(t: StockTransfer, user: User?, onClick: () -> Unit) {
                 Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = BrandColors.Primary, modifier = Modifier.padding(horizontal = 4.dp))
                 Text(t.destinationBranchName, fontWeight = FontWeight.SemiBold, color = BrandColors.TextSlate, modifier = Modifier.weight(1f))
                 if (toReceive) BrandChip("Por recibir", ChipTone.ATTENTION, com.bakery.erp.ui.theme.ChipEmphasis.SOLID)
+                else if (toSend) BrandChip("Por mandar", ChipTone.ATTENTION, com.bakery.erp.ui.theme.ChipEmphasis.SOLID)
                 else BrandChip(StockTransferStatus.label(t.status), statusTone(t.status))
             }
+            if (t.ridesDelivery && t.isOpen) Text(
+                t.deliveryLabel(), style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold, color = BrandColors.Primary
+            )
             Text(
-                t.lines.joinToString { "${it.quantityLabel()} ${it.itemName}" },
+                t.linesSummary(),
                 style = MaterialTheme.typography.bodySmall, color = BrandColors.TextSlate,
                 maxLines = 2, overflow = TextOverflow.Ellipsis
             )
             Text(
-                "${t.folio} · ${t.sentAt.fmtDateTime()} · ${t.sentByName}",
+                "${t.folio} · ${t.activityAt.fmtDateTime()} · ${if (t.isRequested) t.requestedByName else t.sentByName}",
                 style = MaterialTheme.typography.labelSmall, color = BrandColors.MutedSlate
             )
             if (t.shortages.isNotEmpty()) BrandChip("Llegó incompleto", ChipTone.DANGER)

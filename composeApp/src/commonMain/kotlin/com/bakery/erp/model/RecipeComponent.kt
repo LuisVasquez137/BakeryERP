@@ -15,6 +15,13 @@ data class RecipeComponent(
      * si fueran pesos y los degradaba en cada guardado. 0 = recetas por %.
      */
     val inputQuantity: Double = 0.0,
+    /**
+     * Solo en recetas por tanda: el componente es un producto del inventario (el pan molde de
+     * la torta de leche), no un insumo. [inputQuantity] = unidades por tanda entera; al
+     * completar el lote salen del terminado de la planta. Vacío = insumo.
+     */
+    val productId: String = "",
+    val productName: String = "",
     val isBase: Boolean = false,
     val order: Int = 0
 )

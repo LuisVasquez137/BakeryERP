@@ -100,7 +100,17 @@ data class CashSession(
      * [totalCardSales]/[totalTransferSales] porque el voucher sigue en la gaveta: se devuelve por
      * el banco.
      */
-    val totalVoidedNonCash: Double = 0.0
+    val totalVoidedNonCash: Double = 0.0,
+
+    // ── Cuadre de lo que no es efectivo al cerrar (ver NonCashCount) ─────────
+    /** Vouchers que debía haber al cerrar: los recibidos del turno anterior + los del turno. */
+    val expectedCardVouchers: Double = 0.0,
+    /** Suma de los vouchers que se contaron al cerrar. Null = no se contó (cierres viejos o automáticos). */
+    val countedCardVouchers: Double? = null,
+    /** Transferencias revisadas en el banco al cerrar, contra [expectedTransferNow]. Null = no se ingresó. */
+    val countedTransfers: Double? = null,
+    /** Lo que dice la app de PedidosYa al cerrar, contra [totalPedidosYaSales]. Null = no se ingresó. */
+    val countedPedidosYa: Double? = null
 ) {
     /** Diferencia al abrir: contado/recibido menos lo que se esperaba. Solo si había qué esperar. */
     val openingDifference: Double get() = if (openingExpected > 0.004) openingBalance - openingExpected else 0.0

@@ -148,7 +148,8 @@ fun buildEscPosReceipt(data: ReceiptData, paperWidthMm: Int): ByteArray {
 
     // Pie de página
     center()
-    line(data.footerMessage)
+    // Partido por palabras: el aviso de factura en trámite no cabe en una línea.
+    wrapped(data.footerMessage)
     leftAlign()
 
     // Feed + corte

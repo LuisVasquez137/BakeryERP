@@ -23,6 +23,10 @@ actual fun createAppViewModels(): AppViewModels {
         jobPosition = koin.get(),
         preparation = koin.get(),
         preparationBatch = koin.get(),
+        bakeSheet = koin.get(),
+        lotBake = com.bakery.erp.presentation.preparationbatches.BakeSheetViewModel(
+            koin.get(), koin.get(), koin.get(), koin.get(), koin.get(), koin.get()
+        ),
         fixedAsset = koin.get(),
         priceList = koin.get(),
         dispatch = koin.get(),

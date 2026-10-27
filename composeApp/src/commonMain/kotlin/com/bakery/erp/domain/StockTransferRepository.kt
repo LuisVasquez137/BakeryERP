@@ -21,6 +21,13 @@ interface StockTransferRepository {
     suspend fun send(companyId: String, transfer: StockTransfer): StockTransfer
 
     /**
+     * Guarda un pedido de la sucursal (estado PEDIDO, sin mover stock). Lo envía después quien
+     * lo tiene, con [send] sobre el mismo traslado: [send] vuelve a leerlo y choca si ya no está
+     * pedido, así dos toques no lo mandan dos veces.
+     */
+    suspend fun request(companyId: String, transfer: StockTransfer): StockTransfer
+
+    /**
      * Recibe con [received] (una cantidad por línea, en el orden de `lines`). Vuelve a leer y
      * lanza con el mensaje si ya no está en camino.
      */
@@ -34,7 +41,10 @@ interface StockTransferRepository {
         note: String
     ): StockTransfer
 
-    /** Cancela un traslado en camino: el stock (y sus lotes) vuelve al origen. */
+    /**
+     * Cancela un traslado en camino: el stock (y sus lotes) vuelve al origen. Un pedido todavía
+     * sin enviar se cancela (o lo rechaza quien lo tiene) sin mover nada.
+     */
     suspend fun cancel(
         companyId: String,
         transferId: String,
@@ -47,7 +57,7 @@ interface StockTransferRepository {
 
     /**
      * Los que salieron de o llegaron a [branchIds] (vacío = todas), el más reciente primero.
-     * Los que siguen en camino vienen siempre; el resto, si se enviaron en el rango.
+     * Los pedidos y los que siguen en camino vienen siempre; el resto, si se enviaron en el rango.
      */
     suspend fun getForBranches(
         companyId: String,

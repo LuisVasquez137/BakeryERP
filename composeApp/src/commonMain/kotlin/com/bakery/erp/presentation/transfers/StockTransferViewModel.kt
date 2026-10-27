@@ -22,6 +22,11 @@ import com.bakery.erp.model.canAccessBranch
 import com.bakery.erp.model.isTransferable
 import com.bakery.erp.model.quantityLabel
 import com.bakery.erp.model.stockTransferSendError
+import com.bakery.erp.model.stockTransferRequestError
+import com.bakery.erp.model.sendingRequest
+import com.bakery.erp.model.shortOfRequest
+import com.bakery.erp.model.linesSummary
+import com.bakery.erp.model.tripTitle
 import com.bakery.erp.util.fmtTrim
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.catch
@@ -88,7 +93,9 @@ class StockTransferViewModel(
                     val all = branchRepository.getBranches(companyId).filter { it.active }.sortedBy { it.name }
                     _uiState.update { it.copy(branches = all) }
                 }
-                if (_uiState.value.products.isEmpty() || _uiState.value.ingredients.isEmpty()) {
+                // Al abrir el form (todavía sin origen) se relee el catálogo: el VM vive toda la
+                // sesión y un producto recién marcado "para existencia" no salía en el pedido.
+                if (originBranchId.isEmpty() || _uiState.value.products.isEmpty() || _uiState.value.ingredients.isEmpty()) {
                     val products = productRepository.getProducts(companyId).filter { it.active }.sortedBy { it.name.lowercase() }
                     val ingredients = ingredientRepository.getIngredients(companyId).filter { it.isTransferable() }
                         .sortedBy { it.name.lowercase() }
@@ -133,6 +140,69 @@ class StockTransferViewModel(
             }.onFailure { e -> _uiState.update { it.copy(isBusy = false, error = e.message ?: "No se pudo enviar") } }
         }
     }
+
+    /**
+     * La sucursal pide (pan molde, rosca, pan tostado) para un día y un viaje. No mueve stock:
+     * se avisa a quien lo tiene para que lo prepare antes de que pase el camión.
+     */
+    fun request(companyId: String, draft: StockTransfer, user: User) {
+        if (_uiState.value.isBusy) return
+        stockTransferRequestError(draft)?.let { msg -> _uiState.update { it.copy(error = msg) }; return }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isBusy = true, error = null) }
+            runCatching {
+                val saved = repository.request(companyId, draft.copy(
+                    requestedByUserId = user.id,
+                    requestedByName = user.displayName
+                ))
+                notify(companyId, user, saved,
+                    title = "${saved.destinationBranchName} pide ${tripLabel(saved)}",
+                    body = saved.linesSummary() + saved.note.takeIf { it.isNotBlank() }?.let { ". $it" }.orEmpty(),
+                    branchId = saved.originBranchId,
+                    permission = Permission.SEND_STOCK_TRANSFER)
+                saved
+            }.onSuccess { saved ->
+                _uiState.update {
+                    it.copy(
+                        isBusy = false, sentId = saved.id, selected = saved,
+                        list = listOf(saved) + it.list.filter { t -> t.id != saved.id },
+                        notice = "Pedido ${saved.folio} enviado a ${saved.originBranchName}"
+                    )
+                }
+            }.onFailure { e -> _uiState.update { it.copy(isBusy = false, error = e.message ?: "No se pudo pedir") } }
+        }
+    }
+
+    /**
+     * Quien tiene el pan manda el pedido con [sent] (lo que de verdad va, por línea). Desde ahí
+     * es un traslado en camino como cualquiera: sale del stock del origen y el destino lo cuenta.
+     */
+    fun sendRequest(companyId: String, request: StockTransfer, sent: List<Double>, user: User) {
+        if (_uiState.value.isBusy) return
+        val draft = request.sendingRequest(sent)
+        stockTransferSendError(draft)?.let { msg -> _uiState.update { it.copy(error = msg) }; return }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isBusy = true, error = null) }
+            runCatching {
+                val saved = repository.send(companyId, draft.copy(
+                    sentByUserId = user.id,
+                    sentByName = user.displayName,
+                    sentByEmployeeId = user.operatorEmployeeId
+                ))
+                val short = saved.shortOfRequest
+                notify(companyId, user, saved,
+                    title = "Tu pedido ${saved.folio} ya salió de ${saved.originBranchName}",
+                    body = summary(saved) + if (short.isEmpty()) "" else
+                        ". Va menos de lo pedido: " + short.joinToString { "${it.itemName} ${it.quantity.fmtTrim()} de ${it.requestedQuantity.fmtTrim()}" },
+                    branchId = saved.destinationBranchId,
+                    permission = Permission.RECEIVE_DISPATCH)
+                saved
+            }.onSuccess { saved -> replace(saved, "Pedido ${saved.folio} enviado a ${saved.destinationBranchName}") }
+                .onFailure { e -> _uiState.update { it.copy(isBusy = false, error = e.message ?: "No se pudo enviar") } }
+        }
+    }
+
+    private fun tripLabel(t: StockTransfer): String = "para ${forDateLabel(t.forDate)} en el ${tripTitle(t.trip)}"
 
     private var listJob: Job? = null
 
@@ -206,16 +276,35 @@ class StockTransferViewModel(
         viewModelScope.launch {
             _uiState.update { it.copy(isBusy = true, error = null) }
             runCatching {
+                val wasRequest = transfer.isRequested
                 val updated = repository.cancel(companyId, transfer.id, user.id, user.displayName, reason)
-                // Al destino, para que no se quede esperando algo que no va a llegar.
-                notify(companyId, user, updated,
-                    title = "Traslado ${updated.folio} cancelado",
-                    body = "${updated.originBranchName} canceló el envío: " + summary(updated) +
-                        reason.trim().takeIf { it.isNotEmpty() }?.let { ". $it" }.orEmpty(),
-                    branchId = updated.destinationBranchId,
-                    permission = Permission.RECEIVE_DISPATCH)
-                updated
-            }.onSuccess { updated -> replace(updated, "Traslado ${updated.folio} cancelado: el inventario volvió a ${updated.originBranchName}") }
+                val why = reason.trim().takeIf { it.isNotEmpty() }?.let { ". $it" }.orEmpty()
+                // A la otra punta, para que nadie se quede esperando ni preparando algo que no va.
+                val byRequester = wasRequest && user.canAccessBranch(updated.destinationBranchId) &&
+                    !user.canAccessBranch(updated.originBranchId)
+                when {
+                    byRequester -> notify(companyId, user, updated,
+                        title = "${updated.destinationBranchName} canceló su pedido ${updated.folio}",
+                        body = updated.linesSummary() + why,
+                        branchId = updated.originBranchId,
+                        permission = Permission.SEND_STOCK_TRANSFER)
+                    wasRequest -> notify(companyId, user, updated,
+                        title = "${updated.originBranchName} no puede mandar tu pedido ${updated.folio}",
+                        body = updated.linesSummary() + why,
+                        branchId = updated.destinationBranchId,
+                        permission = Permission.RECEIVE_DISPATCH)
+                    else -> notify(companyId, user, updated,
+                        title = "Traslado ${updated.folio} cancelado",
+                        body = "${updated.originBranchName} canceló el envío: " + summary(updated) + why,
+                        branchId = updated.destinationBranchId,
+                        permission = Permission.RECEIVE_DISPATCH)
+                }
+                wasRequest to updated
+            }.onSuccess { (wasRequest, updated) ->
+                replace(updated,
+                    if (wasRequest) "Pedido ${updated.folio} cancelado"
+                    else "Traslado ${updated.folio} cancelado: el inventario volvió a ${updated.originBranchName}")
+            }
                 .onFailure { e -> _uiState.update { it.copy(isBusy = false, error = e.message ?: "No se pudo cancelar") } }
         }
     }

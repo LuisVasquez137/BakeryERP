@@ -26,9 +26,57 @@ data class ShiftHandover(
  */
 fun shiftHandover(session: CashSession, countedCash: Double, withdrawal: Double): ShiftHandover = ShiftHandover(
     cash = money((countedCash - withdrawal).coerceAtLeast(0.0)),
-    card = money(session.carriedInCard + session.totalCardSales),
-    transfer = money(session.carriedInTransfer + session.totalTransferSales)
+    card = session.expectedCardNow,
+    transfer = session.expectedTransferNow
 )
+
+/**
+ * Vouchers de tarjeta que debería haber en la gaveta ahora: los recibidos del turno anterior más
+ * los cobrados en éste. Las ventas anuladas siguen adentro: su voucher se queda y se devuelve por
+ * el banco ([CashSession.totalVoidedNonCash]).
+ */
+val CashSession.expectedCardNow: Double get() = money(carriedInCard + totalCardSales)
+
+/** Comprobantes de transferencia que debería haber: los recibidos del turno anterior más los de éste. */
+val CashSession.expectedTransferNow: Double get() = money(carriedInTransfer + totalTransferSales)
+
+/**
+ * Lo que se contó al cerrar de lo que no es efectivo. Null = no se ingresó (distinto de cero).
+ *
+ * Antes solo se contaba el efectivo y los vouchers pasaban de turno en turno sin que nadie los
+ * sumara: un cobro con tarjeta registrado como efectivo (o al revés) no aparecía en ningún lado.
+ * Las transferencias se revisan en el banco y PedidosYa en su app; PedidosYa no pasa de turno.
+ */
+data class NonCashCount(
+    val cardVouchers: Double? = null,
+    val transfers: Double? = null,
+    val pedidosYa: Double? = null
+)
+
+/** Lo que se ingresó menos lo registrado en ventas. Negativo = falta, positivo = sobra. Null si no se ingresó. */
+fun closeCountDifference(expected: Double, entered: Double?): Double? = entered?.let { money(it - expected) }
+
+/**
+ * Qué impide cerrar por un método que no es efectivo, o null. Es obligatorio si se cobró algo con
+ * él; si no, se escribe solo si hay (un cobro registrado con otro método sale como sobrante).
+ */
+fun closeCountProblem(what: String, expected: Double, counted: Double?): String? = when {
+    counted != null && counted < 0.0 -> "No puede ser negativo."
+    expected > 0.004 && counted == null ->
+        "Escribe $what (según las ventas son Q ${expected.toMoneyText()})."
+    else -> null
+}
+
+/**
+ * Cierre del día: qué impide dejar [left] de fondo para mañana, o null. Lo que no se deja se
+ * retira o se va al banco.
+ */
+fun leftForTomorrowProblem(countedCash: Double, left: Double?): String? = when {
+    left == null -> "Escribe cuánto efectivo se queda en la gaveta para mañana (0 si no se deja nada)."
+    left < 0.0 -> "No puede ser negativo."
+    left > countedCash + 0.004 -> "No se puede dejar más de lo que hay en la gaveta (Q ${countedCash.toMoneyText()})."
+    else -> null
+}
 
 /** Qué impide retirar [withdrawal] de lo contado, o null si está bien. */
 fun closingWithdrawalProblem(countedCash: Double, withdrawal: Double): String? = when {

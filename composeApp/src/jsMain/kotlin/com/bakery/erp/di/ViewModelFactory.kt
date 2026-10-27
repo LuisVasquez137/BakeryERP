@@ -179,14 +179,23 @@ actual fun createAppViewModels(): AppViewModels {
         ),
         operatorLock = com.bakery.erp.presentation.operator.OperatorLockViewModel(employeeRepo, employeeAccessRepo),
         jobPosition = JobPositionViewModel(jobPositionRepo),
-        preparation = PreparationViewModel(preparationRepo),
+        preparation = PreparationViewModel(preparationRepo, branchRepo),
         preparationBatch = PreparationBatchViewModel(
             preparationBatchRepo, preparationRepo, ingredientRepo, branchRepo
+        ),
+        bakeSheet = com.bakery.erp.presentation.preparationbatches.BakeSheetViewModel(
+            preparationRepo, preparationBatchRepo, ingredientRepo, branchRepo, productionRepo, productRepoJs
+        ),
+        lotBake = com.bakery.erp.presentation.preparationbatches.BakeSheetViewModel(
+            preparationRepo, preparationBatchRepo, ingredientRepo, branchRepo, productionRepo, productRepoJs
         ),
         fixedAsset = FixedAssetViewModel(fixedAssetRepo, assetHistoryRepo, JsAssetImageUploader(storage)),
         priceList = PriceListViewModel(priceListRepo),
         dispatch = DispatchViewModel(dispatchRepo, deliveryRepo, branchRepo, productionRepo, notificationRepo, finishedStockRepo),
-        delivery = DeliveryViewModel(deliveryRepo, dispatchRepo, authRepo, fixedAssetRepo, branchRepo, productionRepo),
+        delivery = DeliveryViewModel(
+            deliveryRepo, dispatchRepo, authRepo, fixedAssetRepo, branchRepo, productionRepo,
+            com.bakery.erp.data.FirebaseStockTransferRepository(firestore, finishedStockRepo, ingredientRepo)
+        ),
         finishedStock = FinishedStockViewModel(finishedStockRepo, branchRepo, productRepoJs, ingredientRepo),
         pos = POSViewModel(
             saleRepo, posCategoryRepo, cashSessionRepo, productRepoJs,
@@ -223,7 +232,7 @@ actual fun createAppViewModels(): AppViewModels {
             authRepo, saleRepo, productionRepo, branchRepo,
             ingredientRepo, fixedAssetRepo, dispatchRepo, cashSessionRepo, purchaseRepo, creditRepo,
             employeeRepo, com.bakery.erp.data.FirebaseHomeShortcutRepository(firestore),
-            customerOrderRepo, attendanceRepo
+            customerOrderRepo, attendanceRepo, productRepoJs, finishedStockRepo
         ),
         salesReport = SalesReportViewModel(saleRepo, branchRepo),
         productionReport = ProductionReportViewModel(productionRepo, dispatchRepo, branchRepo, plantIssueRepo),

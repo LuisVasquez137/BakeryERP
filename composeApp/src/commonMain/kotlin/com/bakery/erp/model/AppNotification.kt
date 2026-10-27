@@ -68,6 +68,9 @@ object NotificationType {
      */
     const val SALE_VOIDED = "SALE_VOIDED"
 
+    /** Se corrigió la forma de pago de un cobro (efectivo → tarjeta…). Al dueño, por lo mismo. */
+    const val SALE_PAYMENT_CHANGED = "SALE_PAYMENT_CHANGED"
+
     /**
      * Depósito al banco desde una caja: salió el efectivo, llegó la boleta (con diferencia si la
      * hay) o se dejó sin boleta. Al dueño: es la forma de saber que el dinero llegó al banco.
@@ -91,6 +94,7 @@ object NotificationType {
         DISPATCH_QUANTITY_CHANGED -> "Cambio en tu envío"
         CASH_CLOSE_OUT_OF_SCHEDULE -> "Caja fuera de horario"
         SALE_VOIDED -> "Venta anulada"
+        SALE_PAYMENT_CHANGED -> "Forma de pago corregida"
         BANK_DEPOSIT -> "Depósito al banco"
         COUNTER_ACCIDENT -> "Accidente en mostrador"
         STOCK_TRANSFER -> "Traslado"

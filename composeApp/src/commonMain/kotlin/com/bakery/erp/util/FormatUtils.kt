@@ -18,7 +18,10 @@ fun Double.fmt(decimals: Int = 2): String {
 }
 
 /** Como [fmt] pero sin ceros de más al final: "28.00" → "28", "10.60" → "10.6". */
-fun Double.fmtTrim(decimals: Int = 2): String = fmt(decimals).trimEnd('0').trimEnd('.')
+fun Double.fmtTrim(decimals: Int = 2): String = fmt(decimals).let { s ->
+    // Solo hay ceros "de más" después del punto: sin decimales, "50" se volvía "5".
+    if ('.' in s) s.trimEnd('0').trimEnd('.') else s
+}
 
 /**
  * Porcentaje del panadero con decimales según la magnitud. Los insumos de traza

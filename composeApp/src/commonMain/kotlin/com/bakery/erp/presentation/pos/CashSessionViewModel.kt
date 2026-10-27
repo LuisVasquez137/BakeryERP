@@ -23,6 +23,7 @@ import com.bakery.erp.model.BankDeposit
 import com.bakery.erp.model.bankDepositProblem
 import com.bakery.erp.model.bankSlipProblem
 import com.bakery.erp.model.expectedCashNow
+import com.bakery.erp.model.expectedTransferNow
 import com.bakery.erp.model.canAccessBranch
 import kotlin.time.Clock
 import kotlinx.coroutines.Job
@@ -631,7 +632,9 @@ class CashSessionViewModel(
         /** PIN de [receivedBy]; ver [receiverMustConfirm]. */
         receiverPin: String? = null,
         /** Lo retirado va al banco: queda un depósito pendiente de boleta. Null = retiro. */
-        withdrawalToBank: BankDepositDraft? = null
+        withdrawalToBank: BankDepositDraft? = null,
+        /** Vouchers, transferencias y PedidosYa contados. Ver [com.bakery.erp.model.NonCashCount]. */
+        nonCash: com.bakery.erp.model.NonCashCount = com.bakery.erp.model.NonCashCount()
     ) {
         // El cierre cuadra contra lo que tiene el servidor: sin internet, o con ventas cobradas
         // sin internet que todavía no subieron, el efectivo esperado saldría corto.
@@ -705,7 +708,8 @@ class CashSessionViewModel(
                     receivedByEmployeeName = receivedBy?.name.orEmpty(),
                     closedByUserId = currentUser?.id.orEmpty(),
                     closedByUserName = currentUser?.displayName.orEmpty(),
-                    closedByEmployeeId = currentUser?.operatorEmployeeId.orEmpty()
+                    closedByEmployeeId = currentUser?.operatorEmployeeId.orEmpty(),
+                    nonCash = nonCash
                 )
                 if (currentUser != null) {
                     val gate = _uiState.value.closeGate?.takeIf { it.sessionId == sessionId }
@@ -720,7 +724,16 @@ class CashSessionViewModel(
                             notes = listOfNotNull(
                                 notes?.takeIf { it.isNotBlank() },
                                 (if (withdrawalToBank != null) "Al banco Q ${withdrawal.fmtMoney(2)}" else "Retiró Q ${withdrawal.fmtMoney(2)}")
-                                    .takeIf { withdrawal > 0.004 }
+                                    .takeIf { withdrawal > 0.004 },
+                                closed.countedCardVouchers?.let {
+                                    "Vouchers Q ${it.fmtMoney(2)} de Q ${closed.expectedCardVouchers.fmtMoney(2)}"
+                                },
+                                closed.countedTransfers?.let {
+                                    "Transferencias Q ${it.fmtMoney(2)} de Q ${closed.expectedTransferNow.fmtMoney(2)}"
+                                },
+                                closed.countedPedidosYa?.let {
+                                    "PedidosYa Q ${it.fmtMoney(2)} de Q ${closed.totalPedidosYaSales.fmtMoney(2)}"
+                                }
                             ).joinToString(" · ")))
                     }
                 }

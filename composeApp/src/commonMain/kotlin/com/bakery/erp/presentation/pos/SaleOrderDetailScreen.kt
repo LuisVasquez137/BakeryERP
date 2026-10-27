@@ -26,6 +26,9 @@ import com.bakery.erp.model.ordersFromSales
 import com.bakery.erp.model.paymentPartsLabel
 import com.bakery.erp.model.restaurantSaleLabel
 import com.bakery.erp.model.saleVoidBlocker
+import com.bakery.erp.model.paymentChangeBlocker
+import com.bakery.erp.model.paymentChangePermission
+import com.bakery.erp.model.withPaymentMethod
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.ui.AdaptiveContainer
 import com.bakery.erp.ui.theme.BrandColors
@@ -84,6 +87,11 @@ fun SaleOrderDetailScreen(
     val canVoidSale = user?.hasPermission(Permission.VOID_SALE) == true
     // La caja se lee al abrir el detalle; mientras llega, el bloqueo dice que no se encontró.
     val voidBlocker = order?.let { saleVoidBlocker(it, state.orderSession) }
+    // Cambiar la forma de pago: en la caja abierta quien anula ventas; cerrada, quien ve la bitácora.
+    var paymentChangeOpen by remember { mutableStateOf(false) }
+    val canChangePayment = order != null && !order.voided && state.orderSession != null &&
+        user?.hasPermission(paymentChangePermission(state.orderSession)) == true
+    val paymentChangeBlocker = order?.let { paymentChangeBlocker(it, state.orderSession) }
 
     fun print() {
         val o = order ?: return
@@ -166,6 +174,19 @@ fun SaleOrderDetailScreen(
                         else -> Unit
                     }
                 }
+                if (canChangePayment) item {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        OutlinedButton(
+                            onClick = { paymentChangeOpen = true },
+                            enabled = paymentChangeBlocker == null && !state.isPaymentChangeBusy && !state.isVoidBusy,
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("Cambiar forma de pago") }
+                        if (paymentChangeBlocker != null) {
+                            Text(paymentChangeBlocker, style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
                 if (canVoidSale && !order.voided) item {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         OutlinedButton(
@@ -213,6 +234,7 @@ fun SaleOrderDetailScreen(
         }
         com.bakery.erp.ui.LoadingOverlay(visible = state.isInvoiceBusy, message = "Hablando con la SAT…")
         com.bakery.erp.ui.LoadingOverlay(visible = state.isVoidBusy, message = "Anulando la venta…")
+        com.bakery.erp.ui.LoadingOverlay(visible = state.isPaymentChangeBusy, message = "Cambiando la forma de pago…")
     }
 
     val lookup: suspend (String) -> Result<String?> = { nit -> viewModel.lookupNit(companyId, order?.primary?.branchId.orEmpty(), nit) }
@@ -268,6 +290,18 @@ fun SaleOrderDetailScreen(
             }
         )
     }
+    val changeSession = state.orderSession
+    if (paymentChangeOpen && order != null && changeSession != null) {
+        PaymentChangeDialog(
+            order = order,
+            session = changeSession,
+            onDismiss = { paymentChangeOpen = false },
+            onConfirm = { method ->
+                paymentChangeOpen = false
+                user?.let { viewModel.changePaymentMethod(companyId, order, method, it) }
+            }
+        )
+    }
     if (btPickerOpen && bluetoothPrinterManager != null) {
         BluetoothPrinterPickerDialog(
             manager = bluetoothPrinterManager,
@@ -292,11 +326,15 @@ private fun OrderHeaderCard(order: SaleOrder, canSeeValue: Boolean) {
             Text("${formatReceiptTimestamp(order.at)} · ${p.branchName} · ${p.registerName}", fontWeight = FontWeight.SemiBold)
             Text("Cajero: ${order.cashierName}", style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(
-                "Método: ${SalePaymentMethod.label(order.paymentMethod)}" +
-                    if (order.paymentParts.size > 1) " · " + paymentPartsLabel(order.paymentParts) else "",
-                style = MaterialTheme.typography.bodySmall
-            )
+            PaymentMethodChips(order, showAmounts = canSeeValue)
+            order.sales.firstOrNull { it.paymentChangedAt > 0L }?.let { s ->
+                Text(
+                    "Se cobró como ${SalePaymentMethod.label(s.originalPaymentMethod)}; lo corrigió " +
+                        "${s.paymentChangedByName.ifBlank { "alguien" }} el ${formatReceiptTimestamp(s.paymentChangedAt)}.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             if (p.resellerName.isNotBlank()) {
                 Text("Revendedor: ${p.resellerName}", style = MaterialTheme.typography.bodySmall, color = BrandColors.Primary)
             }
@@ -342,4 +380,75 @@ private fun OrderHeaderCard(order: SaleOrder, canSeeValue: Boolean) {
             }
         }
     }
+}
+
+/**
+ * Elegir la forma de pago correcta del cobro y ver, antes de confirmar, qué le hace a la caja:
+ * cuánto cambia el efectivo esperado y los vouchers y, si la caja ya cerró, cómo queda la
+ * diferencia de ese cierre.
+ */
+@Composable
+private fun PaymentChangeDialog(
+    order: SaleOrder,
+    session: com.bakery.erp.model.CashSession,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var method by remember { mutableStateOf<String?>(null) }
+    val current = order.paymentMethod
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Cambiar forma de pago") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Cobro de Q ${order.total.fmtMoney(2)}, registrado como ${SalePaymentMethod.label(current)}. " +
+                    "¿Cómo se pagó de verdad?")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    com.bakery.erp.model.PAYMENT_CHANGE_METHODS.filter { it != current }.forEach { m ->
+                        val (bg, fg) = com.bakery.erp.ui.theme.chipColors(
+                            com.bakery.erp.ui.theme.paymentMethodTone(m), com.bakery.erp.ui.theme.ChipEmphasis.SOFT
+                        )
+                        FilterChip(
+                            selected = method == m,
+                            onClick = { method = m },
+                            label = { Text(SalePaymentMethod.label(m)) },
+                            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = bg, selectedLabelColor = fg)
+                        )
+                    }
+                }
+                val chosen = method
+                if (chosen != null) {
+                    val deltas = order.sales.fold(emptyMap<String, Double>()) { acc, s ->
+                        val d = com.bakery.erp.model.paymentChangeSessionDeltas(
+                            session, s, s.withPaymentMethod(chosen)
+                        )
+                        (acc.keys + d.keys).associateWith { (acc[it] ?: 0.0) + (d[it] ?: 0.0) }
+                    }
+                    fun line(label: String, field: String) = deltas[field]?.takeIf { kotlin.math.abs(it) > 0.004 }?.let {
+                        "$label ${if (it > 0) "sube" else "baja"} Q ${kotlin.math.abs(it).fmtMoney(2)}"
+                    }
+                    listOfNotNull(
+                        line("El efectivo esperado de la caja", "totalCashSales"),
+                        line("La tarjeta (vouchers)", "totalCardSales"),
+                        line("Las transferencias", "totalTransferSales"),
+                        line("PedidosYa", "totalPedidosYaSales")
+                    ).forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+                    if (session.status == com.bakery.erp.model.CashSessionStatus.CLOSED) {
+                        val newDiff = session.difference + (deltas["difference"] ?: 0.0)
+                        Text(
+                            "Esta caja ya se cerró: la diferencia de efectivo de ese cierre pasa de " +
+                                "Q ${session.difference.fmtMoney(2)} a Q ${newDiff.fmtMoney(2)}.",
+                            style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    Text("Queda en la bitácora y se avisa al dueño. La factura no cambia.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = method != null, onClick = { method?.let(onConfirm) }) { Text("Cambiar") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } }
+    )
 }

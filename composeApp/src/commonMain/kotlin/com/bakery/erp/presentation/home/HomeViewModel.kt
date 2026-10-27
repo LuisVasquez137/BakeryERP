@@ -15,6 +15,9 @@ import com.bakery.erp.domain.homeShortcutOwnerKey
 import com.bakery.erp.domain.FixedAssetRepository
 import com.bakery.erp.domain.IngredientRepository
 import com.bakery.erp.domain.ProductionRepository
+import com.bakery.erp.domain.ProductRepository
+import com.bakery.erp.domain.FinishedStockRepository
+import com.bakery.erp.model.stockReplenishmentsNeeded
 import com.bakery.erp.domain.PurchaseRepository
 import com.bakery.erp.domain.SaleRepository
 import com.bakery.erp.domain.report.AlertSeverity
@@ -39,6 +42,7 @@ import com.bakery.erp.model.displayStatus
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.presentation.purchases.formatPurchaseDate
 import com.bakery.erp.util.fmtMoney
+import com.bakery.erp.util.fmtTrim
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -106,7 +110,10 @@ class HomeViewModel(
     private val employeeRepository: EmployeeRepository,
     private val shortcutRepository: HomeShortcutRepository,
     private val customerOrderRepository: CustomerOrderRepository,
-    private val attendanceRepository: AttendanceRepository
+    private val attendanceRepository: AttendanceRepository,
+    /** Aviso de pan para existencia bajo el mínimo (pan molde). */
+    private val productRepository: ProductRepository,
+    private val finishedStockRepository: FinishedStockRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(HomeUiState())
@@ -425,6 +432,41 @@ class HomeViewModel(
                 actionLabel = "Ver insumos",
                 createdAt = now
             )
+        }
+
+        // 2b. Pan para existencia bajo el mínimo en su planta: "toca hacer pan molde".
+        //     Solo se leen los stocks de las plantas que guardan algo con mínimo.
+        if (user.hasPermission(Permission.MANAGE_PRODUCTION_LOTS)) {
+            val stockProducts = runCatching { productRepository.getProducts(companyId) }
+                .getOrDefault(emptyList())
+                .filter { it.active && it.isMadeForStock && it.plantStockMinimum > 0.0 }
+            val plants = branches.filter { b ->
+                b.id in accessibleSet && stockProducts.any { it.id in b.assignedProductIds }
+            }
+            if (plants.isNotEmpty()) {
+                val stockByPlant = plants.associate { plant ->
+                    plant.id to runCatching { finishedStockRepository.getStocksForBranch(companyId, plant.id) }
+                        .getOrDefault(emptyList())
+                        .associate { it.productId to it.currentStock }
+                }
+                val needed = stockReplenishmentsNeeded(stockProducts, plants) { branchId, productId ->
+                    stockByPlant[branchId]?.get(productId) ?: 0.0
+                }
+                if (needed.isNotEmpty()) {
+                    alerts += HomeAlert(
+                        id = "stock-replenish-${needed.size}",
+                        severity = AlertSeverity.WARNING,
+                        target = AlertTarget.STOCK_REPLENISHMENT,
+                        title = if (needed.size == 1) "Toca hacer ${needed.first().productName}"
+                        else "Toca hacer ${needed.size} productos para existencia",
+                        message = needed.take(3).joinToString(", ") {
+                            "${it.productName}: quedan ${it.onHand.fmtTrim(1)} de ${it.minimum.fmtTrim(1)} (${it.branchName})"
+                        },
+                        actionLabel = "Ver producción",
+                        createdAt = now
+                    )
+                }
+            }
         }
 
         // 3. Despachos sin acuse (IN_TRANSIT > 12h)

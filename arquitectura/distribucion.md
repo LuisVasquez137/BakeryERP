@@ -196,6 +196,18 @@ solo lectura de compras de reventa vs. `finishedStocks`.
 
 Form `FinishedStockAdjustScreen` con 4 opciones (Merma, Ajuste menor/mayor, Venta directa), valida no negativo, razón obligatoria, preview "Nuevo stock: X".
 
+**"Agregar producto" (+ en la barra, oct 2026).** El pan de planta no tiene documento hasta su
+primer despacho a la sucursal, así que no salía en la lista ni en el selector y su conteo inicial
+no tenía por dónde entrar (pasó en el arranque del POS de Democracia: "Pan de muerto" recién
+creado). El + abre el form sin producto, que busca en `FinishedStockUiState.catalog` (todo lo
+activo menos lo respaldado por insumo) y arranca en "Ajuste por más". No se muestran todos los
+productos de planta en 0 en la lista: son ~150 y cada sucursal vende una parte.
+**Los ingresos manuales entran al costo**: antes iban con `unitPriceAtMovement = 0`, lo que diluía
+el promedio y con stock en 0 lo dejaba en 0. Ahora `registerAdjustment(unitCost)` usa el
+`avgUnitCost` que ya tenía, o el `purchaseCost` de la reventa. Para cargas masivas de conteo hay
+`functions/tools/load-branch-stock.js` (mismo criterio de costo) y `reset-pos-start.js` (arranque
+de una sucursal: borra pruebas de caja/ventas y deja el inventario de tienda en 0).
+
 KPIs ocultan valor de inventario sin `VIEW_DISPATCH_VALUE`. Permiso: `MANAGE_FINISHED_STOCK`.
 
 ### Porcionar pasteles (oct 2026)
@@ -225,6 +237,30 @@ Es una **transformación**, no venta ni merma: `−1` del entero y `+N` de la po
   venta no se bloquea: "Ahora no" deja la línea (con el aviso de sobreventa) y no vuelve a
   preguntar por esa porción hasta que el carrito quede vacío (`declinedPortionPrompts`).
 - Pendiente: reporte de porcionado (lo que habrían dado enteros vs. porcionados).
+
+### Transformar: pan tostado, pirujo con ajo (17 oct 2026)
+
+Generaliza Porcionar: un producto se hace con otro que ya está en el inventario. Pan molde →
+pan tostado (~1.5 empaques por molde), pirujo de mantequilla → pirujo con ajo (con mantequilla
+y ajo). Se hace en Calvario. Lógica pura en `model/Transformation.kt` (`TransformationTest`).
+
+- **Config en el producto que sale** ("Se hace de otro producto", form del producto):
+  `transformFromProductId/Name`, `transformYield` (lo normal que sale de 1) y `transformExtras`
+  (insumo + cantidad por unidad que sale + unidad; arreglos paralelos `transformExtra*`). Al
+  guardar queda también `isMadeForStock`: se guarda hecho en la planta que lo tiene asignado, no
+  sale en el pedido, las sucursales lo piden por traslado y avisa bajo el mínimo. No sale en
+  "Lote para existencia" (no se hornea).
+- **Se anota lo real**: el diálogo `TransformDialog` (ícono en Inventario de tienda, permiso
+  `MANAGE_FINISHED_STOCK` o `MANAGE_PRODUCTION_LOTS`) pide cuántos del original se usaron y
+  cuántos salieron (precargado con `floor(usados × yield)`, se corrige).
+- **Movimientos** `TRANSFORMACION`, referencia `TRANSFORMATION`, mismo `referenceId` en las dos
+  puntas: −original a su costo promedio, +nuevo a `(usados × costo + extras) ÷ salieron`.
+  `applyTransformation` lee el stock actual del original y no deja usar más de lo que hay.
+- **Extras**: se descuentan de `BranchStock` después del pan (Kardex `PRODUCCION` con el mismo
+  `referenceId`); los que no llevan stock (`tracksStock = false`, la bolsa) no se descuentan.
+  Al costo solo suman los de materia prima, al precio de su presentación predeterminada
+  (`transformExtrasCost`): un suministro ya se fue a gasto al comprarlo.
+- No se deshace; un error se corrige con ajuste.
 
 ### Traslados entre sucursales (oct 2026)
 
@@ -278,6 +314,42 @@ existencias (cloro sin conteo, conceptos de compra) no aparece. Modelo y reglas 
 - Despacho (`resolveWholesalePrice`): mira el escalón antes del porcentaje; el porcentaje sigue SIN redondear allí para no cambiar el valor de lo ya despachado.
 - El grupo de precio ("Pan Q0.50") con escalón se cobra junto: todos sus panes caen en el mismo escalón.
 - Pantalla de listas: textos en lenguaje del dueño ("¿Para quién es esta lista?", "Usarla cuando nadie eligió otra (★)") porque "tipo de canal" y "default" no se entendían.
+
+### Pedido de la sucursal: traslado con día y viaje (17 oct 2026)
+
+Lo que se hace para existencia (pan molde en Bombero, rosca y pan tostado en Calvario) no entra en
+el pedido de producción (`Product.isOrderedFromPlant`, ver `produccion.md`): la sucursal lo **pide
+como traslado** y va en el camión del reparto. Antes era en papel.
+
+- **Nuevo estado `REQUESTED` ("Pedido")**, antes de `IN_TRANSIT`. La sucursal elige a quién se lo
+  pide, **hoy/mañana** (`forDate`) y **1er/2º viaje** (`trip`); `requestedQuantity` por línea. No
+  mueve stock. Pantalla `StockTransferRequestFormScreen` (FAB de Traslados → "Pedir a otra
+  sucursal"): los productos "para existencia" asignados al origen salen de una vez con "Hay X en
+  Bombero"; cualquier otro con "Otro producto". Solo productos, no insumos.
+- **Quien lo tiene lo envía** desde el detalle: cada línea arranca en lo pedido y escribe lo que de
+  verdad manda (`sendingRequest`). Desde ahí es el traslado de siempre (`send` sobre el mismo
+  documento: costo, salida del stock, recepción contando). `send` vuelve a leer y choca si ya no
+  está pedido, así dos toques no sacan el stock dos veces. Las líneas que van en 0 se quedan, para
+  que la sucursal vea qué no le llegó ("Mandaron 2 menos").
+- **"No se puede"** (origen, motivo obligatorio) o **"Cancelar pedido"** (quien pidió) usan
+  `cancel`: un pedido sin enviar no movió nada, así que no hay regreso de stock. Avisos push a la
+  otra punta en las cuatro acciones.
+- **Quién**: pedir y cancelar el propio pedido, `RECEIVE_DISPATCH`/`SEND_STOCK_TRANSFER`/
+  `MANAGE_FINISHED_STOCK` en la sucursal que lo necesita; mandarlo o rechazarlo,
+  `SEND_STOCK_TRANSFER` en el origen. Sin cambios de reglas Firestore.
+- **En el camión** (`carrierPlantIdOf`): si el origen tiene ruta propia, va en su camión; si no
+  (Calvario no tiene camión), en el de la planta que lo tiene en su `deliveryRouteOrder`, que **pasa
+  a recogerlo** ("Recoger en Calvario → Democracia"). Por eso Calvario tiene que estar en la ruta de
+  Bombero (ícono de ruta en Reparto).
+- **Tablero de Reparto**: tarjeta "Pedidos entre sucursales" en la sección de su viaje
+  (`transfersForTrip`), aunque ese viaje no lleve notas. En una planta de un solo viaje cae en la
+  sección 0. Late "Por mandar" al origen y "Por recibir" al destino; el dueño en supervisión no.
+  Con filtro de etapa no se muestra. El tablero lee los traslados en vivo (3 días atrás, filtra
+  por `forDate`).
+- **Hoja del repartidor** (`DeliveryRunScreen`): la misma tarjeta, solo lectura. No se guarda en
+  la hoja: se deduce de planta + día + viaje, así un pedido enviado tarde no obliga a rehacerla.
+- Un traslado directo (sin pedido) sigue sin día ni viaje y no sale en Reparto.
+- Pendiente: elegir viaje también en el traslado directo; aviso en el Home de pedidos por mandar.
 
 ### Traslados: lista en vivo (16 oct 2026)
 

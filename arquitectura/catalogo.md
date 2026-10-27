@@ -49,6 +49,65 @@ ID compuesto `{branchId}_{ingredientId}`. `IngredientListScreen` tiene chips de 
 - `PreparationBatch`: producir N lotes en sucursal `CAN_PRODUCE` descuenta insumos del `BranchStock` + Kardex `PRODUCCION`. Doc plano.
 - Permisos: `VIEW_PREPARATIONS`, `EDIT_PREPARATIONS`, `MANAGE_PREPARATION_BATCHES`.
 
+### Bizcochos: masa + molde, contados por unidad (17 oct 2026)
+
+El repostero de Calvario hornea días antes porque decorar el mismo día sale mal. Ve lo que le
+piden, lo que tiene frío y decide cuánto hacer ("1 plancha, 6 de frutas, 6 de tres leches"); el
+sistema le da la masa a batir. Lógica pura en `model/BakePlan.kt` (`BakePlanTest`).
+
+- **Dos usos nuevos de `Preparation`**: `BATTER` (masa de bizcocho: tiene insumos, sin saldo
+  propio) y `BASE` (el molde que se cuenta: sin insumos, con `batterPreparationId` +
+  `batterGramsPerUnit` + `stockMinimumUnits`). El form pide la masa por molde en **onzas**
+  (frutas = 22 oz) y la guarda en gramos; se puede cambiar cuando quieran.
+- **Masa + molde, como el pan agrupado por masa**: plancha y bizcocho de frutas son de la misma
+  masa de vainilla → `batterMixes` los bate juntos: masa total = Σ moldes × masa por molde, receta
+  escalada = insumos × masa total ÷ peso de la receta de la masa.
+- **El saldo es en unidades** (`PreparationBatch.producedUnits/remainingUnits`, `isCounted`). Un
+  lote por molde y horneada, id `{bakeId}_{moldeId}`: ese id fijo es la guarda contra anotar la
+  misma horneada dos veces (lotes primero, insumos después). `batterGramsPerUnit` del lote es el
+  snapshot de esa tanda. `producedWeightGrams` = masa echada, solo referencia.
+- **Hoja de horneado** (`BakeSheetScreen`, FAB de Lotes de preparación → "Hornear bizcochos"):
+  pedidos a la planta para hoy/mañana/pasado (no cancelados) → bizcochos que piden (`baseDemand`),
+  hay fríos (`baseStock`, con la edad del más viejo), sugerencia = pedido + mínimo − hay, en
+  enteros. "Voy a hacer" lo decide él y vive en el ViewModel (sobrevive a irse a hornear). "Ya
+  salieron" pide cuántos salieron de cada molde: entran esos; se descuenta la masa batida
+  completa (lo planeado), Kardex `PRODUCCION` con referencia `bakeId`. Si el inventario no
+  alcanza, avisa pero no bloquea (el bizcocho ya está hecho).
+- **El pastel consume bizcochos** con un adorno contado: `ProductDecoration.unitsPerProduct`
+  (pastel de frutas 1; pastelito "salen 24 de 1" → 1/24 de plancha). Va al snapshot
+  (`ProductionLotDecoration.unitsPerProduct`, arreglo `decoUnitsPerProduct`) y `completeLot`
+  saca de los más viejos de la planta (`consumeUnits` → `fifoUnitTakes`), sobre lo amasado. Si
+  faltan, avisa "faltaron N", no falla. No se elige lote en el form del lote.
+- **Costo**: el bizcocho cuesta su parte de la masa (`unitsPerProduct × masa por molde × Q/g de
+  la masa`). De paso: `MaterialCostLoader` no hidrataba los insumos de las preparaciones, así que
+  todo adorno salía "sin precio"; ahora lee completas las que usa algún producto.
+- Las masas y bizcochos no salen en "Producir lote" (por peso) ni en los pickers de esponja/adorno
+  por gramos.
+- Pendiente: los pedidos de "hoy" cuyo lote de pasteles ya se completó cuentan doble (ya se
+  descontaron); por eso la hoja abre en "Mañana".
+- **Dentro del lote de producción (19 oct 2026)**, pedido por el dueño: "como la esponja".
+  Los pasteles **sin receta** que llevan bizcocho contado se agrupan en la lista del lote por la
+  **masa del bizcocho** (clave `bake:{batterId}`, `batterOfLine`), como el pan por su receta: la
+  porción de tres leches y el selva negra de la misma premezcla salen juntos; los de vainilla en
+  su propio grupo. Al tocar el grupo (lote abierto), la primera vez se abre `BakePlanDialog`:
+  cada molde con piden / hay fríos / tener, "Voy a hacer" grande con − / + y "Sugerido", y la
+  masa total en vivo. "Ver receta" → del otro lado `ScaledRecipePanel` (el mismo del pan) con la
+  masa escalada (`bakeRecipeView`) y arriba `BakePlanSummary` ("Cambiar" vuelve al diálogo, "Ya
+  salieron del horno" anota **solo esa masa**, `finishBake(batterId)`). Lo que piden sale de las
+  líneas del lote (`lotBaseDemand`: snapshot de adornos × `kneadedQuantity`, lo mismo que
+  descuenta `completeLot`). Instancia propia de `BakeSheetViewModel` (`AppViewModels.lotBake`,
+  modo `lotId`); la hoja "Hornear bizcochos" queda para planear días adelante. Con el lote
+  cerrado el grupo sigue, pero el panel solo dice que ya se descontaron (contaría doble).
+- **Un pastel sobre bizcocho NO va en "Productos que genera" de ninguna receta**: la masa ya la
+  pone el bizcocho; con receta se descontaría dos veces. `functions/tools/remove-cake-from-recipes.js`
+  lo saca con respaldo. Sin receta no se le pide peso en crudo (`linesMissingRawWeight`).
+- **"Porciones por bizcocho"** (antes "Salen de 1") en el adorno del producto: cuántos de este
+  producto salen de UN bizcocho. El form del bizcocho dice cuántos moldes alcanza una receta de
+  su masa (peso de la receta ÷ onzas por molde): nadie teclea ese número.
+- **`Preparation.branchIds`** ("Plantas que la hacen", chips en el form). Vacío = todas, para que
+  nada desaparezca mientras se asignan. Filtra la lista de Preparaciones (por plantas a las que
+  entra el usuario), el form de Lotes de preparación, la hoja y el lote (`isMadeIn`).
+
 ### Recetas — receta plana, solo pan principal
 
 **Sin etapas, sin tipos.** Lista plana de componentes + pasos + productos que genera. `RecipeStage`/`RecipeStageType` solo para deserializar legacy. Esponja NO va en receta — vive en Preparaciones y se declara en el lote.
@@ -62,6 +121,15 @@ ID compuesto `{branchId}_{ingredientId}`. `IngredientListScreen` tiene chips de 
 **Multi-base**: varios componentes `isBase`. `validateBase`: WEIGHT → Σ pesos base > 0; PERCENTAGE → Σ% base = 100 (±0.5).
 
 **Pasos**: `RecipeStep(id, stageId="", order, text, photoUrl)`. Foto opcional vía `RecipeImageUploader` (split por plataforma). En recetas nuevas `stageId=""`.
+
+**Receta por tanda (`inputMode = "BATCH"`, 20 oct 2026)** — torta de leche: no es masa de pan (sin harina base ni %), es una bandeja con productos del inventario adentro ("6 panes molde, 4 oz aceite, 1 lt leche… salen 35 pedazos"). Pedido del dueño: entrarla en el form normal de Recetas, no en el producto ("Transformar" quedaba incómodo). Lógica pura en `model/BatchRecipe.kt` (`BatchRecipeTest`).
+- `Recipe.batchYield` (35) y `batchUnitName` ("bandeja"). En el doc raíz. **Siempre bandeja entera**: se probó media bandeja con − / + en el pedido y el dueño la descartó el mismo día — no la vuelvas a agregar.
+- Componentes con cantidad real de una tanda en `inputQuantity`; `RecipeComponent.productId/Name` = producto del inventario (pan molde). `percentage` = 0, sin base.
+- **Pedido**: la sucursal pide los pedazos que quiera (caja normal), porque hay tiendas que no quieren tantos.
+- **Al armar el lote**: `checkRecipeBatchMinimums` trata la tanda como un mínimo — lo pedido se completa a bandejas enteras (`BatchSpec.roundUp`, 50 → 70) y sale el mismo aviso/diálogo del mínimo de amasada (`MinimumBatchDecisionDialog`, `RecipeBatchCheck.batch`): la encargada reparte el sobrante entre las sucursales que la pidieron, lo que no reparta queda en la planta (`plantRetainedQuantity`), o anula. En `RecipeBatchCheck` con `batch` los campos `currentFlourGrams`/`minFlourGrams` son **piezas**; los textos salen de `progressText()`/`shortfallText()`.
+- **Lote**: sin peso en crudo (`linesMissingRawWeight` lo excluye), panel con "2 bandejas · salen 70" y cantidades en su unidad (`ScaledRecipeRow.displayQuantity`). Bandejas = `batchesFor` (la más cercana: contar 34 o 36 sigue siendo una). `completeLot` agrupa por receta, descuenta insumos al mismo agregado y el pan molde del terminado de la planta (`TRANSFORMACION` + referencia `PRODUCTION_LOT`, a su costo promedio; si no alcanza avisa, no bloquea).
+- **Costo**: `productMaterialCost` = (insumos + productos a su costo de receta) ÷ `batchYield`.
+- Pendiente: en planta de 2 turnos el reparto por turnos parte la torta y cada turno pide completar su bandeja.
 
 **Legacy**: si existe `stages/` con `stageId≠""`, `FirebaseRecipeRepository.getRecipe` hidrata `recipe.stages` Y aplana en `components`/`steps`. Al editar y guardar, persiste plana; los docs viejos de `stages/` quedan huérfanos.
 

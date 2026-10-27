@@ -123,7 +123,8 @@
       "Bash(grep -hE 'Project is running at|Loopback|webpack.*compiled|FAILURE:|error:|BUILD FAILED' C:/Users/DELL/AppData/Local/Temp/claude/C--Users-DELL-AndroidStudioProjects-BakeryERP/c439a55b-5857-4968-8026-8331531fded7/tasks/b4x5l0olm.output)",
       "Bash(curl *)",
       "PowerShell($env:JAVA_HOME; \\(Get-Command java -ErrorAction SilentlyContinue\\).Source)",
-      "Bash(adb devices *)"
+      "Bash(adb devices *)",
+      "Bash(node functions/tools/fel-setup-sabropan.js)"
     ]
   }
 }

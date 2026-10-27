@@ -88,6 +88,7 @@ import com.bakery.erp.presentation.products.ProductViewModel
 import com.bakery.erp.presentation.products.ProductWeightsScreen
 import com.bakery.erp.presentation.preparationbatches.PreparationBatchFormScreen
 import com.bakery.erp.presentation.preparationbatches.PreparationBatchListScreen
+import com.bakery.erp.presentation.preparationbatches.BakeSheetScreen
 import com.bakery.erp.presentation.preparations.PreparationDetailScreen
 import com.bakery.erp.presentation.preparations.PreparationFormScreen
 import com.bakery.erp.presentation.preparations.PreparationListScreen
@@ -112,8 +113,6 @@ import com.bakery.erp.presentation.finishedStock.FinishedStockViewModel
 import com.bakery.erp.presentation.pos.CashSessionCloseScreen
 import com.bakery.erp.presentation.pos.CashSessionDetailScreen
 import com.bakery.erp.presentation.pos.CashSessionOpenScreen
-import com.bakery.erp.presentation.pos.DailyCashCloseListScreen
-import com.bakery.erp.presentation.pos.DailyCashCloseScreen
 import com.bakery.erp.presentation.pos.POSHomeScreen
 import com.bakery.erp.presentation.pos.POSScreen
 import com.bakery.erp.presentation.pos.SaleDetailScreen
@@ -378,6 +377,7 @@ sealed class Screen(val route: String) {
     }
     object PreparationBatchList : Screen("preparations/batches")
     object PreparationBatchForm : Screen("preparations/batches/form")
+    object BakeSheet : Screen("preparations/batches/bake")
 
     // Precios
     object PriceListAdmin : Screen("prices/lists")
@@ -469,16 +469,14 @@ sealed class Screen(val route: String) {
         fun route(countId: String) = "breadCount/form/$countId"
     }
 
-    // Cierre del día por sucursal
-    object DailyCashCloseList : Screen("dailyCashClose")
-    object DailyCashClose : Screen("dailyCashClose/form?branchId={branchId}&date={date}") {
+    // Resumen de cajas del día por sucursal (solo lectura, en Reportes)
+    object CashDaySummary : Screen("reports/cashDay?branchId={branchId}&date={date}") {
         fun route(branchId: String? = null, date: String? = null): String {
             val params = buildList {
                 if (!branchId.isNullOrEmpty()) add("branchId=$branchId")
                 if (!date.isNullOrEmpty()) add("date=$date")
             }
-            return if (params.isEmpty()) "dailyCashClose/form"
-                   else "dailyCashClose/form?${params.joinToString("&")}"
+            return if (params.isEmpty()) "reports/cashDay" else "reports/cashDay?" + params.joinToString("&")
         }
     }
 
@@ -527,6 +525,8 @@ sealed class Screen(val route: String) {
         fun route(branchId: String?) = if (branchId.isNullOrEmpty()) "transfers" else "transfers?branchId=$branchId"
     }
     object StockTransferForm : Screen("transfers/new")
+    /** La sucursal pide pan molde/rosca/tostado para un día y un viaje del camión. */
+    object StockTransferRequestForm : Screen("transfers/request")
     object StockTransferDetail : Screen("transfers/detail/{transferId}") {
         fun route(transferId: String) = "transfers/detail/$transferId"
     }
@@ -576,6 +576,7 @@ fun AppNavigation(
     val jobPositionViewModel = vms.jobPosition
     val preparationViewModel = vms.preparation
     val preparationBatchViewModel = vms.preparationBatch
+    val bakeSheetViewModel = vms.bakeSheet
     val fixedAssetViewModel = vms.fixedAsset
     val priceListViewModel = vms.priceList
     val dispatchViewModel = vms.dispatch
@@ -871,7 +872,6 @@ fun AppNavigation(
                 onNavigateToCardRules = { navController.navigate(Screen.CardRules.route) },
                 onNavigateToCredit = { navController.navigate(Screen.CreditAccountList.route) },
                 onNavigateToBreadCount = { navController.navigate(Screen.BreadCountList.route) },
-                onNavigateToDailyCashClose = { navController.navigate(Screen.DailyCashCloseList.route) },
                 onNavigateToSpotCashCheck = { navController.navigate(Screen.SpotCashCheckList.route) },
                 onNavigateToSalesReport = { navController.navigate(Screen.SalesReport.route) },
                 onNavigateToReports = { navController.navigate(Screen.ReportsHub.route) },
@@ -1084,8 +1084,22 @@ fun AppNavigation(
                 PreparationBatchListScreen(
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToForm = { navController.navigate(Screen.PreparationBatchForm.route) },
+                    onNavigateToBake = { navController.navigate(Screen.BakeSheet.route) },
                     authViewModel = viewModel,
                     viewModel = preparationBatchViewModel
+                )
+            }
+        }
+        composable(Screen.BakeSheet.route) {
+            RequirePermission(state.user, Permission.MANAGE_PREPARATION_BATCHES, onBack = { navController.popBackStack() }) {
+                BakeSheetScreen(
+                    onNavigateBack = {
+                        // Al volver, la lista muestra los bizcochos que acaban de entrar.
+                        state.user?.let { u -> preparationBatchViewModel.loadBatches(u.orgId, u) }
+                        navController.popBackStack()
+                    },
+                    authViewModel = viewModel,
+                    viewModel = bakeSheetViewModel
                 )
             }
         }
@@ -1190,6 +1204,7 @@ fun AppNavigation(
                     onOpenPacking = { navController.navigate(Screen.DispatchList.route) },
                     onOpenRun = { runId -> navController.navigate(Screen.DeliveryRunDetail.route(runId)) },
                     onOpenHistory = { navController.navigate(Screen.DeliveryHistory.route) },
+                    onOpenTransfer = { id -> navController.navigate(Screen.StockTransferDetail.route(id)) },
                     authViewModel = viewModel,
                     viewModel = deliveryViewModel,
                     dispatchViewModel = dispatchViewModel
@@ -1976,6 +1991,11 @@ fun AppNavigation(
                             popUpTo(Screen.ProductionOrderForm.route) { inclusive = true }
                         }
                     },
+                    onNavigateToOrderDetail = { id ->
+                        navController.navigate(Screen.ProductionOrderDetail.route(id)) {
+                            popUpTo(Screen.ProductionOrderForm.route) { inclusive = true }
+                        }
+                    },
                     onLocationDenied = {
                         // Sin ubicación no se puede armar el pedido para esta
                         // sucursal — reset duro a Home, no un simple "volver".
@@ -2087,7 +2107,8 @@ fun AppNavigation(
                     documentPrinter = documentPrinter,
                     bluetoothPrinterManager = bluetoothPrinterManager,
                     plantIssueViewModel = plantIssueViewModel,
-                    operatorLockViewModel = vms.operatorLock
+                    operatorLockViewModel = vms.operatorLock,
+                    bakeViewModel = vms.lotBake
                 )
             }
         }
@@ -2368,39 +2389,21 @@ fun AppNavigation(
             }
         }
 
-        // ── Cierre del día por sucursal ───────────────────────────────────────
-        composable(Screen.DailyCashCloseList.route) {
-            RequirePermission(state.user, Permission.MANAGE_DAILY_CASH_CLOSE,
-                onBack = { navController.popBackStack() }) {
-                DailyCashCloseListScreen(
-                    onNavigateBack = { navController.popBackStack() },
-                    onOpenClose = { bId, date ->
-                        navController.navigate(Screen.DailyCashClose.route(bId, date))
-                    },
-                    onOpenToday = { bId ->
-                        navController.navigate(Screen.DailyCashClose.route(bId))
-                    },
-                    authViewModel = viewModel,
-                    viewModel = dailyCashCloseViewModel
-                )
-            }
-        }
+        // ── Resumen de cajas del día (Reportes) ──────────────────────────────
         composable(
-            route = Screen.DailyCashClose.route,
+            route = Screen.CashDaySummary.route,
             arguments = listOf(
                 navArgument("branchId") { type = NavType.StringType; nullable = true; defaultValue = null },
                 navArgument("date") { type = NavType.StringType; nullable = true; defaultValue = null }
             )
         ) { backStackEntry ->
-            val bId = backStackEntry.stringArg("branchId")
-            val date = backStackEntry.stringArg("date")
             RequirePermission(state.user, Permission.MANAGE_DAILY_CASH_CLOSE,
                 onBack = { navController.popBackStack() }) {
-                DailyCashCloseScreen(
-                    branchIdArg = bId,
-                    closeDateArg = date,
+                com.bakery.erp.presentation.reports.CashDaySummaryScreen(
+                    branchIdArg = backStackEntry.stringArg("branchId"),
+                    dateArg = backStackEntry.stringArg("date"),
                     onNavigateBack = { navController.popBackStack() },
-                    onClosed = { /* permanece en pantalla mostrando reporte */ },
+                    onOpenSession = { sid -> navController.navigate(Screen.CashSessionDetail.route(sid)) },
                     authViewModel = viewModel,
                     viewModel = dailyCashCloseViewModel
                 )
@@ -2452,6 +2455,7 @@ fun AppNavigation(
                 state.user,
                 Permission.VIEW_SALES_REPORT, Permission.VIEW_PRODUCTION_REPORT,
                 Permission.VIEW_FINANCIAL_REPORT, Permission.VIEW_BRANCH_SUPPLY_REPORT,
+                Permission.MANAGE_DAILY_CASH_CLOSE,
                 onBack = { navController.popBackStack() }
             ) {
                 com.bakery.erp.presentation.reports.ReportsHubScreen(
@@ -2467,6 +2471,7 @@ fun AppNavigation(
                             com.bakery.erp.presentation.reports.ReportKey.PRODUCT_COST -> Screen.ProductCostReport.route
                             com.bakery.erp.presentation.reports.ReportKey.STANDARD_COST -> Screen.StandardCostReport.route
                             com.bakery.erp.presentation.reports.ReportKey.DELIVERY_COST -> Screen.DeliveryCostReport.route
+                            com.bakery.erp.presentation.reports.ReportKey.CASH_DAY -> Screen.CashDaySummary.route()
                         }
                         navController.navigate(route)
                     }
@@ -2706,6 +2711,7 @@ fun AppNavigation(
                     initialBranchId = entry.savedStateHandle.get<String>("branchId"),
                     onNavigateBack = { navController.popBackStack() },
                     onNew = { navController.navigate(Screen.StockTransferForm.route) },
+                    onRequest = { navController.navigate(Screen.StockTransferRequestForm.route) },
                     onOpen = { id -> navController.navigate(Screen.StockTransferDetail.route(id)) },
                     authViewModel = viewModel,
                     viewModel = vms.stockTransfer
@@ -2720,6 +2726,23 @@ fun AppNavigation(
                     onSent = { id ->
                         navController.navigate(Screen.StockTransferDetail.route(id)) {
                             popUpTo(Screen.StockTransferForm.route) { inclusive = true }
+                        }
+                    },
+                    authViewModel = viewModel,
+                    viewModel = vms.stockTransfer
+                )
+            }
+        }
+        composable(Screen.StockTransferRequestForm.route) {
+            RequirePermission(
+                state.user, Permission.SEND_STOCK_TRANSFER, Permission.RECEIVE_DISPATCH,
+                Permission.MANAGE_FINISHED_STOCK, onBack = { navController.popBackStack() }
+            ) {
+                com.bakery.erp.presentation.transfers.StockTransferRequestFormScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onSent = { id ->
+                        navController.navigate(Screen.StockTransferDetail.route(id)) {
+                            popUpTo(Screen.StockTransferRequestForm.route) { inclusive = true }
                         }
                     },
                     authViewModel = viewModel,

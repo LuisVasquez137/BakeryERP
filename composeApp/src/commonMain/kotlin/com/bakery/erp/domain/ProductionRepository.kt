@@ -254,6 +254,9 @@ interface ProductionRepository {
      * productionDate)`, sin filtrar por turno — el análogo de [getActiveLotForBranchDateShift]
      * para plantas de varios turnos, donde un mismo día puede tener un lote por turno.
      * Se compara `productionDate` por día calendario en TZ del sistema.
+     *
+     * Ninguna de las dos devuelve lotes para existencia ([ProductionLot.isForStock]): son
+     * búsquedas del lote de los pedidos del día.
      */
     suspend fun getActiveLotsForBranchDate(
         companyId: String,

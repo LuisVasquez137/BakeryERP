@@ -65,12 +65,17 @@ import androidx.compose.ui.window.Dialog
 import com.bakery.erp.presentation.ingredients.IngredientPickerDialog
 import com.bakery.erp.model.usableInRecipes
 import com.bakery.erp.model.Ingredient
+import com.bakery.erp.model.Branch
 import com.bakery.erp.model.Preparation
 import com.bakery.erp.model.PreparationIngredient
 import com.bakery.erp.model.PreparationUsage
+import com.bakery.erp.model.convertUnits
 import com.bakery.erp.model.toGramsOrNull
+import com.bakery.erp.util.fmtTrim
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.presentation.ingredients.IngredientViewModel
+import com.bakery.erp.presentation.transfers.BranchChip
+import com.bakery.erp.presentation.transfers.ChipRow
 import com.bakery.erp.ui.AdaptiveContainer
 import kotlinx.coroutines.launch
 import kotlin.random.Random
@@ -101,6 +106,9 @@ fun PreparationFormScreen(
         if (companyId.isNotEmpty()) {
             if (preparationId != null) viewModel.loadPreparation(companyId, preparationId)
             ingredientViewModel.loadIngredients(companyId)
+            // El bizcocho elige su masa de esta lista.
+            if (state.preparationList.isEmpty()) viewModel.loadPreparations(companyId)
+            viewModel.loadPlants(companyId)
         }
     }
 
@@ -120,6 +128,13 @@ fun PreparationFormScreen(
         companyId = companyId,
         viewModel = viewModel,
         ingredientViewModel = ingredientViewModel,
+        batters = state.preparationList.filter {
+            it.active && it.usage == PreparationUsage.BATTER && it.id != preparationId
+        }.sortedBy { it.name.lowercase() },
+        usesBakedAhead = authState.usesBakedAhead,
+        plants = state.plants,
+        batterWeightById = state.batterWeightById,
+        onBatterChosen = { viewModel.loadBatterWeight(companyId, it) },
         isSaving = state.isLoading,
         isSaved = state.isSaved,
         error = state.error,
@@ -136,6 +151,11 @@ private fun PreparationFormContent(
     companyId: String,
     viewModel: PreparationViewModel,
     ingredientViewModel: IngredientViewModel,
+    batters: List<Preparation>,
+    usesBakedAhead: Boolean,
+    plants: List<Branch>,
+    batterWeightById: Map<String, Double>,
+    onBatterChosen: (String) -> Unit,
     isSaving: Boolean,
     isSaved: Boolean,
     error: String?,
@@ -167,6 +187,22 @@ private fun PreparationFormContent(
     }
     var nameError by remember { mutableStateOf(false) }
     var showPicker by remember { mutableStateOf(false) }
+    // Solo bizcocho: de qué masa es, cuánta lleva un molde (en onzas, como la pesa el
+    // repostero) y cuántos tener siempre fríos.
+    var batterId by remember { mutableStateOf(existing?.batterPreparationId ?: "") }
+    var batterName by remember { mutableStateOf(existing?.batterPreparationName ?: "") }
+    var batterOz by remember {
+        mutableStateOf(existing?.batterGramsPerUnit?.takeIf { it > 0.0 }
+            ?.let { convertUnits(it, "gr", "oz").fmtTrim(1) } ?: "")
+    }
+    var minimumUnits by remember {
+        mutableStateOf(existing?.stockMinimumUnits?.takeIf { it > 0.0 }?.fmtTrim(1) ?: "")
+    }
+    var batterMenu by remember { mutableStateOf(false) }
+    val isBase = usage == PreparationUsage.BASE
+    var branchIds by remember { mutableStateOf(existing?.branchIds?.toSet() ?: emptySet()) }
+
+    LaunchedEffect(batterId) { if (batterId.isNotEmpty()) onBatterChosen(batterId) }
 
     // Rellenar unidades permitidas en modo edición cuando carga la lista de insumos
     LaunchedEffect(ingredientState.ingredientList) {
@@ -201,10 +237,16 @@ private fun PreparationFormContent(
 
     fun save() {
         if (name.isBlank()) { nameError = true; return }
-        val valid = entries.filter {
+        val ozPerMold = batterOz.replace(',', '.').toDoubleOrNull() ?: 0.0
+        if (isBase && (batterId.isEmpty() || ozPerMold <= 0.0)) {
+            scope.launch { snackbarHostState.showSnackbar("Elige la masa y cuántas onzas lleva un molde") }
+            return
+        }
+        // El bizcocho no tiene insumos propios: los pone su masa.
+        val valid = if (isBase) emptyList() else entries.filter {
             it.ingredientId.isNotEmpty() && (it.quantity.toDoubleOrNull() ?: 0.0) > 0.0
         }
-        if (valid.isEmpty()) {
+        if (!isBase && valid.isEmpty()) {
             scope.launch { snackbarHostState.showSnackbar("Agrega al menos un insumo con cantidad") }
             return
         }
@@ -223,6 +265,12 @@ private fun PreparationFormContent(
             notes = notes.trim().ifEmpty { null },
             active = active,
             createdAt = existing?.createdAt ?: 0L,
+            batterPreparationId = if (isBase) batterId else "",
+            batterPreparationName = if (isBase) batterName else "",
+            batterGramsPerUnit = if (isBase) convertUnits(ozPerMold, "oz", "gr") else 0.0,
+            stockMinimumUnits = if (isBase) minimumUnits.replace(',', '.').toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0 else 0.0,
+            // Solo las que siguen siendo plantas: una sucursal que dejó de producir no queda colgada.
+            branchIds = branchIds.filter { id -> plants.any { it.id == id } },
             ingredients = valid.map {
                 PreparationIngredient(
                     id = it.id,
@@ -306,6 +354,115 @@ private fun PreparationFormContent(
                             modifier = Modifier.weight(1f)
                         )
                     }
+                    // Una preparación que ya es bizcocho sigue mostrando su tipo aunque apaguen la opción.
+                    if (usesBakedAhead || usage == PreparationUsage.BATTER || isBase) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        UsageButton(
+                            label = "Masa de bizcocho",
+                            description = "Vainilla, chocolate: se bate y se echa en moldes",
+                            selected = usage == PreparationUsage.BATTER,
+                            onClick = { usage = PreparationUsage.BATTER },
+                            modifier = Modifier.weight(1f)
+                        )
+                        UsageButton(
+                            label = "Bizcocho",
+                            description = "El molde que se cuenta: de frutas, plancha",
+                            selected = isBase,
+                            onClick = { usage = PreparationUsage.BASE },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    }
+                }
+
+                if (isBase) {
+                    Text(
+                        "El bizcocho se cuenta, no se pesa. Su receta es la de la masa: al hornear, " +
+                            "el sistema bate la masa que llevan todos los moldes juntos.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Box {
+                        OutlinedButton(onClick = { batterMenu = true }, modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                if (batterId.isEmpty()) "Elegir la masa *" else "Masa: $batterName",
+                                modifier = Modifier.weight(1f)
+                            )
+                            Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                        }
+                        DropdownMenu(expanded = batterMenu, onDismissRequest = { batterMenu = false }) {
+                            if (batters.isEmpty()) {
+                                DropdownMenuItem(
+                                    text = { Text("No hay masas de bizcocho. Crea una primero.") },
+                                    onClick = { batterMenu = false }
+                                )
+                            }
+                            batters.forEach { b ->
+                                DropdownMenuItem(
+                                    text = { Text(b.name) },
+                                    onClick = { batterId = b.id; batterName = b.name; batterMenu = false }
+                                )
+                            }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = batterOz,
+                            onValueChange = { v -> batterOz = v.filter { it.isDigit() || it == '.' || it == ',' } },
+                            label = { Text("Masa por molde (oz) *") },
+                            supportingText = { Text("Frutas: 22 oz") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = minimumUnits,
+                            onValueChange = { v -> minimumUnits = v.filter { it.isDigit() || it == '.' || it == ',' } },
+                            label = { Text("Tener siempre") },
+                            supportingText = { Text("Para los días siguientes") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    // Lo calcula el sistema con las onzas: el repostero no tiene que sacar la cuenta.
+                    val ozPerMold = batterOz.replace(',', '.').toDoubleOrNull() ?: 0.0
+                    val batterWeight = batterWeightById[batterId] ?: 0.0
+                    if (ozPerMold > 0.0 && batterWeight > 0.0) {
+                        val molds = batterWeight / convertUnits(ozPerMold, "oz", "gr")
+                        Text(
+                            "Una receta de $batterName (${formatBatchWeight(batterWeight)}) alcanza para " +
+                                "${molds.fmtTrim(1)} ${name.ifBlank { "bizcochos" }.lowercase()}. Al hornear, " +
+                                "el sistema escala la masa a los que vayas a hacer.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+
+                // Vacío = todas: así no desaparece de ninguna planta hasta que se asigne.
+                if (plants.size > 1) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            "Plantas que la hacen",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        ChipRow {
+                            plants.forEach { plant ->
+                                BranchChip(plant.name, plant.id in branchIds) {
+                                    branchIds = if (plant.id in branchIds) branchIds - plant.id else branchIds + plant.id
+                                }
+                            }
+                        }
+                        Text(
+                            if (branchIds.isEmpty()) "Sin elegir: les sale a todas las plantas."
+                            else "Solo les sale a las plantas marcadas.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
 
                 Row(
@@ -317,76 +474,78 @@ private fun PreparationFormContent(
                     Switch(checked = active, onCheckedChange = { active = it })
                 }
 
-                HorizontalDivider()
+                if (!isBase) {
+                    HorizontalDivider()
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "Insumos por lote",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    OutlinedButton(onClick = { showPicker = true }) {
-                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Agregar")
-                    }
-                }
-
-                if (entries.isEmpty()) {
-                    Text(
-                        "Aún no hay insumos. Agrega los que lleva un lote estándar (ej. harina 10 lb).",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                } else {
-                    entries.forEach { entry ->
-                        IngredientEntryRow(
-                            entry = entry,
-                            onQuantityChange = { q ->
-                                entries = entries.map { if (it.id == entry.id) it.copy(quantity = q) else it }
-                            },
-                            onUnitChange = { u ->
-                                entries = entries.map { if (it.id == entry.id) it.copy(unit = u) else it }
-                            },
-                            onRemove = { entries = entries.filter { it.id != entry.id } }
-                        )
-                    }
-                }
-
-                // Peso total calculado (no editable)
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer
-                    )
-                ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
-                            Text(
-                                "Peso por lote (calculado)",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                        Text(
+                            "Insumos por lote",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        OutlinedButton(onClick = { showPicker = true }) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Agregar")
+                        }
+                    }
+
+                    if (entries.isEmpty()) {
+                        Text(
+                            "Aún no hay insumos. Agrega los que lleva un lote estándar (ej. harina 10 lb).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        entries.forEach { entry ->
+                            IngredientEntryRow(
+                                entry = entry,
+                                onQuantityChange = { q ->
+                                    entries = entries.map { if (it.id == entry.id) it.copy(quantity = q) else it }
+                                },
+                                onUnitChange = { u ->
+                                    entries = entries.map { if (it.id == entry.id) it.copy(unit = u) else it }
+                                },
+                                onRemove = { entries = entries.filter { it.id != entry.id } }
                             )
+                        }
+                    }
+
+                    // Peso total calculado (no editable)
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    "Peso por lote (calculado)",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                                Text(
+                                    "Suma de los insumos",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                            }
                             Text(
-                                "Suma de los insumos",
-                                style = MaterialTheme.typography.labelSmall,
+                                formatBatchWeight(totalGrams),
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSecondaryContainer
                             )
                         }
-                        Text(
-                            formatBatchWeight(totalGrams),
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer
-                        )
                     }
                 }
 

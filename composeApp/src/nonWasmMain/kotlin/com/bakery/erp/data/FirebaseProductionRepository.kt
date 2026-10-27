@@ -441,9 +441,19 @@ class FirebaseProductionRepository(
             val allocated = match.sourceOrderAllocations.find { it.orderId == orderId }
             val delta = allocated?.quantity ?: toRemove.requestedQuantity
             val remainingAllocations = match.sourceOrderAllocations.filter { it.orderId != orderId }
-            val newPlanned = (match.plannedQuantity - delta).coerceAtLeast(0.0)
-            val newProduced = (match.producedQuantity - delta).coerceAtLeast(0.0)
-            if (newPlanned <= 0.0) {
+            // Si la planta bajó el planeado a mano (2 cuando los pedidos suman 52), restar
+            // la porción entera lo dejaba en 0 y se borraba la línea con el pan de las demás
+            // sucursales adentro (19 oct 2026). Se resta como mucho hasta lo que piden los
+            // que quedan, y la línea solo se borra si ya no queda nadie en el desglose.
+            val remainingDemand = remainingAllocations.sumOf { it.quantity }
+            val newPlanned = maxOf(
+                match.plannedQuantity - delta,
+                minOf(match.plannedQuantity, remainingDemand)
+            ).coerceAtLeast(0.0)
+            val removed = match.plannedQuantity - newPlanned
+            val newProduced = (match.producedQuantity - removed).coerceAtLeast(0.0)
+            val nobodyLeft = remainingAllocations.isEmpty() && match.customerSpecs.isEmpty()
+            if (newPlanned <= 0.0 && nobodyLeft) {
                 // Sin demanda restante: eliminar la línea.
                 runCatching { lotLinesCol(companyId, lotId).document(match.id).delete() }
                 byProduct.remove(toRemove.productId)
@@ -737,6 +747,7 @@ class FirebaseProductionRepository(
             .map { it.toLot() }
             .firstOrNull {
                 it.status != ProductionLotStatus.CANCELLED &&
+                    !it.isForStock &&
                     it.producingBranchId == producingBranchId &&
                     it.shiftId == shiftId &&
                     Instant.fromEpochMilliseconds(it.productionDate).toLocalDateTime(tz).date == targetDay
@@ -754,6 +765,9 @@ class FirebaseProductionRepository(
             .map { it.toLot() }
             .filter {
                 it.status != ProductionLotStatus.CANCELLED &&
+                    // El lote para existencia no es "el lote del día": no tiene pedidos
+                    // ni notas, y contarlo bloquearía armar el de los pedidos.
+                    !it.isForStock &&
                     it.producingBranchId == producingBranchId &&
                     Instant.fromEpochMilliseconds(it.productionDate).toLocalDateTime(tz).date == targetDay
             }
@@ -1128,7 +1142,8 @@ class FirebaseProductionRepository(
         "lineCount" to lineCount,
         "sourceOrderIds" to sourceOrderIds,
         "isShiftSplit" to isShiftSplit,
-        "customerOrderIds" to customerOrderIds
+        "customerOrderIds" to customerOrderIds,
+        "isForStock" to isForStock
     )
 
     private fun ProductionLotLine.toLotLineMap(): Map<String, Any?> = firestoreSafeOf(
@@ -1166,6 +1181,7 @@ class FirebaseProductionRepository(
         "decoGramsPerUnit" to decorationsSnapshot.map { it.gramsPerUnit },
         "decoBatchIds" to decorationsSnapshot.map { it.batchId },
         "decoBatchNames" to decorationsSnapshot.map { it.batchName },
+        "decoUnitsPerProduct" to decorationsSnapshot.map { it.unitsPerProduct },
         "doughFillingRecipeIds" to doughFillingsSnapshot.map { it.recipeId },
         "doughFillingRecipeNames" to doughFillingsSnapshot.map { it.recipeName },
         "doughFillingRawWeightGrams" to doughFillingsSnapshot.map { it.rawWeightGrams },
@@ -1208,7 +1224,8 @@ class FirebaseProductionRepository(
         lineCount = runCatching { get<Long?>("lineCount")?.toInt() }.getOrNull() ?: 0,
         sourceOrderIds = runCatching { get<List<String>?>("sourceOrderIds") }.getOrNull() ?: emptyList(),
         isShiftSplit = runCatching { get<Boolean?>("isShiftSplit") }.getOrNull() ?: false,
-        customerOrderIds = runCatching { get<List<String>?>("customerOrderIds") }.getOrNull() ?: emptyList()
+        customerOrderIds = runCatching { get<List<String>?>("customerOrderIds") }.getOrNull() ?: emptyList(),
+        isForStock = runCatching { get<Boolean?>("isForStock") }.getOrNull() ?: false
     )
 
     private fun DocumentSnapshot.toLotLine() = ProductionLotLine(
@@ -1244,6 +1261,7 @@ class FirebaseProductionRepository(
             val gramsPerUnit = get<List<Double>?>("decoGramsPerUnit") ?: emptyList()
             val batchIds = get<List<String>?>("decoBatchIds") ?: emptyList()
             val batchNames = get<List<String>?>("decoBatchNames") ?: emptyList()
+            val unitsPerProduct = runCatching { get<List<Double>?>("decoUnitsPerProduct") }.getOrNull() ?: emptyList()
             preparationIds.indices.map { i ->
                 ProductionLotDecoration(
                     preparationId = preparationIds[i],
@@ -1252,7 +1270,8 @@ class FirebaseProductionRepository(
                     ingredientName = ingredientNames.getOrElse(i) { "" },
                     gramsPerUnit = gramsPerUnit.getOrElse(i) { 0.0 },
                     batchId = batchIds.getOrElse(i) { "" },
-                    batchName = batchNames.getOrElse(i) { "" }
+                    batchName = batchNames.getOrElse(i) { "" },
+                    unitsPerProduct = unitsPerProduct.getOrElse(i) { 0.0 }
                 )
             }
         }.getOrElse { emptyList() },

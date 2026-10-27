@@ -97,13 +97,15 @@ fun PaymentDialog(
     deposits: List<com.bakery.erp.model.CustomerDeposit>? = null,
     onDepositChange: (com.bakery.erp.model.CustomerDeposit?) -> Unit = {},
     /** Mínimo y recargo de la tarjeta (de la empresa). Por defecto, ninguno. */
-    cardRules: com.bakery.erp.model.CardPaymentRules = com.bakery.erp.model.CardPaymentRules()
+    cardRules: com.bakery.erp.model.CardPaymentRules = com.bakery.erp.model.CardPaymentRules(),
+    /** Método marcado al abrir: el que trae la cuenta del restaurante, para que solo se confirme. */
+    initialMethod: String = SalePaymentMethod.CASH
 ) {
     val invoiceForm = remember { InvoiceFormState(invoiceOptions?.defaultOn == true) }
     var discountAccount by remember { mutableStateOf<com.bakery.erp.model.CreditAccount?>(null) }
     var discountPickerOpen by remember { mutableStateOf(false) }
     val baseTotal = total
-    var method by remember { mutableStateOf(SalePaymentMethod.CASH) }
+    var method by remember { mutableStateOf(initialMethod) }
     // Pago dividido: se teclea lo de tarjeta/transferencia y el efectivo es lo que falta.
     var splitMode by remember { mutableStateOf(false) }
     var cardText by remember { mutableStateOf("") }

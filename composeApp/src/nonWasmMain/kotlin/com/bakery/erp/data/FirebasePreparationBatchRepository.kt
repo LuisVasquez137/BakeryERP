@@ -3,6 +3,8 @@ package com.bakery.erp.data
 import com.bakery.erp.domain.PreparationBatchRepository
 import com.bakery.erp.model.PreparationBatch
 import com.bakery.erp.model.PreparationBatchStatus
+import com.bakery.erp.model.UNIT_EPSILON
+import com.bakery.erp.model.fifoUnitTakes
 import dev.gitlive.firebase.firestore.DocumentSnapshot
 import dev.gitlive.firebase.firestore.FirebaseFirestore
 import dev.gitlive.firebase.firestore.Timestamp
@@ -50,7 +52,7 @@ class FirebasePreparationBatchRepository(
             .filter {
                 it.branchId == branchId &&
                     it.status == PreparationBatchStatus.ACTIVE &&
-                    it.remainingWeightGrams > 0.0 &&
+                    (it.remainingWeightGrams > 0.0 || it.remainingUnits > 0.0) &&
                     (preparationId == null || it.preparationId == preparationId)
             }
             .sortedBy { it.producedAt }
@@ -95,6 +97,32 @@ class FirebasePreparationBatchRepository(
         )
     }
 
+    override suspend fun consumeUnits(
+        companyId: String,
+        branchId: String,
+        preparationId: String,
+        units: Double
+    ): Double {
+        if (units <= 0.0) return 0.0
+        val (takes, uncovered) = fifoUnitTakes(listActiveBatches(companyId, branchId, preparationId), units)
+        val now = Clock.System.now().toEpochMilliseconds()
+        for (take in takes) {
+            // Cada lote se relee justo antes de escribir: entre la lista y acá otro lote de
+            // pasteles pudo haber sacado del mismo.
+            val batch = getBatch(companyId, take.batchId) ?: continue
+            val left = (batch.remainingUnits - take.units).let { if (it <= UNIT_EPSILON) 0.0 else it }
+            updateBatch(
+                companyId,
+                batch.copy(
+                    remainingUnits = left,
+                    status = if (left <= 0.0) PreparationBatchStatus.DEPLETED else batch.status,
+                    updatedAt = now
+                )
+            )
+        }
+        return uncovered
+    }
+
     // ── Serialización ────────────────────────────────────────────────────────
 
     private fun PreparationBatch.toMap(): Map<String, Any?> = firestoreSafeOf(
@@ -110,6 +138,10 @@ class FirebasePreparationBatchRepository(
         "producedByUserId" to producedByUserId,
         "producedByUserName" to producedByUserName,
         "producedAt" to producedAt,
+        "producedUnits" to producedUnits,
+        "remainingUnits" to remainingUnits,
+        "batterGramsPerUnit" to batterGramsPerUnit,
+        "bakeId" to bakeId,
         "createdAt" to if (createdAt == 0L) Clock.System.now().toEpochMilliseconds() else createdAt,
         "updatedAt" to Clock.System.now().toEpochMilliseconds()
     )
@@ -127,9 +159,18 @@ class FirebasePreparationBatchRepository(
         producedByUserId = get<String?>("producedByUserId") ?: "",
         producedByUserName = get<String?>("producedByUserName") ?: "",
         producedAt = readTimestampAsMillis("producedAt"),
+        producedUnits = readNumber("producedUnits"),
+        remainingUnits = readNumber("remainingUnits"),
+        batterGramsPerUnit = readNumber("batterGramsPerUnit"),
+        bakeId = runCatching { get<String?>("bakeId") }.getOrNull() ?: "",
         createdAt = readTimestampAsMillis("createdAt"),
         updatedAt = readTimestampAsMillis("updatedAt")
     )
+
+    private fun DocumentSnapshot.readNumber(field: String): Double =
+        runCatching { get<Double?>(field) }.getOrNull()
+            ?: runCatching { get<Long?>(field)?.toDouble() }.getOrNull()
+            ?: 0.0
 
     private fun DocumentSnapshot.readTimestampAsMillis(field: String): Long =
         runCatching { get<Timestamp?>(field)?.toMilliseconds()?.toLong() }.getOrNull()

@@ -97,6 +97,13 @@ interface AuthRepository {
         usesServices: Boolean
     ): Result<Unit>
 
+    /** Opciones de producción de la empresa. Ver `Organization.usesMadeForStock`. */
+    suspend fun setProductionOptions(
+        orgId: String,
+        usesMadeForStock: Boolean,
+        usesBakedAhead: Boolean
+    ): Result<Unit>
+
     /** Regenera el código de invitación de la organización. Invalida el código viejo. */
     suspend fun regenerateInviteCode(orgId: String): Result<String>
 }

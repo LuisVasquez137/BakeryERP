@@ -265,7 +265,9 @@ class FirebaseAuthRepository(
             // secciones nuevas en la captura hasta que las pida.
             usesResalePurchases = runCatching { doc.get<Boolean?>("usesResalePurchases") }.getOrNull() ?: false,
             usesSupplyPurchases = runCatching { doc.get<Boolean?>("usesSupplyPurchases") }.getOrNull() ?: false,
-            usesServicePurchases = runCatching { doc.get<Boolean?>("usesServicePurchases") }.getOrNull() ?: false
+            usesServicePurchases = runCatching { doc.get<Boolean?>("usesServicePurchases") }.getOrNull() ?: false,
+            usesMadeForStock = runCatching { doc.get<Boolean?>("usesMadeForStock") }.getOrNull() ?: false,
+            usesBakedAhead = runCatching { doc.get<Boolean?>("usesBakedAhead") }.getOrNull() ?: false
         )
     }
 
@@ -385,6 +387,17 @@ class FirebaseAuthRepository(
             "usesResalePurchases" to usesResale,
             "usesSupplyPurchases" to usesSupplies,
             "usesServicePurchases" to usesServices
+        )
+    }
+
+    override suspend fun setProductionOptions(
+        orgId: String,
+        usesMadeForStock: Boolean,
+        usesBakedAhead: Boolean
+    ): Result<Unit> = runCatching {
+        orgsCol().document(orgId).update(
+            "usesMadeForStock" to usesMadeForStock,
+            "usesBakedAhead" to usesBakedAhead
         )
     }
 

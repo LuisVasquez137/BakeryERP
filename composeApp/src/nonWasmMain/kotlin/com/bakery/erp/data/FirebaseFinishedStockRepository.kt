@@ -9,6 +9,9 @@ import com.bakery.erp.model.FinishedMovementType
 import com.bakery.erp.model.FinishedProductStock
 import com.bakery.erp.model.FinishedStockMovement
 import com.bakery.erp.model.PortioningRequest
+import com.bakery.erp.model.TransformationRequest
+import com.bakery.erp.model.transformationError
+import com.bakery.erp.model.transformationMovements
 import com.bakery.erp.model.finishedStockDocId
 import com.bakery.erp.model.portioningError
 import com.bakery.erp.model.portioningMovements
@@ -132,6 +135,19 @@ class FirebaseFinishedStockRepository(
         // En serie: applyMovement lee-modifica-escribe, y el orden importa (ver portioningMovements).
         portioningMovements(request, wholeStock!!, referenceId).forEach { applyMovement(companyId, it) }
         return request.totalPortions
+    }
+
+    override suspend fun applyTransformation(
+        companyId: String,
+        request: TransformationRequest,
+        extrasCost: Double
+    ): String {
+        val sourceStock = getStock(companyId, request.branchId, request.product.transformFromProductId)
+        transformationError(request, sourceStock)?.let { throw IllegalStateException(it) }
+        val referenceId = movementsCol(companyId).document.id
+        // En serie, primero sale el original (ver transformationMovements).
+        transformationMovements(request, sourceStock!!, extrasCost, referenceId).forEach { applyMovement(companyId, it) }
+        return referenceId
     }
 
     override suspend fun aggregateMovementsInRange(

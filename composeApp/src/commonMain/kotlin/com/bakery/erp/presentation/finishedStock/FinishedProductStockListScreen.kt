@@ -69,7 +69,9 @@ import com.bakery.erp.ui.theme.BrandColors.Primary as DeepSeaBlue
 import com.bakery.erp.ui.theme.BrandColors.Ivory as WarmIvory
 import com.bakery.erp.ui.theme.BrandColors.Accent as BurntOrange
 import com.bakery.erp.ui.theme.BrandColors
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCut
+import androidx.compose.material.icons.filled.Transform
 
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -93,6 +95,11 @@ fun FinishedProductStockListScreen(
             it.hasPermission(Permission.COUNT_FINISHED_STOCK)
     } == true
     var portioningOpen by rememberSaveable { mutableStateOf(false) }
+    // Transformar (molde → tostado) es trabajo de planta: la encargada o quien maneja lotes.
+    val canTransform = authState.usesMadeForStock && user?.let {
+        it.hasPermission(Permission.MANAGE_FINISHED_STOCK) || it.hasPermission(Permission.MANAGE_PRODUCTION_LOTS)
+    } == true
+    var transformOpen by rememberSaveable { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     var search by rememberSaveable { mutableStateOf("") }
     // "" = todos, "PAN" = producido en planta, "REVENTA". Solo se ofrece si hay reventa: un
@@ -108,6 +115,7 @@ fun FinishedProductStockListScreen(
     LaunchedEffect(state.notice) {
         state.notice?.let {
             portioningOpen = false
+            transformOpen = false
             viewModel.clearNotice()
             snackbarHostState.showSnackbar(it)
         }
@@ -143,6 +151,18 @@ fun FinishedProductStockListScreen(
                     }
                 },
                 actions = {
+                    // Conteo inicial de lo que no aparece en la lista: el pan de planta solo sale
+                    // aquí después de su primer despacho a la sucursal.
+                    if (canAdjust && state.selectedBranchId.isNotEmpty()) {
+                        IconButton(onClick = { onNavigateToAdjust(state.selectedBranchId, null) }) {
+                            Icon(Icons.Default.Add, contentDescription = "Agregar producto")
+                        }
+                    }
+                    if (canTransform && state.transformProducts.isNotEmpty()) {
+                        IconButton(onClick = { transformOpen = true }) {
+                            Icon(Icons.Default.Transform, contentDescription = "Transformar")
+                        }
+                    }
                     if (canPortion && state.portionProducts.isNotEmpty()) {
                         IconButton(onClick = { portioningOpen = true }) {
                             Icon(Icons.Default.ContentCut, contentDescription = "Porcionar pastel")
@@ -285,6 +305,19 @@ fun FinishedProductStockListScreen(
         }
     }
     LoadingOverlay(visible = state.isLoading)
+    }
+
+    if (transformOpen && user != null) {
+        val stockById = remember(state.rows) { state.rows.associate { it.productId to it.currentStock } }
+        TransformDialog(
+            products = state.transformProducts,
+            stockOf = { stockById[it] ?: 0.0 },
+            isBusy = state.isTransforming,
+            onDismiss = { transformOpen = false },
+            onConfirm = { product, used, produced, note ->
+                viewModel.transform(companyId, product, used, produced, note, user)
+            }
+        )
     }
 
     if (portioningOpen && user != null) {

@@ -29,6 +29,14 @@ data class Recipe(
      * una sola para todos los panes que salen de esa masa.
      */
     val kneadingTimeSeconds: Int = 0,
+    /**
+     * Receta por tanda ([inputMode] = `BATCH`, ver `model/BatchRecipe.kt`): piezas que salen de
+     * una tanda (35 pedazos de torta). Siempre se hace entera. Las cantidades de los componentes
+     * son las de una tanda, en [RecipeComponent.inputQuantity].
+     */
+    val batchYield: Double = 0.0,
+    /** Cómo se llama la tanda ("bandeja"). Vacío = "tanda". */
+    val batchUnitName: String = "",
     val active: Boolean = true,
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L,

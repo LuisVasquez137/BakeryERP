@@ -77,6 +77,8 @@ fun OrganizationSettingsScreen(
     var showRegenerateDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(orgId) { viewModel.loadOrganization(orgId) }
+    // Las demás pantallas leen las opciones de producción de la sesión: que vean el cambio ya.
+    LaunchedEffect(state.organization) { state.organization?.let(authViewModel::applyOrganization) }
     LaunchedEffect(state.rebuildMessage) {
         state.rebuildMessage?.let {
             snackbarHostState.showSnackbar(it)
@@ -273,6 +275,59 @@ fun OrganizationSettingsScreen(
                                         Switch(
                                             checked = enabled,
                                             onCheckedChange = { viewModel.setPurchaseFlow(orgId, flow, it) },
+                                            enabled = !state.isSaving,
+                                            colors = SwitchDefaults.colors(checkedTrackColor = BrandColors.Primary)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // ── Formas de trabajar en producción ───────────────
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Column(Modifier.padding(16.dp)) {
+                                Text(
+                                    "Producción",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = PrimaryBlue,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    "Enciende solo lo que tu panadería hace. Apagado, esas " +
+                                        "opciones no aparecen en productos, traslados ni lotes.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MutedText
+                                )
+                                Spacer(Modifier.size(10.dp))
+                                ProductionOptionSetting.entries.forEach { option ->
+                                    val enabled = when (option) {
+                                        ProductionOptionSetting.MADE_FOR_STOCK -> org.usesMadeForStock
+                                        ProductionOptionSetting.BAKED_AHEAD -> org.usesBakedAhead
+                                    }
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                option.title,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = PrimaryBlue,
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                            Text(
+                                                if (enabled) option.on else option.off,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MutedText
+                                            )
+                                        }
+                                        Switch(
+                                            checked = enabled,
+                                            onCheckedChange = { viewModel.setProductionOption(orgId, option, it) },
                                             enabled = !state.isSaving,
                                             colors = SwitchDefaults.colors(checkedTrackColor = BrandColors.Primary)
                                         )

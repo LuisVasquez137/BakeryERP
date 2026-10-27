@@ -48,6 +48,14 @@ data class ProductionLot(
      * queries `where-in` específicas por canal.
      */
     val customerOrderIds: List<String> = emptyList(),
+    /**
+     * Lote para existencia: sin pedidos de sucursal, lo que sale bueno entra completo al
+     * stock terminado de la planta (pan molde, rosca). Ver [plantIngestQuantity].
+     *
+     * No cuenta como "el lote del día": las búsquedas por planta+día lo excluyen, así que
+     * no le bloquea a la encargada armar el lote de los pedidos ni el reparto por turnos.
+     */
+    val isForStock: Boolean = false,
     val lines: List<ProductionLotLine> = emptyList()
 )
 

@@ -12,6 +12,7 @@ import com.bakery.erp.model.OperatorSession
 import com.bakery.erp.model.canEnter
 import com.bakery.erp.model.effectiveUser
 import com.bakery.erp.model.requiresOperator
+import com.bakery.erp.model.Organization
 import com.bakery.erp.model.User
 import com.bakery.erp.model.UserRole
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,6 +38,9 @@ data class AuthUiState(
     val needsResellerSetup: Boolean = false,
     val inviteCode: String? = null,
     val orgName: String? = null,
+    /** Opciones de producción de la empresa (ver `Organization`); apagadas hasta que cargue. */
+    val usesMadeForStock: Boolean = false,
+    val usesBakedAhead: Boolean = false,
     /**
      * La cuenta tal como está en Firestore. En un equipo de sucursal, [user] es la mezcla
      * de esta cuenta con la persona identificada ([operator]); la pantalla de PIN y la
@@ -99,6 +103,8 @@ class AuthViewModel(
                             needsResellerSetup = false,
                             inviteCode = null,
                             orgName = null,
+                            usesMadeForStock = false,
+                            usesBakedAhead = false,
                             error = null
                         )
                     }
@@ -399,7 +405,14 @@ class AuthViewModel(
     private fun loadOrgName(orgId: String) {
         viewModelScope.launch {
             repository.getOrganization(orgId)
-                .onSuccess { org -> _uiState.update { it.copy(orgName = org.name) } }
+                .onSuccess { org -> applyOrganization(org) }
+        }
+    }
+
+    /** Ajustes lo llama al cambiar una opción, para que las demás pantallas la vean ya. */
+    fun applyOrganization(org: Organization) {
+        _uiState.update {
+            it.copy(orgName = org.name, usesMadeForStock = org.usesMadeForStock, usesBakedAhead = org.usesBakedAhead)
         }
     }
 }

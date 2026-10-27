@@ -22,7 +22,7 @@ import com.bakery.erp.model.orderAdjustmentProblem
 import com.bakery.erp.model.tripLabel
 import com.bakery.erp.model.tripMismatchFor
 import com.bakery.erp.ui.theme.BrandColors
-import com.bakery.erp.model.isPortion
+import com.bakery.erp.model.isOrderedFromPlant
 
 /** Producto que se puede ajustar: lo que la sucursal ya pidió, o cualquiera del catálogo. */
 private data class AdjustableProduct(
@@ -56,7 +56,7 @@ fun OrderAdjustmentDialog(
         }
         val ids = inOrder.map { it.id }.toSet()
         val others = productsById.values
-            .filter { it.active && it.isInHouseProduced && !it.isPortion && it.id !in ids }
+            .filter { it.active && it.isInHouseProduced && it.isOrderedFromPlant && it.id !in ids }
             .map { AdjustableProduct(it.id, it.name, it.unit, 0.0) }
         inOrder.sortedBy { it.name.lowercase() } + others.sortedBy { it.name.lowercase() }
     }

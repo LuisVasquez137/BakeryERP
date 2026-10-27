@@ -216,7 +216,7 @@ val appModule = module {
     single { ProductionViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { NotificationViewModel(get(), get()) }
     single { DispatchViewModel(get(), get(), get(), get(), get(), get()) }
-    single { DeliveryViewModel(get(), get(), get(), get(), get(), get()) }
+    single { DeliveryViewModel(get(), get(), get(), get(), get(), get(), get()) }
     single { FinishedStockViewModel(get(), get(), get(), get()) }
     single { SupplierViewModel(get(), get()) }
     single { RecipeViewModel(get(), get()) }
@@ -228,8 +228,9 @@ val appModule = module {
     single { com.bakery.erp.presentation.operator.OperatorLockViewModel(get(), get()) }
     single { JobPositionViewModel(get()) }
     single { UserViewModel(get()) }
-    single { PreparationViewModel(get()) }
+    single { PreparationViewModel(get(), get()) }
     single { PreparationBatchViewModel(get(), get(), get(), get()) }
+    single { com.bakery.erp.presentation.preparationbatches.BakeSheetViewModel(get(), get(), get(), get(), get(), get()) }
     single { FixedAssetViewModel(get(), get(), get()) }
     single { POSViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single<com.bakery.erp.domain.CashAuditRepository> { com.bakery.erp.data.FirebaseCashAuditRepository(get()) }
@@ -244,7 +245,7 @@ val appModule = module {
     single { BreadCountViewModel(get(), get()) }
     single { DailyCashCloseViewModel(get(), get(), get(), get()) }
     single { SpotCashCheckViewModel(get(), get(), get()) }
-    single { HomeViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    single { HomeViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { SalesReportViewModel(get(), get()) }
     single { ProductionReportViewModel(get(), get(), get(), get()) }
     single { FinancialReportViewModel(get(), get(), get(), get(), get(), get(), get()) }

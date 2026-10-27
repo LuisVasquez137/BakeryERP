@@ -8,6 +8,9 @@ import com.bakery.erp.domain.DeliveryRepository
 import com.bakery.erp.domain.DispatchRepository
 import com.bakery.erp.domain.FixedAssetRepository
 import com.bakery.erp.domain.ProductionRepository
+import com.bakery.erp.domain.StockTransferRepository
+import com.bakery.erp.model.StockTransfer
+import com.bakery.erp.model.transfersForTrip
 import com.bakery.erp.model.AssetStatus
 import com.bakery.erp.model.ChainLine
 import com.bakery.erp.model.ChainSummary
@@ -92,7 +95,14 @@ data class DeliveryUiState(
     val boardMessage: String? = null,
     /** La cadena de una entrega abierta por el dueño (ver model/UnitChain.kt). */
     val noteChain: NoteChain? = null,
-    val isChainLoading: Boolean = false
+    val isChainLoading: Boolean = false,
+    /**
+     * Pedidos entre sucursales que van en el camión del día (pan molde, pan tostado). Ver
+     * "Pedido de la sucursal" en model/StockTransfer.kt.
+     */
+    val boardTransfers: List<StockTransfer> = emptyList(),
+    /** Los mismos, de la hoja abierta: lo que el repartidor recoge y lleva además de las notas. */
+    val transfersForSelectedRun: List<StockTransfer> = emptyList()
 )
 
 /** Una entrega con sus eslabones y quién estaba en cada uno. */
@@ -114,13 +124,17 @@ data class DispatchSheetState(
     val suggestedVehicleId: String
 )
 
+/** Cuántos días atrás se buscan los pedidos del día: se piden y envían con anticipación. */
+private const val TRANSFER_LOOKBACK_MS = 3L * 24 * 60 * 60 * 1000
+
 class DeliveryViewModel(
     private val repository: DeliveryRepository,
     private val dispatchRepository: DispatchRepository,
     private val authRepository: AuthRepository,
     private val fixedAssetRepository: FixedAssetRepository,
     private val branchRepository: BranchRepository,
-    private val productionRepository: ProductionRepository
+    private val productionRepository: ProductionRepository,
+    private val stockTransferRepository: StockTransferRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(DeliveryUiState())
@@ -185,11 +199,15 @@ class DeliveryViewModel(
             }
             combine(
                 dispatchRepository.observeNotes(companyId, from, until),
-                repository.observeRuns(companyId, from, until)
-            ) { notes, runs -> notes to runs }
+                repository.observeRuns(companyId, from, until),
+                // Un pedido para hoy se pudo enviar anoche: se buscan unos días atrás y se filtra por el día pedido.
+                stockTransferRepository.observeForBranches(companyId, emptyList(), from - TRANSFER_LOOKBACK_MS)
+            ) { notes, runs, transfers ->
+                Triple(notes, runs, transfers.filter { it.ridesDelivery && it.forDate in from until until })
+            }
                 .catch { e -> _uiState.update { it.copy(isBoardLoading = false, error = e.message) } }
-                .collect { (notes, runs) ->
-                    _uiState.update { it.copy(boardNotes = notes, runs = runs, isBoardLoading = false) }
+                .collect { (notes, runs, transfers) ->
+                    _uiState.update { it.copy(boardNotes = notes, runs = runs, boardTransfers = transfers, isBoardLoading = false) }
                     loadPlantDataIfNeeded(companyId, notes.map { it.originBranchId }.toSet())
                 }
         }
@@ -481,15 +499,33 @@ class DeliveryViewModel(
                 val run = repository.getRun(companyId, runId)
                 val noteIds = run?.dispatchNoteIds ?: emptyList()
                 val notes = noteIds.mapNotNull { dispatchRepository.getNote(companyId, it) }
-                run to notes
-            }.onSuccess { (run, notes) ->
+                Triple(run, notes, run?.let { transfersOfRun(companyId, it) }.orEmpty())
+            }.onSuccess { (run, notes, transfers) ->
                 _uiState.update {
-                    it.copy(isDetailLoading = false, selectedRun = run, notesForSelectedRun = notes)
+                    it.copy(isDetailLoading = false, selectedRun = run, notesForSelectedRun = notes,
+                        transfersForSelectedRun = transfers)
                 }
             }.onFailure { err ->
                 _uiState.update { it.copy(isDetailLoading = false, error = err.message) }
             }
         }
+    }
+
+    /**
+     * Pedidos entre sucursales que van en el mismo camión, día y viaje que [run]: lo que se
+     * recoge en Calvario y lo que sale de la planta. La hoja no los guarda: se deducen del
+     * pedido (día + viaje + quién lo lleva), así enviarlo tarde no obliga a rehacer la hoja.
+     */
+    private suspend fun transfersOfRun(companyId: String, run: DeliveryRun): List<StockTransfer> {
+        if (run.trip == 0 || run.plannedDate <= 0L) return emptyList()
+        val branches = _uiState.value.boardBranches.values.ifEmpty {
+            runCatching { branchRepository.getBranches(companyId) }.getOrElse { emptyList() }
+        }
+        val (from, until) = dayBounds(run.plannedDate)
+        val all = runCatching {
+            stockTransferRepository.getForBranches(companyId, emptyList(), from - TRANSFER_LOOKBACK_MS, until)
+        }.getOrElse { emptyList() }
+        return transfersForTrip(all, branches, run.originBranchId, run.trip, from, until)
     }
 
     fun saveRun(

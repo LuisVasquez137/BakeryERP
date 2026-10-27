@@ -61,6 +61,7 @@ import com.bakery.erp.ui.LoadingOverlay
 import com.bakery.erp.ui.LocationResult
 import com.bakery.erp.ui.rememberLocationRequester
 import com.bakery.erp.util.formatBakerWeight
+import com.bakery.erp.util.fmtTrim
 import bakeryerp.composeapp.generated.resources.Res
 import bakeryerp.composeapp.generated.resources.rain_icon
 import org.jetbrains.compose.resources.painterResource
@@ -74,6 +75,8 @@ import kotlinx.datetime.toLocalDateTime
 import kotlin.math.roundToInt
 import com.bakery.erp.ui.theme.BrandColors
 import com.bakery.erp.model.isPortion
+import com.bakery.erp.model.isOrderableIn
+import com.bakery.erp.model.StockOrderInfo
 
 /** Estado del permiso de ubicación al crear un pedido — ver
  *  [com.bakery.erp.model.Branch.latitude] / `LocationRequester`. Puramente de
@@ -87,6 +90,8 @@ fun ProductionOrderFormScreen(
     orderId: String? = null,
     onNavigateBack: () -> Unit,
     onNavigateToEditOrder: (String) -> Unit = {},
+    /** Pedido duplicado que ya está en un lote: se abre su detalle en vez del form. */
+    onNavigateToOrderDetail: (String) -> Unit = {},
     /** Se llama si la encargada niega el permiso de ubicación al crear un
      *  pedido para una sucursal sin coordenadas — ver [LocationGateState]. */
     onLocationDenied: () -> Unit = {},
@@ -266,16 +271,33 @@ fun ProductionOrderFormScreen(
                                      else selectedProducingBranch?.id.orEmpty()
     val producingBranchForFilter = state.producingBranches.find { it.id == producingBranchIdForFilter }
         ?: selectedProducingBranch
-    val displayProducts = remember(productState.productList, searchQuery, producingBranchForFilter) {
+    val sellingBranchIdForFilter = if (isEdit) state.selectedOrder?.sellingBranchId.orEmpty()
+                                   else selectedSellingBranchId.orEmpty()
+    val displayProducts = remember(productState.productList, searchQuery, producingBranchForFilter, sellingBranchIdForFilter) {
         val base = producingBranchForFilter
             ?.assignedProductIds
             ?.takeIf { it.isNotEmpty() }
             ?.let { ids -> productState.productList.filter { it.id in ids } }
             ?: productState.productList
         // La porción de pastel se corta en la tienda; a planta se le pide el entero.
+        // Lo que se hace para existencia (pan molde) solo lo pide la planta a sí misma;
+        // las demás sucursales lo piden por traslado.
         base.filter {
-            it.active && !it.isPortion && (searchQuery.isEmpty() || it.name.contains(searchQuery, ignoreCase = true))
+            it.active && it.isOrderableIn(sellingBranchIdForFilter, producingBranchIdForFilter) &&
+                (searchQuery.isEmpty() || it.name.contains(searchQuery, ignoreCase = true))
         }.sortedBy { it.name }
+    }
+    // Saldo y mínimo de lo que se hace para existencia, para su fila.
+    // Sin la búsqueda: escribir en el buscador no debe volver a leer el saldo.
+    val stockProductsInForm = remember(productState.productList, producingBranchForFilter, sellingBranchIdForFilter) {
+        val assigned = producingBranchForFilter?.assignedProductIds.orEmpty().toSet()
+        productState.productList.filter {
+            it.active && it.isMadeForStock && it.id in assigned &&
+                it.isOrderableIn(sellingBranchIdForFilter, producingBranchIdForFilter)
+        }
+    }
+    LaunchedEffect(companyId, producingBranchIdForFilter, stockProductsInForm.map { it.id }) {
+        if (companyId.isNotEmpty()) viewModel.loadStockOrderInfo(companyId, producingBranchIdForFilter, stockProductsInForm)
     }
 
     // Sucursal sin coordenadas guardadas: pedir el permiso de ubicación del
@@ -430,18 +452,26 @@ fun ProductionOrderFormScreen(
     }
 
     // Dialog de conflicto de pedido pendiente duplicado.
-    // No se permite crear duplicados; el usuario solo puede editar el existente o cancelar.
+    // No se permite crear duplicados; el usuario solo puede ir al existente (editarlo o
+    // cancelarlo). Si ya está en un lote se abre su detalle: ahí la planta lo ajusta.
     state.pendingOrderConflict?.let { existing ->
+        val inLot = state.pendingOrderConflictInLot
         AlertDialog(
             onDismissRequest = { viewModel.clearPendingOrderConflict() },
-            title = { Text("Ya existe un pedido pendiente") },
+            title = { Text("Ya enviaste este pedido") },
             text = {
                 Text(
-                    "Ya tienes un pedido pendiente para ${existing.sellingBranchName} → " +
-                        "${existing.producingBranchName} el ${formatDate(existing.requestedDate)}" +
+                    "Ya hay un pedido de ${existing.sellingBranchName} → " +
+                        "${existing.producingBranchName} para el ${formatDate(existing.requestedDate)}" +
                         (if (existing.shiftName.isNotBlank()) " (turno ${existing.shiftName})" else "") +
-                        ". No puedes crear otro para la misma combinación: edita el existente o " +
-                        "cancélalo primero."
+                        ", enviado por ${existing.createdByUserName.ifBlank { "otra persona" }}. " +
+                        "No se puede hacer otro: " +
+                        if (inLot) {
+                            "la planta ya lo tiene en producción. Si hay que agregar o quitar pan, " +
+                                "pídeselo a la planta para que use \"Ajustar pedido\"."
+                        } else {
+                            "modifica el que ya está o cancélalo."
+                        }
                 )
             },
             confirmButton = {
@@ -449,8 +479,8 @@ fun ProductionOrderFormScreen(
                     val id = existing.id
                     viewModel.clearPendingOrderConflict()
                     viewModel.resetOrderForm()
-                    onNavigateToEditOrder(id)
-                }) { Text("Editar el existente", fontWeight = FontWeight.Bold) }
+                    if (inLot) onNavigateToOrderDetail(id) else onNavigateToEditOrder(id)
+                }) { Text(if (inLot) "Ver el pedido" else "Modificar el pedido", fontWeight = FontWeight.Bold) }
             },
             dismissButton = {
                 TextButton(onClick = { viewModel.clearPendingOrderConflict() }) {
@@ -611,6 +641,7 @@ fun ProductionOrderFormScreen(
                 isLoading = state.isLoading,
                 rainExtraUnitsByProduct = state.rainExtraUnitsByProduct,
                 expectedQuantityByProduct = state.expectedQuantityByProduct,
+                stockOrderInfoByProduct = state.stockOrderInfoByProductId,
                 onAddSpecial = { editingSpecialLine = null; specialDialogOpen = true },
                 onEditSpecial = { line -> editingSpecialLine = line; specialDialogOpen = true },
                 onRemoveSpecial = { productId -> viewModel.removeDraftOrderLine(productId) },
@@ -1034,6 +1065,8 @@ private fun OrderFormStep2(
     rainExtraUnitsByProduct: Map<String, Int> = emptyMap(),
     /** `productId` → cantidad típica histórica, para el aviso de cantidad inusual por línea. */
     expectedQuantityByProduct: Map<String, Double> = emptyMap(),
+    /** `productId` → saldo y mínimo de lo que la planta hace para existencia. */
+    stockOrderInfoByProduct: Map<String, StockOrderInfo> = emptyMap(),
     /** Abre el diálogo de alta de un pedido especial (pan fuera de catálogo). */
     onAddSpecial: () -> Unit = {},
     onEditSpecial: (ProductionOrderLine) -> Unit = {},
@@ -1196,6 +1229,7 @@ private fun OrderFormStep2(
                                 quantity = existingLine?.requestedQuantity ?: 0.0,
                                 expectedQuantity = expectedQuantityByProduct[product.id],
                                 rainExtraUnits = rainExtraUnitsByProduct[product.id] ?: 0,
+                                stockInfo = stockOrderInfoByProduct[product.id],
                                 isLast = product.id == lastProductId,
                                 onImeNext = {
                                     // El teclado avanza al campo de abajo en vez de cerrarse.
@@ -1739,6 +1773,8 @@ private fun ProductOrderRow(
     expectedQuantity: Double? = null,
     /** Unidades de más (de las ya sugeridas) por el ajuste de lluvia — 0 = no aplica a este producto. */
     rainExtraUnits: Int = 0,
+    /** Solo en lo que la planta hace para existencia: saldo y mínimo. */
+    stockInfo: StockOrderInfo? = null,
     /** Último producto de la lista: el teclado muestra "Listo" en vez de "Siguiente". */
     isLast: Boolean = false,
     onImeNext: () -> Unit = {},
@@ -1775,6 +1811,16 @@ private fun ProductOrderRow(
                 Column(Modifier.weight(1f)) {
                     Text(product.name, fontWeight = FontWeight.SemiBold, color = BrandColors.Primary)
                     Text(product.unit, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                    if (stockInfo != null) {
+                        val low = stockInfo.minimum > 0.0 && stockInfo.onHand < stockInfo.minimum
+                        Text(
+                            "Hay ${stockInfo.onHand.fmtTrim(1)}" +
+                                (if (stockInfo.minimum > 0.0) " · mínimo ${stockInfo.minimum.fmtTrim(1)}" else ""),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (low) BrandColors.AccentDeep else BrandColors.MutedSlate
+                        )
+                    }
                     if (rainExtraUnits > 0) {
                         Text(
                             "Te recomendamos aumentar $rainExtraUnits" +

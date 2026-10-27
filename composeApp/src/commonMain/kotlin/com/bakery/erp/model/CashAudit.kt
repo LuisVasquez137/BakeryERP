@@ -54,6 +54,11 @@ object CashAuditEventType {
      * [CashAuditEvent.countedCash] y la diferencia en [CashAuditEvent.difference].
      */
     const val BANK_DEPOSIT_OUT = "BANK_DEPOSIT_OUT"
+    /**
+     * Corrigió la forma de pago de un cobro ([paymentChangeBlocker]). Monto en
+     * [CashAuditEvent.expectedCash]; "Efectivo → Tarjeta" en [CashAuditEvent.notes].
+     */
+    const val PAYMENT_CHANGE = "PAYMENT_CHANGE"
     const val BANK_DEPOSIT_SLIP = "BANK_DEPOSIT_SLIP"
     const val BANK_DEPOSIT_NO_SLIP = "BANK_DEPOSIT_NO_SLIP"
 
@@ -63,6 +68,7 @@ object CashAuditEventType {
         CLOSE -> "Cerró caja"
         HELD_CART_DISCARDED -> "Descartó cuenta en espera"
         SALE_VOID -> "Anuló una venta"
+        PAYMENT_CHANGE -> "Cambió forma de pago"
         BANK_DEPOSIT_OUT -> "Sacó dinero para el banco"
         BANK_DEPOSIT_SLIP -> "Adjuntó boleta de depósito"
         BANK_DEPOSIT_NO_SLIP -> "Depósito sin boleta"

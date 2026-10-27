@@ -24,5 +24,13 @@ data class Organization(
      */
     val usesResalePurchases: Boolean = false,
     val usesSupplyPurchases: Boolean = false,
-    val usesServicePurchases: Boolean = false
+    val usesServicePurchases: Boolean = false,
+    /**
+     * Pan que se hace por adelantado y se guarda en la planta (molde, rosca), "Pedir a otra
+     * sucursal" por traslado y "Transformar" (molde → tostado). No toda panadería trabaja
+     * así: apagado, nada de eso aparece en productos, traslados ni inventario.
+     */
+    val usesMadeForStock: Boolean = false,
+    /** Bizcochos horneados por adelantado: masa + molde contado y la hoja "Hornear bizcochos". */
+    val usesBakedAhead: Boolean = false
 )

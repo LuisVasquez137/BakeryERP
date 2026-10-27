@@ -103,9 +103,18 @@ class MaterialCostLoader(
 
         val prices = ingredientGramPrices(ingredients, lines)
         val ingredientsById = ingredients.associateBy { it.id }
-        val preparationsById = preparationsD.await().associateBy { it.id }
+        // `getPreparations` tampoco trae los insumos (subcolección): sin ellos el lote pesa 0 y
+        // todo adorno salía "sin precio". Se leen completas las que lleva algún producto, y la
+        // masa de cada bizcocho.
+        val light = preparationsD.await().associateBy { it.id }
+        val decoIds = products.flatMap { p -> p.decorations.map { it.preparationId } }.filter { it.isNotEmpty() }.toSet()
+        val neededPrepIds = decoIds + decoIds.mapNotNull { light[it]?.batterPreparationId?.ifEmpty { null } }
+        val preparationsById = light + neededPrepIds.filter { it in light }
+            .map { id -> async { runCatching { preparationRepository.getPreparation(companyId, id) }.getOrNull() } }
+            .awaitAll().filterNotNull().associateBy { it.id }
+        val productsById = products.associateBy { it.id }
         val costs = products.map {
-            productMaterialCost(it, recipeByProduct, recipesById, preparationsById, ingredientsById, prices)
+            productMaterialCost(it, recipeByProduct, recipesById, preparationsById, ingredientsById, prices, productsById)
         }.sortedWith(compareBy({ it.product.category }, { it.product.name.lowercase() }))
 
         val missingCount = costs.flatMap { c ->

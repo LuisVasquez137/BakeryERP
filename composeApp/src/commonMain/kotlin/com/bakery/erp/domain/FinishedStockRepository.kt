@@ -4,6 +4,7 @@ import com.bakery.erp.domain.report.StockMovementSummary
 import com.bakery.erp.model.FinishedProductStock
 import com.bakery.erp.model.FinishedStockMovement
 import com.bakery.erp.model.PortioningRequest
+import com.bakery.erp.model.TransformationRequest
 import kotlinx.coroutines.flow.Flow
 
 interface FinishedStockRepository {
@@ -38,6 +39,14 @@ interface FinishedStockRepository {
      * porciones, en serie. Devuelve las porciones que entraron.
      */
     suspend fun applyPortioning(companyId: String, request: PortioningRequest): Int
+
+    /**
+     * Hace un producto de otro (ver `model/Transformation.kt`): lee el stock ACTUAL del
+     * original, valida con `transformationError` (lanza con el mensaje) y aplica las dos puntas
+     * en serie. [extrasCost] = lo que cuestan los insumos agregados (entra al costo del nuevo).
+     * Devuelve el `referenceId` que une los dos movimientos (los insumos lo usan en su Kardex).
+     */
+    suspend fun applyTransformation(companyId: String, request: TransformationRequest, extrasCost: Double): String
 
     /**
      * Agrega los movimientos del Kardex de terminado en rango. Si [branchId] está vacío,

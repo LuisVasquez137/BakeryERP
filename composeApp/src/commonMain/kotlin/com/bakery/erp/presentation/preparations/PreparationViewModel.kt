@@ -2,7 +2,10 @@ package com.bakery.erp.presentation.preparations
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.bakery.erp.domain.BranchRepository
 import com.bakery.erp.domain.PreparationRepository
+import com.bakery.erp.model.Branch
+import com.bakery.erp.model.BranchCapability
 import com.bakery.erp.model.Preparation
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -17,11 +20,16 @@ data class PreparationUiState(
     val isDetailLoading: Boolean = false,
     val error: String? = null,
     val isSaved: Boolean = false,
-    val isDeleted: Boolean = false
+    val isDeleted: Boolean = false,
+    /** Plantas (pueden producir) para "Plantas que la hacen". */
+    val plants: List<Branch> = emptyList(),
+    /** Masa de bizcocho → cuánto pesa una receta (g). La lista no trae los insumos. */
+    val batterWeightById: Map<String, Double> = emptyMap()
 )
 
 class PreparationViewModel(
-    private val repository: PreparationRepository
+    private val repository: PreparationRepository,
+    private val branchRepository: BranchRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(PreparationUiState())
@@ -33,6 +41,27 @@ class PreparationViewModel(
             runCatching { repository.getPreparations(companyId) }
                 .onSuccess { _uiState.value = _uiState.value.copy(preparationList = it, isLoading = false) }
                 .onFailure { _uiState.value = _uiState.value.copy(isLoading = false, error = it.message) }
+        }
+    }
+
+    fun loadPlants(companyId: String) {
+        viewModelScope.launch {
+            val plants = runCatching { branchRepository.getBranches(companyId) }.getOrElse { emptyList() }
+                .filter { it.active && BranchCapability.CAN_PRODUCE in it.capabilities }
+                .sortedBy { it.name.lowercase() }
+            _uiState.value = _uiState.value.copy(plants = plants)
+        }
+    }
+
+    /** Peso de una receta de la masa, para decir cuántos moldes salen de ella. */
+    fun loadBatterWeight(companyId: String, batterId: String) {
+        if (batterId.isEmpty() || batterId in _uiState.value.batterWeightById) return
+        viewModelScope.launch {
+            val weight = runCatching { repository.getPreparation(companyId, batterId).batchWeightGrams }
+                .getOrNull() ?: return@launch
+            _uiState.value = _uiState.value.copy(
+                batterWeightById = _uiState.value.batterWeightById + (batterId to weight)
+            )
         }
     }
 
@@ -54,7 +83,10 @@ class PreparationViewModel(
                 if (isNew) repository.addPreparation(companyId, final)
                 else repository.updatePreparation(companyId, final)
             }.onSuccess {
-                _uiState.value = _uiState.value.copy(isLoading = false, isSaved = true)
+                // Si cambió una masa, cuántos moldes salen de ella se vuelve a leer.
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false, isSaved = true, batterWeightById = emptyMap()
+                )
                 loadPreparations(companyId)
             }.onFailure {
                 _uiState.value = _uiState.value.copy(isLoading = false, error = it.message)

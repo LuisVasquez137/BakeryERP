@@ -26,6 +26,7 @@ import com.bakery.erp.model.cashMovementTotals
 import com.bakery.erp.model.CashMovement
 import com.bakery.erp.model.CashMovementType
 import com.bakery.erp.model.CashSession
+import com.bakery.erp.model.expectedTransferNow
 import com.bakery.erp.model.effectivePaymentBreakdown
 import kotlinx.datetime.toLocalDateTime
 import com.bakery.erp.model.CashSessionStatus
@@ -453,6 +454,29 @@ private fun SessionHeaderCard(session: CashSession) {
                     Text("Diferencia", fontWeight = FontWeight.SemiBold, color = diffColor)
                     Text("Q ${session.difference.fmtMoney(2)}",
                          fontWeight = FontWeight.Bold, color = diffColor)
+                }
+                // Cuadre de lo que no es efectivo (cierres desde que existe), contra lo cobrado.
+                listOfNotNull(
+                    session.countedCardVouchers?.let { Triple("Vouchers de tarjeta", session.expectedCardVouchers, it) },
+                    session.countedTransfers?.let { Triple("Transferencias", session.expectedTransferNow, it) },
+                    session.countedPedidosYa?.let { Triple("PedidosYa", session.totalPedidosYaSales, it) }
+                ).forEach { (label, expectedNonCash, entered) ->
+                    val cardDiff = com.bakery.erp.model.closeCountDifference(expectedNonCash, entered) ?: 0.0
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("$label (de Q ${expectedNonCash.fmtMoney(2)})",
+                            style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            "Q ${entered.fmtMoney(2)}" +
+                                if (kotlin.math.abs(cardDiff) > 0.004) " · dif. Q ${cardDiff.fmtMoney(2)}" else " · cuadra",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = when {
+                                cardDiff > 0.01 -> com.bakery.erp.ui.theme.BrandColors.Success
+                                cardDiff < -0.01 -> com.bakery.erp.ui.theme.BrandColors.Danger
+                                else -> MaterialTheme.colorScheme.onSurface
+                            }
+                        )
+                    }
                 }
                 session.notes?.let { Text("Notas: $it",
                                           style = MaterialTheme.typography.bodySmall,

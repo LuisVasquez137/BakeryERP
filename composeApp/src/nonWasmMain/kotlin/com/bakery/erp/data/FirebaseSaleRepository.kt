@@ -4,6 +4,8 @@ import com.bakery.erp.domain.CashSessionRepository
 import com.bakery.erp.domain.ConnectionStatus
 import com.bakery.erp.domain.FailedSaleUpload
 import com.bakery.erp.model.finishedStockDocId
+import com.bakery.erp.model.paymentChangeSessionDeltas
+import com.bakery.erp.model.withPaymentMethod
 import com.bakery.erp.util.fmt
 import dev.gitlive.firebase.firestore.DocumentReference
 import dev.gitlive.firebase.firestore.FieldValue
@@ -476,6 +478,60 @@ class FirebaseSaleRepository(
         return voided
     }
 
+    override suspend fun changePaymentMethod(
+        companyId: String, saleId: String, method: String, userName: String
+    ): Pair<Sale, Sale> {
+        val ref = salesCol(companyId).document(saleId)
+        val now = Clock.System.now().toEpochMilliseconds()
+        // Primero la venta, con guarda: un reintento choca con "ya está en ese método" en vez
+        // de mover dos veces el dinero de la caja.
+        val (before, after) = firestore.runTransaction {
+            val snapshot = get(ref)
+            if (!snapshot.exists) error("La venta ya no existe.")
+            val sale = snapshot.toSale()
+            if (sale.status != SaleStatus.COMPLETED) error("Solo se corrigen ventas completadas.")
+            val updated = sale.withPaymentMethod(method).copy(
+                originalPaymentMethod = sale.originalPaymentMethod.ifBlank { sale.paymentMethod },
+                paymentChangedAt = now,
+                paymentChangedByName = userName
+            )
+            if (updated.effectivePaymentBreakdown == sale.effectivePaymentBreakdown)
+                error("Esta venta ya está en ${SalePaymentMethod.label(method)}.")
+            // Escritura parcial: el servidor de FEL guarda en la venta campos que la app no modela.
+            update(ref, firestoreSafeOf(
+                "paymentMethod" to updated.paymentMethod,
+                "paymentBreakdown" to updated.paymentBreakdown,
+                "originalPaymentMethod" to updated.originalPaymentMethod,
+                "paymentChangedAt" to updated.paymentChangedAt,
+                "paymentChangedByName" to updated.paymentChangedByName
+            ))
+            sale to updated
+        }
+        if (after.sessionId.isNotEmpty()) {
+            cashSessionRepository.getSession(companyId, after.sessionId)?.let { session ->
+                cashSessionRepository.applyTotalsDeltas(
+                    companyId, session.id, paymentChangeSessionDeltas(session, before, after)
+                )
+            }
+        }
+        // El resumen del día por método: se saca lo de antes y se pone lo de ahora. Sin líneas,
+        // porque los productos no cambian (las dos contribuciones se cancelan ahí). Falla
+        // contenida, igual que al cobrar: rebuildDailyRollups lo repara.
+        runCatching {
+            val old = contributionOf(before, emptyList())
+            val new = contributionOf(after, emptyList())
+            val dailyRef = dailyCol(companyId).document(salesDailyId(old.branchId, old.businessDate))
+            firestore.runTransaction {
+                val snapshot = get(dailyRef)
+                if (snapshot.exists) {
+                    set(dailyRef, (snapshot.toSalesDaily() - old + new)
+                        .copy(updatedAt = Clock.System.now().toEpochMilliseconds()).toMap())
+                }
+            }
+        }
+        return before to after
+    }
+
     override suspend fun markBankRefunded(companyId: String, saleId: String, userName: String) {
         salesCol(companyId).document(saleId).update(firestoreSafeOf(
             "bankRefundDoneAt" to Clock.System.now().toEpochMilliseconds(),
@@ -816,6 +872,9 @@ class FirebaseSaleRepository(
         "bankRefundAmount" to bankRefundAmount,
         "bankRefundDoneAt" to bankRefundDoneAt,
         "bankRefundDoneByName" to bankRefundDoneByName,
+        "originalPaymentMethod" to originalPaymentMethod,
+        "paymentChangedAt" to paymentChangedAt,
+        "paymentChangedByName" to paymentChangedByName,
         "createdAt" to createdAt
     )
 
@@ -895,6 +954,9 @@ class FirebaseSaleRepository(
             ?: runCatching { get<Long?>("bankRefundAmount")?.toDouble() }.getOrNull() ?: 0.0,
         bankRefundDoneAt = readMillis("bankRefundDoneAt"),
         bankRefundDoneByName = runCatching { get<String?>("bankRefundDoneByName") }.getOrNull() ?: "",
+        originalPaymentMethod = runCatching { get<String?>("originalPaymentMethod") }.getOrNull() ?: "",
+        paymentChangedAt = readMillis("paymentChangedAt"),
+        paymentChangedByName = runCatching { get<String?>("paymentChangedByName") }.getOrNull() ?: "",
         createdAt = readMillis("createdAt")
     )
 

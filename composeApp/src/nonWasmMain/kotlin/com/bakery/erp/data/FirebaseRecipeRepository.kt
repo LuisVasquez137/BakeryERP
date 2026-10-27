@@ -208,6 +208,10 @@ class FirebaseRecipeRepository(
         "notes" to notes,
         "minBatchFlourGrams" to minBatchFlourGrams,
         "kneadingTimeSeconds" to kneadingTimeSeconds,
+        // Receta por tanda (torta de leche): van en el documento raíz porque el form del
+        // pedido los lee con `getRecipesWithYields`, que no baja componentes.
+        "batchYield" to batchYield,
+        "batchUnitName" to batchUnitName,
         "active" to active,
         "createdAt" to if (createdAt == 0L) Clock.System.now().toEpochMilliseconds() else createdAt,
         "updatedAt" to Clock.System.now().toEpochMilliseconds()
@@ -233,6 +237,8 @@ class FirebaseRecipeRepository(
         "ingredientUnit" to ingredientUnit,
         "percentage" to percentage,
         "inputQuantity" to inputQuantity,
+        "productId" to productId,
+        "productName" to productName,
         "isBase" to isBase,
         "order" to order
     )
@@ -268,6 +274,8 @@ class FirebaseRecipeRepository(
         kneadingTimeSeconds = runCatching {
             get<Long?>("kneadingTimeSeconds")?.toInt()
         }.getOrNull() ?: 0,
+        batchYield = runCatching { get<Double?>("batchYield") }.getOrNull() ?: 0.0,
+        batchUnitName = runCatching { get<String?>("batchUnitName") }.getOrNull() ?: "",
         active = get<Boolean?>("active") ?: true,
         createdAt = readTimestampAsMillis("createdAt"),
         updatedAt = readTimestampAsMillis("updatedAt")
@@ -291,6 +299,8 @@ class FirebaseRecipeRepository(
         ingredientUnit = get<String?>("ingredientUnit") ?: "",
         percentage = get<Double?>("percentage") ?: 0.0,
         inputQuantity = runCatching { get<Double?>("inputQuantity") }.getOrNull() ?: 0.0,
+        productId = runCatching { get<String?>("productId") }.getOrNull() ?: "",
+        productName = runCatching { get<String?>("productName") }.getOrNull() ?: "",
         isBase = get<Boolean?>("isBase") ?: false,
         order = get<Long?>("order")?.toInt() ?: 0
     )

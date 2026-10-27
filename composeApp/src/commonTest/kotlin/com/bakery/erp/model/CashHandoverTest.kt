@@ -41,4 +41,33 @@ class CashHandoverTest {
         assertEquals(-10.0, CashSession(openingExpected = 500.0, openingBalance = 490.0).openingDifference)
         assertEquals(0.0, CashSession(openingExpected = 0.0, openingBalance = 490.0).openingDifference)
     }
+
+    @Test
+    fun `vouchers esperados suman los recibidos y los del turno`() {
+        assertEquals(500.0, turno.expectedCardNow)
+    }
+
+    @Test
+    fun `diferencia contra lo cobrado`() {
+        assertEquals(-11.0, closeCountDifference(500.0, 489.0))
+        assertEquals(0.0, closeCountDifference(500.0, 500.0))
+        assertNull(closeCountDifference(500.0, null))
+    }
+
+    @Test
+    fun `obligatorio solo si se cobro con ese metodo`() {
+        assertNotNull(closeCountProblem("los vouchers", 511.0, null))
+        assertNull(closeCountProblem("los vouchers", 511.0, 0.0))
+        assertNull(closeCountProblem("los vouchers", 0.0, null))
+        assertNotNull(closeCountProblem("los vouchers", 0.0, -1.0))
+    }
+
+    @Test
+    fun `fondo para manana no pasa de lo contado`() {
+        assertNotNull(leftForTomorrowProblem(1673.5, null))
+        assertNull(leftForTomorrowProblem(1673.5, 900.0))
+        assertNull(leftForTomorrowProblem(1673.5, 0.0))
+        assertNotNull(leftForTomorrowProblem(1673.5, 1700.0))
+        assertNotNull(leftForTomorrowProblem(1673.5, -1.0))
+    }
 }

@@ -37,6 +37,15 @@ interface SaleRepository {
      */
     suspend fun voidSale(companyId: String, saleId: String, request: com.bakery.erp.model.SaleVoidRequest): Sale
 
+    /**
+     * Corrige la forma de pago de una venta (ver `SalePaymentChange.kt`): la venta con guarda en
+     * transacción, después la diferencia en los totales de su caja y en el resumen del día.
+     * Devuelve (antes, después).
+     */
+    suspend fun changePaymentMethod(
+        companyId: String, saleId: String, method: String, userName: String
+    ): Pair<Sale, Sale>
+
     /** La parte de tarjeta/transferencia de una venta anulada ya se le devolvió al cliente. */
     suspend fun markBankRefunded(companyId: String, saleId: String, userName: String)
 

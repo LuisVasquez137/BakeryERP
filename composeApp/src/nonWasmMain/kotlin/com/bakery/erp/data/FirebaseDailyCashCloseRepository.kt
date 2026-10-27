@@ -8,6 +8,7 @@ import com.bakery.erp.model.CashSession
 import com.bakery.erp.model.CashSessionStatus
 import com.bakery.erp.model.DailyCashClose
 import com.bakery.erp.model.DailyCashCloseStatus
+import com.bakery.erp.model.dayCashTotals
 import dev.gitlive.firebase.firestore.DocumentSnapshot
 import dev.gitlive.firebase.firestore.FirebaseFirestore
 import dev.gitlive.firebase.firestore.Timestamp
@@ -41,6 +42,9 @@ class FirebaseDailyCashCloseRepository(
             .filter { it.matchesLocalDate(closeDate) }
         val closed = sessions.filter { it.status == CashSessionStatus.CLOSED }
         val hasOpen = sessions.any { it.status == CashSessionStatus.OPEN }
+        // Lo contado y lo esperado salen del último turno de cada caja: sumarlos todos contaba
+        // dos veces el efectivo que pasó de un turno al siguiente.
+        val cash = dayCashTotals(closed, sessions)
         return DailyCashCloseDraft(
             branchId = branchId,
             branchName = branchName,
@@ -53,10 +57,12 @@ class FirebaseDailyCashCloseRepository(
             totalSales = closed.sumOf { it.totalSales },
             totalMovementsIn = closed.sumOf { it.totalMovementsIn },
             totalMovementsOut = closed.sumOf { it.totalMovementsOut },
-            totalExpectedCash = closed.sumOf { it.expectedCash },
-            totalCountedCash = closed.sumOf { it.countedCash },
-            totalDifference = closed.sumOf { it.difference },
-            hasOpenSessions = hasOpen
+            totalExpectedCash = cash.expected,
+            totalCountedCash = cash.counted,
+            totalDifference = cash.difference,
+            takenAtShiftClose = cash.takenAtShiftClose,
+            hasOpenSessions = hasOpen,
+            openSessions = sessions.filter { it.status == CashSessionStatus.OPEN }.sortedBy { it.openedAt }
         )
     }
 
@@ -125,7 +131,7 @@ class FirebaseDailyCashCloseRepository(
         if (kotlin.math.abs(sum - draft.totalCountedCash) > tolerance) {
             throw IllegalStateException(
                 "El depósito (${depositTotal}) + lo que queda para mañana (${leftTotal}) " +
-                "no cuadra con el efectivo contado (${draft.totalCountedCash})."
+                "no cuadra con el efectivo en gavetas (${draft.totalCountedCash})."
             )
         }
         val docRef = (existing?.let { closesCol(companyId).document(it.id) }

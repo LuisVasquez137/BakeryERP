@@ -2,6 +2,7 @@
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.bakery.erp.util.fmtTrim
 import com.bakery.erp.domain.BranchRepository
 import com.bakery.erp.domain.CustomerOrderRepository
 import com.bakery.erp.domain.DispatchRepository
@@ -54,6 +55,9 @@ import com.bakery.erp.model.reconcileCount
 import com.bakery.erp.model.withSurplusAsExtra
 import com.bakery.erp.model.SHORTFALL_LESS_DOUGH
 import com.bakery.erp.model.quantityToKnead
+import com.bakery.erp.model.isOrderedFromPlant
+import com.bakery.erp.model.StockOrderInfo
+import com.bakery.erp.model.isTransformed
 import com.bakery.erp.model.plantIngestQuantity
 import com.bakery.erp.model.plantIngestReason
 import com.bakery.erp.model.SourceOrderAllocation
@@ -107,6 +111,11 @@ import kotlinx.datetime.toInstant
 import kotlinx.datetime.toLocalDateTime
 import kotlin.time.Clock
 import kotlin.time.Instant
+import com.bakery.erp.model.batchSpec
+import com.bakery.erp.model.batchUsage
+import com.bakery.erp.model.isBatch
+import com.bakery.erp.model.isProduct
+import com.bakery.erp.model.scaledBatchText
 
 /** Referencia liviana a la masa de la que sale un producto. */
 data class RecipeRef(val id: String, val name: String)
@@ -180,9 +189,12 @@ data class ProductionUiState(
     /**
      * Pedido PENDING ya existente que choca con la combinación que el usuario
      * intentó guardar (misma sucursal origen + planta + fecha + turno). Si no es
-     * null, la pantalla debe ofrecer "Editar existente" o "Crear de todos modos".
+     * null, la pantalla bloquea el alta y manda al existente: nunca se crea otro.
      */
     val pendingOrderConflict: ProductionOrder? = null,
+    /** El [pendingOrderConflict] ya entró a un lote: no se edita desde el form, se
+     *  abre su detalle (ahí la planta tiene "Ajustar pedido" y "Cancelar"). */
+    val pendingOrderConflictInLot: Boolean = false,
 
     /** Pedidos de revendedores con AL MENOS UNA línea pendiente (sin asignar a
      *  ningún PO) cuyo deliveryBranchId = sucursal vendedora seleccionada en el
@@ -376,7 +388,11 @@ data class ProductionUiState(
     /** Acuse del último ajuste guardado, para cerrar el diálogo y avisarlo. */
     val orderAdjustmentDone: String? = null,
     /** Ajustes ya hechos al pedido seleccionado, para el detalle. */
-    val selectedOrderAdjustments: List<ProductionOrderAdjustment> = emptyList()
+    val selectedOrderAdjustments: List<ProductionOrderAdjustment> = emptyList(),
+
+    // ── Para existencia en el pedido de la planta a sí misma (ver model/MadeForStock.kt) ──
+    /** `productId` → saldo, mínimo y piezas por quintal, para la fila del pedido. */
+    val stockOrderInfoByProductId: Map<String, StockOrderInfo> = emptyMap()
 )
 
 class ProductionViewModel(
@@ -533,7 +549,8 @@ class ProductionViewModel(
                 val tz = TimeZone.currentSystemDefault()
                 val lotDay = Instant.fromEpochMilliseconds(lot.productionDate)
                     .toLocalDateTime(tz).date
-                val lateOrders = if (lot.status != ProductionLotStatus.COMPLETED &&
+                // El lote para existencia no recibe pedidos: los tardíos van al del día.
+                val lateOrders = if (!lot.isForStock && lot.status != ProductionLotStatus.COMPLETED &&
                     lot.status != ProductionLotStatus.CANCELLED) {
                     orders.filter {
                         it.status == ProductionOrderStatus.PENDING &&
@@ -1666,7 +1683,7 @@ class ProductionViewModel(
     }
 
     fun clearPendingOrderConflict() {
-        _uiState.update { it.copy(pendingOrderConflict = null) }
+        _uiState.update { it.copy(pendingOrderConflict = null, pendingOrderConflictInLot = false) }
     }
 
     // ── Cantidades sugeridas ──────────────────────────────────────────────────
@@ -1732,7 +1749,9 @@ class ProductionViewModel(
             val productsById = products.associateBy { it.id }
             val lines = baseExpected
                 .mapNotNull { (productId, qty) ->
-                    val product = productsById[productId]?.takeIf { it.active }
+                    // Un producto que se pasó a "para existencia" puede seguir en el
+                    // patrón de cuando se pedía: ya no se sugiere.
+                    val product = productsById[productId]?.takeIf { it.active && it.isOrderedFromPlant }
                         ?: return@mapNotNull null
                     ProductionOrderLine(
                         id = "",
@@ -1933,46 +1952,51 @@ class ProductionViewModel(
         producingBranch: Branch,
         shift: ProductionShift?,
         requestedDate: Long,
-        notes: String?,
-        skipDuplicateCheck: Boolean = false
+        notes: String?
     ) {
+        // Doble toque en "Enviar pedido" (19 oct 2026, Calvario y Democracia → Bombero): el
+        // overlay se encendía DESPUÉS de buscar el pedido existente en Firestore y en esa espera
+        // el segundo toque también pasaba la búsqueda → dos pedidos iguales. La guarda es
+        // síncrona (antes del launch) y el overlay se enciende desde el primer toque.
+        if (isSubmittingOrder) return
+        isSubmittingOrder = true
+        _uiState.update { it.copy(isLoading = true, error = null) }
         viewModelScope.launch {
             val lines = _uiState.value.draftOrderLines
             if (lines.isEmpty()) {
-                _uiState.update { it.copy(error = "Agrega al menos un producto al pedido") }
+                _uiState.update { it.copy(isLoading = false, error = "Agrega al menos un producto al pedido") }
                 return@launch
             }
-            // Si la combinación choca con un pedido existente, decidir:
-            //  - si el pedido existente NO está en ningún lote → mostrar dialog "editar existente"
-            //    (no se permite duplicar pedidos standalone).
-            //  - si el pedido existente YA está en un lote OPEN o IN_PROGRESS → permitir crear
-            //    el nuevo como "pedido tardío" que requiere aprobación de la planta.
-            var markAsLate = false
-            if (!skipDuplicateCheck) {
-                val conflict = runCatching {
-                    productionRepository.findPendingOrderForCombination(
-                        companyId,
-                        sellingBranch.id,
-                        producingBranch.id,
-                        requestedDate,
-                        shift?.id ?: ""
-                    )
-                }.getOrNull()
-                if (conflict != null) {
-                    val conflictLot = runCatching {
-                        productionRepository.getLotsForBranch(companyId, producingBranch.id)
-                            .firstOrNull {
-                                it.status != ProductionLotStatus.CANCELLED &&
-                                    conflict.id in it.sourceOrderIds
-                            }
-                    }.getOrNull()
-                    if (conflictLot == null) {
-                        _uiState.update { it.copy(pendingOrderConflict = conflict) }
-                        return@launch
-                    }
-                    // Pedido existente ya está en un lote: permitir como tardío.
-                    markAsLate = true
+            // Un solo pedido por sucursal + planta + día + turno: si ya hay uno, NUNCA se crea
+            // otro (antes, si el existente ya estaba en un lote, entraba como "tardío" y la
+            // planta lo horneaba dos veces — Calvario → Bombero, 19 oct 2026). Se manda al
+            // existente: sin lote se edita; en lote, la planta usa "Ajustar pedido" o cancela.
+            // Si la búsqueda falla (sin red) no se guarda: mejor reintentar que duplicar.
+            val conflictCheck = runCatching {
+                productionRepository.findPendingOrderForCombination(
+                    companyId,
+                    sellingBranch.id,
+                    producingBranch.id,
+                    requestedDate,
+                    shift?.id ?: ""
+                )
+            }
+            if (conflictCheck.isFailure) {
+                _uiState.update {
+                    it.copy(isLoading = false, error = "No se pudo revisar si ya hay un pedido. Revisa la conexión e intenta de nuevo.")
                 }
+                return@launch
+            }
+            val conflict = conflictCheck.getOrNull()
+            if (conflict != null) {
+                val inLot = runCatching {
+                    productionRepository.getLotsForBranch(companyId, producingBranch.id)
+                        .any { it.status != ProductionLotStatus.CANCELLED && conflict.id in it.sourceOrderIds }
+                }.getOrDefault(true)
+                _uiState.update {
+                    it.copy(isLoading = false, pendingOrderConflict = conflict, pendingOrderConflictInLot = inLot)
+                }
+                return@launch
             }
             _uiState.update { it.copy(isLoading = true, error = null) }
             runCatching {
@@ -2031,7 +2055,6 @@ class ProductionViewModel(
                     shiftName = shift?.name ?: "",
                     requestedDate = requestedDate,
                     status = ProductionOrderStatus.PENDING,
-                    isLateOrder = markAsLate,
                     notes = notes?.trim()?.ifEmpty { null },
                     createdByUserId = currentUser.id,
                     createdByUserName = currentUser.displayName.ifEmpty { currentUser.email },
@@ -2065,7 +2088,6 @@ class ProductionViewModel(
                             append("${mergedLines.size} producto(s) para el ")
                             append(formatDayForNotification(requestedDate))
                             if (!shift?.name.isNullOrBlank()) append(" · turno ${shift.name}")
-                            if (markAsLate) append(" · PEDIDO TARDÍO, requiere tu aprobación")
                         },
                         targetBranchIds = listOf(producingBranch.id),
                         requiredPermission = Permission.MANAGE_PRODUCTION_LOTS.name,
@@ -2107,8 +2129,11 @@ class ProductionViewModel(
             }.onFailure { err ->
                 _uiState.update { it.copy(isLoading = false, error = err.message ?: "Error al guardar el pedido") }
             }
-        }
+        }.invokeOnCompletion { isSubmittingOrder = false }
     }
+
+    /** Hay un [saveOrder] en curso: los toques repetidos se ignoran hasta que termine. */
+    private var isSubmittingOrder = false
 
     /**
      * Actualiza un pedido existente (cantidades + notas + turno). Las sucursales y
@@ -2405,6 +2430,7 @@ class ProductionViewModel(
         if (recipe == null) {
             return "No se pudo cargar la receta \"${line.recipeName}\". Recarga la pantalla."
         }
+        if (recipe.isBatch) return diagnoseScaledRecipeForGroup(listOf(line))
         val rawWeightGrams = effectiveRawWeightGrams(line)
         if (rawWeightGrams == null || rawWeightGrams <= 0.0) {
             return "El producto \"${line.productName}\" no tiene peso en crudo configurado. " +
@@ -2465,9 +2491,65 @@ class ProductionViewModel(
         return effectiveQuantity(line) * raw
     }
 
-    /** Productos del grupo a los que les falta el peso en crudo configurado. */
+    /**
+     * Productos del grupo a los que les falta el peso en crudo configurado. Sin receta no
+     * hace falta (no hay masa que escalar): el pastel que va sobre bizcocho, la reventa.
+     */
     fun linesMissingRawWeight(lines: List<ProductionLotLine>): List<ProductionLotLine> =
-        lines.filter { (effectiveRawWeightGrams(it) ?: 0.0) <= 0.0 && effectiveQuantity(it) > 0.0 }
+        lines.filter {
+            it.recipeId.isNotEmpty() && !isBatchRecipe(it.recipeId) &&
+                (effectiveRawWeightGrams(it) ?: 0.0) <= 0.0 && effectiveQuantity(it) > 0.0
+        }
+
+    // ── Receta por tanda (torta de leche, ver `model/BatchRecipe.kt`) ────────────
+
+    /** true si [recipeId] es una receta por tanda: no lleva peso en crudo ni % del panadero. */
+    fun isBatchRecipe(recipeId: String): Boolean =
+        _uiState.value.recipesById[recipeId]?.isBatch == true
+
+    /**
+     * "2 bandejas" para la tarjeta de la masa, o null si no es por tanda. Sale de lo mismo que
+     * escala la receta ([effectiveQuantity]), así la tarjeta y el panel nunca dicen distinto.
+     */
+    fun batchLabelForGroup(lines: List<ProductionLotLine>): String? {
+        val spec = lines.firstOrNull()?.let { _uiState.value.recipesById[it.recipeId]?.batchSpec } ?: return null
+        return spec.label(spec.batchesFor(lines.sumOf { effectiveQuantity(it) }))
+    }
+
+    /**
+     * Receta escalada a las bandejas: cada componente × bandejas, en la unidad en que se
+     * escribió. Lo planeado ya viene completado a bandejas enteras (lo resuelve la encargada al
+     * armar el lote, ver `checkRecipeBatchMinimums`); lo contado se lleva a la bandeja más
+     * cercana — si salieron 34 en vez de 35 sigue siendo una bandeja.
+     */
+    private fun buildBatchRecipeView(recipe: Recipe, lines: List<ProductionLotLine>): ScaledRecipeView? {
+        val spec = recipe.batchSpec ?: return null
+        val pieces = lines.sumOf { effectiveQuantity(it) }
+        val batches = spec.batchesFor(pieces)
+        if (batches <= 0) return null
+        val rows = recipe.allComponents.sortedBy { it.order }.map { c ->
+            ScaledRecipeRow(
+                ingredientId = c.ingredientId.ifEmpty { c.productId },
+                ingredientName = c.ingredientName.ifEmpty { c.productName } +
+                    (if (c.isProduct) " (del inventario)" else ""),
+                percentage = 0.0,
+                totalGrams = 0.0,
+                gramsFromSponge = 0.0,
+                finalGrams = 0.0,
+                isBase = false,
+                displayQuantity = c.scaledBatchText(batches)
+            )
+        }
+        return ScaledRecipeView(
+            productName = recipe.name,
+            producedQuantity = pieces,
+            productUnit = lines.firstOrNull()?.productUnit ?: "",
+            rawWeightGrams = 0.0,
+            totalDoughGrams = 0.0,
+            rows = rows,
+            batchLabel = "${spec.label(batches)} · salen ${spec.piecesFor(batches).fmtTrim(0)}"
+        )
+    }
 
     /**
      * Masa extra (en gramos) que la masa [recipeId] tiene que dar para rellenos
@@ -2648,6 +2730,7 @@ class ProductionViewModel(
         val recipeId = first?.recipeId ?: fallbackRecipeId
         if (recipeId.isEmpty()) return null
         val recipe = _uiState.value.recipesById[recipeId] ?: return null
+        if (recipe.isBatch) return buildBatchRecipeView(recipe, lines)
         val totalDoughGrams = lines.sumOf { doughGramsOf(it) } + extraDoughGrams
         if (totalDoughGrams <= 0.0) return null
 
@@ -2683,14 +2766,15 @@ class ProductionViewModel(
         // en una sola fila.
         val decorations = lines
             .flatMap { line ->
-                line.decorationsSnapshot.map { d -> d to (d.gramsPerUnit * effectiveQuantity(line)) }
+                line.decorationsSnapshot.map { d -> d to effectiveQuantity(line) }
             }
             .groupBy { it.first.preparationName.ifEmpty { it.first.ingredientName } }
             .map { (name, entries) ->
                 ScaledDecoration(
                     preparationName = name,
                     gramsPerUnit = entries.first().first.gramsPerUnit,
-                    totalGrams = entries.sumOf { it.second }
+                    totalGrams = entries.sumOf { (d, q) -> d.gramsPerUnit * q },
+                    totalUnits = entries.sumOf { (d, q) -> d.unitsPerProduct * q }
                 )
             }
 
@@ -2724,9 +2808,23 @@ class ProductionViewModel(
         val first = lines.firstOrNull()
         val recipeId = first?.recipeId ?: fallbackRecipeId
         val recipeName = first?.recipeName ?: fallbackRecipeName
-        if (recipeId.isEmpty()) return "La masa no tiene productos."
+        if (recipeId.isEmpty()) {
+            return if (lines.isEmpty()) "La masa no tiene productos."
+            // "Otros productos": reventa, o pasteles que se arman sobre bizcocho.
+            else "Estos productos no salen de una masa, así que no hay receta que escalar. " +
+                "Los pasteles que van sobre bizcocho se hornean desde la tarjeta \"Bizcochos\"."
+        }
         val recipe = _uiState.value.recipesById[recipeId]
             ?: return "No se pudo cargar la receta \"$recipeName\". Recarga la pantalla."
+        if (recipe.isBatch) {
+            return when {
+                recipe.batchSpec == null ->
+                    "La receta \"${recipe.name}\" no dice cuántos salen de una tanda. Edítala en Recetas."
+                recipe.allComponents.isEmpty() -> "La receta \"${recipe.name}\" no tiene ingredientes."
+                lines.sumOf { effectiveQuantity(it) } <= 0.0 -> "La cantidad a producir es 0."
+                else -> null
+            }
+        }
         if (lines.isEmpty()) {
             if (extraDoughGrams <= 0.0) return "La cantidad a producir es 0."
         } else {
@@ -2796,6 +2894,7 @@ class ProductionViewModel(
 
     fun buildScaledRecipeView(line: ProductionLotLine): ScaledRecipeView? {
         val recipe = _uiState.value.recipesById[line.recipeId] ?: return null
+        if (recipe.isBatch) return buildScaledRecipeViewForGroup(listOf(line))
         val rawWeightGrams = effectiveRawWeightGrams(line) ?: return null
         // Si el panadero ya ajustó la cantidad real producida, se usa esa; si no, la planeada.
         val quantity = if (line.producedQuantity > 0.0) line.producedQuantity else line.plannedQuantity
@@ -2850,7 +2949,8 @@ class ProductionViewModel(
                 ScaledDecoration(
                     preparationName = d.preparationName.ifEmpty { d.ingredientName },
                     gramsPerUnit = d.gramsPerUnit,
-                    totalGrams = d.gramsPerUnit * quantity
+                    totalGrams = d.gramsPerUnit * quantity,
+                    totalUnits = d.unitsPerProduct * quantity
                 )
             }
         )
@@ -2872,6 +2972,13 @@ class ProductionViewModel(
                 ingredientId = deco.ingredientId,
                 ingredientName = deco.ingredientName,
                 gramsPerUnit = deco.gramsPerUnit
+            )
+        } else if (deco.isCounted) {
+            // Bizcocho: no se elige lote, al completar se toman los más viejos de la planta.
+            ProductionLotDecoration(
+                preparationId = deco.preparationId,
+                preparationName = deco.preparationName,
+                unitsPerProduct = deco.unitsPerProduct
             )
         } else {
             val candidate = decorationBatchesByPrep[deco.preparationId]?.firstOrNull()
@@ -2940,22 +3047,70 @@ class ProductionViewModel(
             if (special != null) {
                 return@map specialLotLine(special, lines.sumOf { it.requestedQuantity })
             }
-            val product = products.find { it.id == productId }
-            val recipe = recipes.find { r -> r.yields.any { it.productId == productId } }
-            val decorationsSnapshot = buildDecorationsSnapshot(product, decorationBatchesByPrep)
-            ProductionLotLine(
+            catalogLotLine(
                 productId = productId,
                 productName = lines.first().productName,
                 productUnit = lines.first().productUnit,
-                rawWeightGrams = product?.rawWeightGrams,
-                plannedQuantity = lines.sumOf { it.requestedQuantity },
-                producedQuantity = lines.sumOf { it.requestedQuantity },
-                recipeId = recipe?.id ?: "",
-                recipeName = recipe?.name ?: "",
-                decorationsSnapshot = decorationsSnapshot,
-                doughFillingsSnapshot = buildDoughFillingsSnapshot(product)
+                quantity = lines.sumOf { it.requestedQuantity },
+                recipes = recipes,
+                products = products,
+                decorationBatchesByPrep = decorationBatchesByPrep
             )
         }.sortedBy { it.productName }
+    }
+
+    /**
+     * Línea de lote de un producto de catálogo: receta que lo rinde, peso en crudo y
+     * snapshots de adornos y rellenos. La comparten el lote de los pedidos y el lote
+     * para existencia, para que los dos escalen y descuenten igual.
+     */
+    private fun catalogLotLine(
+        productId: String,
+        productName: String,
+        productUnit: String,
+        quantity: Double,
+        recipes: List<Recipe>,
+        products: List<Product>,
+        decorationBatchesByPrep: Map<String, List<PreparationBatch>>
+    ): ProductionLotLine {
+        val product = products.find { it.id == productId }
+        val recipe = recipes.find { r -> r.yields.any { it.productId == productId } }
+        return ProductionLotLine(
+            productId = productId,
+            productName = productName,
+            productUnit = productUnit,
+            rawWeightGrams = product?.rawWeightGrams,
+            plannedQuantity = quantity,
+            producedQuantity = quantity,
+            recipeId = recipe?.id ?: "",
+            recipeName = recipe?.name ?: "",
+            decorationsSnapshot = buildDecorationsSnapshot(product, decorationBatchesByPrep),
+            doughFillingsSnapshot = buildDoughFillingsSnapshot(product)
+        )
+    }
+
+    // ── Para existencia en el pedido de la planta ─────────────────────────────
+
+    /**
+     * Saldo y mínimo de lo que [plantId] guarda para existencia, para que la encargada de
+     * la planta vea en su pedido cuánto le queda antes de pedir más.
+     */
+    fun loadStockOrderInfo(companyId: String, plantId: String, products: List<Product>) {
+        val stockProducts = products.filter { it.isMadeForStock && !it.isTransformed }
+        if (plantId.isEmpty() || stockProducts.isEmpty()) {
+            _uiState.update { it.copy(stockOrderInfoByProductId = emptyMap()) }
+            return
+        }
+        viewModelScope.launch {
+            val stockByProduct = runCatching { finishedStockRepository.getStocksForBranch(companyId, plantId) }
+                .getOrElse { emptyList() }
+                .associate { it.productId to it.currentStock }
+            _uiState.update {
+                it.copy(stockOrderInfoByProductId = stockProducts.associate { p ->
+                    p.id to StockOrderInfo(onHand = stockByProduct[p.id] ?: 0.0, minimum = p.plantStockMinimum)
+                })
+            }
+        }
     }
 
     // ── Mínimo de la amasadora ────────────────────────────────────────────────
@@ -3843,7 +3998,7 @@ class ProductionViewModel(
 
             // Pedidos tardíos: PENDING para la misma combinación que aún no están
             // en el lote (no aparecen en sourceOrderIds). Solo si el lote es editable.
-            val lateOrders = if (lot != null && lot.status != ProductionLotStatus.COMPLETED &&
+            val lateOrders = if (lot != null && !lot.isForStock && lot.status != ProductionLotStatus.COMPLETED &&
                                 lot.status != ProductionLotStatus.CANCELLED) {
                 val tz = TimeZone.currentSystemDefault()
                 val lotDay = Instant.fromEpochMilliseconds(lot.productionDate)
@@ -4661,6 +4816,8 @@ class ProductionViewModel(
                         warnings.add("${line.productName}: sin receta asignada — stock no descontado")
                         continue
                     }
+                    // Por tanda va aparte, por masa entera (abajo): la bandeja es una sola.
+                    if (recipe.isBatch) continue
                     val effectiveRaw = effectiveRawWeightGrams(line)
                     if (effectiveRaw == null || effectiveRaw <= 0.0) {
                         warnings.add("${line.productName}: peso crudo no definido — stock no descontado")
@@ -4734,6 +4891,35 @@ class ProductionViewModel(
                     }
                 }
 
+                // Recetas por tanda (torta de leche): lo AMASADO de todas sus líneas se lleva a
+                // bandejas enteras y se descuenta la receta de esas bandejas. Los insumos van
+                // al MISMO agregado; los productos (pan molde) salen del terminado de la planta.
+                val batchProductUnits = HashMap<String, Pair<String, Double>>()
+                activeLines.filter { fullRecipeMap[it.recipeId]?.isBatch == true }
+                    .groupBy { it.recipeId }
+                    .forEach { (recipeId, groupLines) ->
+                        val recipe = fullRecipeMap.getValue(recipeId)
+                        val spec = recipe.batchSpec
+                        if (spec == null) {
+                            warnings.add("${recipe.name}: la receta no dice cuántos salen de una tanda — stock no descontado")
+                            return@forEach
+                        }
+                        val batches = spec.batchesFor(groupLines.sumOf { it.kneadedQuantity(fallbackToPlanned = false) })
+                        val usage = recipe.batchUsage(batches, ingredientMap.mapValues { it.value.unitWeightGrams })
+                        usage.unconvertible.forEach {
+                            warnings.add("${recipe.name} · $it: falta el peso de una unidad en Insumos — no se descontó")
+                        }
+                        for ((ingredientId, grams) in usage.ingredientGrams) {
+                            aggregatedGramsByIngredient[ingredientId] =
+                                (aggregatedGramsByIngredient[ingredientId] ?: 0.0) + grams
+                        }
+                        val names = recipe.allComponents.filter { it.isProduct }.associate { it.productId to it.productName }
+                        for ((productId, units) in usage.productUnits) {
+                            val prev = batchProductUnits[productId]?.second ?: 0.0
+                            batchProductUnits[productId] = (names[productId] ?: "") to prev + units
+                        }
+                    }
+
                 // 3b. Leer todos los stocks de la planta en UNA sola consulta.
                 val stockMap = runCatching {
                     ingredientRepository.getBranchStocksForBranch(companyId, lot.producingBranchId)
@@ -4800,6 +4986,27 @@ class ProductionViewModel(
                             }
                         }
                         for (deco in line.decorationsSnapshot) {
+                            if (deco.isCounted) {
+                                // Bizcochos: uno por pastel (o 1/24 de plancha por porción), de
+                                // los más viejos que haya fríos en la planta.
+                                val units = deco.unitsPerProduct * line.kneadedQuantity(fallbackToPlanned = false)
+                                if (units <= 0.0) continue
+                                launch {
+                                    runCatching {
+                                        preparationBatchRepository.consumeUnits(
+                                            companyId, lot.producingBranchId, deco.preparationId, units
+                                        )
+                                    }.onSuccess { uncovered ->
+                                        if (uncovered > 0.0) warnings.add(
+                                            "${line.productName} · ${deco.preparationName}: faltaron " +
+                                                "${uncovered.fmtTrim(2)} en el inventario de bizcochos"
+                                        )
+                                    }.onFailure {
+                                        warnings.add("${line.productName} · ${deco.preparationName}: ${it.message}")
+                                    }
+                                }
+                                continue
+                            }
                             // Los insumos comprados ya hechos se descontaron arriba junto
                             // con la receta (aggregatedGramsByIngredient) — acá solo van
                             // los que preparamos nosotros, que sí viven en un batch.
@@ -4829,6 +5036,42 @@ class ProductionViewModel(
                     }
                 }
 
+                // 3e. Productos que lleva una receta por tanda (el pan molde de la torta): salen
+                //     del terminado de la planta a su costo promedio. Si el sistema no tiene
+                //     tantos, se avisa: el pan ya se usó, el inventario se corrige con ajuste.
+                for ((productId, nameAndUnits) in batchProductUnits) {
+                    val (name, units) = nameAndUnits
+                    if (units <= 0.0) continue
+                    runCatching {
+                        val stock = finishedStockRepository.getStock(companyId, lot.producingBranchId, productId)
+                        val onHand = stock?.currentStock ?: 0.0
+                        if (onHand + 1e-9 < units) warnings.add(
+                            "$name: se usaron ${units.fmtTrim(2)} y el inventario de " +
+                                "${lot.producingBranchName} decía ${onHand.fmtTrim(2)}. Revísalo con un ajuste."
+                        )
+                        finishedStockRepository.applyMovement(
+                            companyId,
+                            FinishedStockMovement(
+                                productId = productId,
+                                productName = name,
+                                branchId = lot.producingBranchId,
+                                branchName = lot.producingBranchName,
+                                type = FinishedMovementType.TRANSFORMACION,
+                                quantity = -units,
+                                referenceType = FinishedMovementReference.PRODUCTION_LOT,
+                                referenceId = lot.id,
+                                reason = "Ingrediente de receta por tanda en el lote",
+                                unitPriceAtMovement = stock?.avgUnitCost ?: 0.0,
+                                createdByUserId = currentUser.id,
+                                createdByUserName = currentUser.displayName.ifEmpty { currentUser.email },
+                                createdAt = now
+                            )
+                        )
+                    }.onFailure {
+                        warnings.add("$name: no se pudo descontar del inventario de la planta — ${it.message}")
+                    }
+                }
+
                 // 4. Marcar stock como descontado (para detectar fallos parciales)
                 runCatching { productionRepository.markStockDeducted(companyId, lot.id) }
 
@@ -4841,7 +5084,8 @@ class ProductionViewModel(
                 //     media mañana): es pan horneado que tampoco va en ninguna nota.
                 //     Las dos razones se suman en `plantIngestQuantity` para que haya
                 //     un solo lugar que ingresa a la planta y no dos que puedan divergir.
-                activeLines.filter { it.plantIngestQuantity() > 0.0 }.forEach { line ->
+                //     En un lote para existencia es todo lo bueno: no hay pedidos.
+                activeLines.filter { it.plantIngestQuantity(lot.isForStock) > 0.0 }.forEach { line ->
                     runCatching {
                         finishedStockRepository.applyMovement(
                             companyId,
@@ -4851,10 +5095,10 @@ class ProductionViewModel(
                                 branchId = lot.producingBranchId,
                                 branchName = lot.producingBranchName,
                                 type = FinishedMovementType.AJUSTE,
-                                quantity = line.plantIngestQuantity(),
+                                quantity = line.plantIngestQuantity(lot.isForStock),
                                 referenceType = FinishedMovementReference.ADJUSTMENT,
                                 referenceId = lot.id,
-                                reason = line.plantIngestReason(),
+                                reason = line.plantIngestReason(lot.isForStock),
                                 createdByUserId = currentUser.id,
                                 createdByUserName = currentUser.displayName.ifEmpty { currentUser.email },
                                 createdAt = now
@@ -4956,6 +5200,7 @@ class ProductionViewModel(
                 draftOrderLines = emptyList(),
                 shiftsForSelectedProducingBranch = emptyList(),
                 pendingOrderConflict = null,
+                pendingOrderConflictInLot = false,
                 suggestionPatternId = "",
                 suggestionApplied = false,
                 suggestionSampleCount = 0,

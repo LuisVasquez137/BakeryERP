@@ -11,6 +11,7 @@ import com.bakery.erp.model.BranchCapability
 import com.bakery.erp.model.Ingredient
 import com.bakery.erp.model.Preparation
 import com.bakery.erp.model.PreparationBatch
+import com.bakery.erp.model.PreparationUsage
 import com.bakery.erp.model.StockMovement
 import com.bakery.erp.model.User
 import com.bakery.erp.model.canAccessBranch
@@ -89,7 +90,8 @@ class PreparationBatchViewModel(
             }
             val preparations = runCatching { preparationRepository.getPreparations(companyId) }
                 .getOrElse { emptyList() }
-                .filter { it.active }
+                // Masa de bizcocho y bizcocho se hacen en la hoja de horneado: se cuentan por molde.
+                .filter { it.active && it.usage != PreparationUsage.BATTER && it.usage != PreparationUsage.BASE }
             ingredientCache = runCatching { ingredientRepository.getIngredients(companyId) }
                 .getOrElse { emptyList() }
             _uiState.update {

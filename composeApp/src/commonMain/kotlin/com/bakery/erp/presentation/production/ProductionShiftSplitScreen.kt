@@ -66,6 +66,8 @@ import com.bakery.erp.model.DISPATCH_TRIP_FIRST
 import com.bakery.erp.model.RecipeBatchCheck
 import com.bakery.erp.model.checkRecipeBatchMinimums
 import com.bakery.erp.model.flourGramsAsPounds
+import com.bakery.erp.model.shortfallText
+import com.bakery.erp.model.progressText
 import com.bakery.erp.model.flourGramsForLines
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.presentation.products.ProductViewModel
@@ -593,13 +595,15 @@ private fun MinimumBatchWarningCard(shiftName: String, check: RecipeBatchCheck, 
         ) {
             Column(Modifier.weight(1f)) {
                 Text(
-                    "$shiftName: ${check.recipeName} no alcanza el mínimo de amasada",
+                    if (check.batch != null) "$shiftName: ${check.recipeName} no completa la bandeja"
+                    else "$shiftName: ${check.recipeName} no alcanza el mínimo de amasada",
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
                     color = BrandColors.AccentDeep
                 )
                 Text(
-                    "Hay ${check.currentFlourGrams.flourGramsAsPounds()}, faltan " +
+                    if (check.batch != null) check.shortfallText()
+                    else "Hay ${check.currentFlourGrams.flourGramsAsPounds()}, faltan " +
                         "${(check.minFlourGrams - check.currentFlourGrams).flourGramsAsPounds()} " +
                         "para llegar a ${check.minFlourGrams.flourGramsAsPounds()}.",
                     style = MaterialTheme.typography.labelSmall,

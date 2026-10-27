@@ -36,6 +36,21 @@ enum class PurchaseFlowSetting(val title: String, val on: String, val off: Strin
     )
 }
 
+/** Formas de trabajar en producción que no toda panadería usa. */
+enum class ProductionOptionSetting(val title: String, val on: String, val off: String) {
+    MADE_FOR_STOCK(
+        "Pan para existencia y traslados entre plantas",
+        "Pan molde o rosca se hacen por adelantado y se guardan; las sucursales los piden por " +
+            "traslado, y se puede transformar uno en otro (molde → tostado).",
+        "Todo el pan se hace por pedido del día."
+    ),
+    BAKED_AHEAD(
+        "Bizcochos horneados por adelantado",
+        "El repostero hornea masa en moldes contados y los pasteles los descuentan al decorar.",
+        "Los pasteles se hacen con sus adornos, sin bizcochos guardados."
+    )
+}
+
 data class OrganizationSettingsUiState(
     val organization: Organization? = null,
     val isLoading: Boolean = false,
@@ -109,6 +124,23 @@ class OrganizationSettingsViewModel(
             }.onFailure {
                 _uiState.value = _uiState.value.copy(isSaving = false, error = it.message)
             }
+        }
+    }
+
+    fun setProductionOption(orgId: String, option: ProductionOptionSetting, enabled: Boolean) {
+        val org = _uiState.value.organization ?: return
+        val updated = when (option) {
+            ProductionOptionSetting.MADE_FOR_STOCK -> org.copy(usesMadeForStock = enabled)
+            ProductionOptionSetting.BAKED_AHEAD -> org.copy(usesBakedAhead = enabled)
+        }
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isSaving = true, error = null)
+            authRepository.setProductionOptions(orgId, updated.usesMadeForStock, updated.usesBakedAhead)
+                .onSuccess {
+                    _uiState.value = _uiState.value.copy(organization = updated, isSaving = false)
+                }.onFailure {
+                    _uiState.value = _uiState.value.copy(isSaving = false, error = it.message)
+                }
         }
     }
 

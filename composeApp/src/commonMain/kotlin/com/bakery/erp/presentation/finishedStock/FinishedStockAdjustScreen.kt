@@ -20,6 +20,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -37,6 +38,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -73,7 +75,7 @@ private val MOVEMENT_OPTIONS = listOf(
     MovementOption(FinishedMovementType.AJUSTE, -1, "Ajuste por menos",
         "Conteo manual encontró menos producto del que registra el sistema."),
     MovementOption(FinishedMovementType.AJUSTE, 1, "Ajuste por más",
-        "Conteo manual encontró más producto del que registra el sistema (raro)."),
+        "Conteo manual encontró más producto del que registra el sistema, o conteo inicial de un producto nuevo en la sucursal."),
     MovementOption(FinishedMovementType.VENTA, -1, "Venta directa",
         "Venta puntual de mostrador sin pasar por POS. Sale del inventario.")
 )
@@ -98,7 +100,11 @@ fun FinishedStockAdjustScreen(
     }
 
     var selectedProductId by rememberSaveable { mutableStateOf(productId ?: "") }
-    var selectedOption by rememberSaveable { mutableStateOf(MOVEMENT_OPTIONS.first().label) }
+    // Desde "Agregar producto" casi siempre es cargar lo que ya estaba en el estante.
+    var selectedOption by rememberSaveable {
+        mutableStateOf(if (productId == null) "Ajuste por más" else MOVEMENT_OPTIONS.first().label)
+    }
+    var productSearch by rememberSaveable { mutableStateOf("") }
     var quantityInput by rememberSaveable { mutableStateOf("") }
     var reason by rememberSaveable { mutableStateOf("") }
 
@@ -112,6 +118,10 @@ fun FinishedStockAdjustScreen(
     val productStock: FinishedProductStock? = remember(state.stocks, selectedProductId) {
         state.stocks.firstOrNull { it.productId == selectedProductId }
     }
+    val selectedProduct = remember(state.catalog, selectedProductId) {
+        state.catalog.firstOrNull { it.id == selectedProductId }
+    }
+    val productName = productStock?.productName ?: selectedProduct?.name
     val option = remember(selectedOption) {
         MOVEMENT_OPTIONS.firstOrNull { it.label == selectedOption } ?: MOVEMENT_OPTIONS.first()
     }
@@ -161,40 +171,83 @@ fun FinishedStockAdjustScreen(
                         }
                     }
 
-                    // Selector de producto (solo si no vino preseleccionado)
-                    var productExpanded by remember { mutableStateOf(false) }
+                    // Selector de producto (solo si no vino preseleccionado). Busca en todo el
+                    // catálogo, no solo en lo que ya tiene stock: así entra el conteo inicial de un
+                    // pan que todavía no ha llegado en ningún despacho.
                     if (productId == null) {
-                        ExposedDropdownMenuBox(
-                            expanded = productExpanded,
-                            onExpandedChange = { productExpanded = !productExpanded }
-                        ) {
-                            OutlinedTextField(
-                                readOnly = true,
-                                value = productStock?.productName ?: "Selecciona producto",
-                                onValueChange = {},
-                                label = { Text("Producto *") },
-                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = productExpanded) },
-                                modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth()
-                            )
-                            ExposedDropdownMenu(
-                                expanded = productExpanded,
-                                onDismissRequest = { productExpanded = false }
+                        if (productName != null) {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(10.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color.White),
+                                elevation = CardDefaults.cardElevation(0.dp)
                             ) {
-                                if (state.stocks.isEmpty()) {
-                                    DropdownMenuItem(
-                                        text = { Text("No hay productos con stock en esta sucursal") },
-                                        onClick = { productExpanded = false },
-                                        enabled = false
-                                    )
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("Producto", style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(productName, style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.SemiBold, color = DeepSeaBlue)
+                                        Text(
+                                            "Stock actual: ${(productStock?.currentStock ?: 0.0).fmt(0)} " +
+                                                (selectedProduct?.unit?.takeIf { it.isNotBlank() } ?: "unidades"),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    TextButton(onClick = { selectedProductId = ""; productSearch = "" }) {
+                                        Text("Cambiar")
+                                    }
                                 }
-                                state.stocks.forEach { s ->
-                                    DropdownMenuItem(
-                                        text = { Text("${s.productName} · ${s.currentStock.fmt(0)} u") },
-                                        onClick = {
-                                            selectedProductId = s.productId
-                                            productExpanded = false
-                                        }
-                                    )
+                            }
+                        } else {
+                            OutlinedTextField(
+                                value = productSearch,
+                                onValueChange = { productSearch = it },
+                                label = { Text("Buscar producto *") },
+                                leadingIcon = { Icon(Icons.Default.Search, null) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            val stockById = remember(state.stocks) {
+                                state.stocks.associate { it.productId to it.currentStock }
+                            }
+                            val matches = remember(state.catalog, productSearch) {
+                                if (productSearch.isBlank()) emptyList()
+                                else state.catalog
+                                    .filter { it.name.contains(productSearch.trim(), ignoreCase = true) }
+                                    .take(12)
+                            }
+                            if (productSearch.isNotBlank() && matches.isEmpty()) {
+                                Text(
+                                    "No hay productos activos con ese nombre. Créalo primero en Productos.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            matches.forEach { p ->
+                                Card(
+                                    onClick = { selectedProductId = p.id },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                                    elevation = CardDefaults.cardElevation(0.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(p.name, style = MaterialTheme.typography.bodyMedium,
+                                            modifier = Modifier.weight(1f))
+                                        Text(
+                                            stockById[p.id]?.let { "${it.fmt(0)} en tienda" } ?: "Sin stock aún",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -282,23 +335,28 @@ fun FinishedStockAdjustScreen(
                         isError = reason.isBlank()
                     )
 
-                    val canSave = selectedProductId.isNotEmpty() && qty > 0 &&
+                    val canSave = productName != null && qty > 0 &&
                         !exceedsStock && reason.isNotBlank() && !state.isLoading
 
                     Button(
                         onClick = {
                             val u = user ?: return@Button
-                            val stock = productStock ?: return@Button
+                            val name = productName ?: return@Button
+                            // Entra al promedio que ya tenía; si nunca tuvo, al costo de compra
+                            // (reventa). El pan sin historia entra a 0, como antes.
+                            val unitCost = productStock?.avgUnitCost?.takeIf { it > 0.0 }
+                                ?: selectedProduct?.purchaseCost ?: 0.0
                             viewModel.registerAdjustment(
                                 companyId = companyId,
-                                productId = stock.productId,
-                                productName = stock.productName,
+                                productId = selectedProductId,
+                                productName = name,
                                 branchId = branchId,
-                                branchName = stock.branchName,
+                                branchName = productStock?.branchName ?: branch?.name.orEmpty(),
                                 signedDelta = signedDelta,
                                 type = option.type,
                                 reason = reason,
-                                currentUser = u
+                                currentUser = u,
+                                unitCost = unitCost
                             )
                         },
                         enabled = canSave,

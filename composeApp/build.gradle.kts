@@ -145,8 +145,8 @@ android {
         applicationId = "com.bakery.erp"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 24
-        versionName = "24"
+        versionCode = 29
+        versionName = "29"
     }
     packaging {
         resources {

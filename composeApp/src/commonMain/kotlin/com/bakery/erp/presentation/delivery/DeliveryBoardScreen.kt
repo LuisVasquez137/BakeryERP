@@ -74,6 +74,7 @@ import com.bakery.erp.model.User
 import com.bakery.erp.model.UserRole
 import com.bakery.erp.model.boardStage
 import com.bakery.erp.model.canAccessBranch
+import com.bakery.erp.model.carrierPlantIdOf
 import com.bakery.erp.model.etaLabel
 import com.bakery.erp.model.hasPermission
 import com.bakery.erp.model.isMyTurn
@@ -107,6 +108,7 @@ fun DeliveryBoardScreen(
     onOpenPacking: () -> Unit,
     onOpenRun: (runId: String) -> Unit,
     onOpenHistory: () -> Unit,
+    onOpenTransfer: (transferId: String) -> Unit,
     authViewModel: AuthViewModel,
     viewModel: DeliveryViewModel,
     dispatchViewModel: DispatchViewModel
@@ -173,10 +175,31 @@ fun DeliveryBoardScreen(
         containerColor = BrandColors.Ivory
     ) { padding ->
         val filtered = visible.filter { stageFilter == null || it.boardStage().name == stageFilter }
-        val sections = remember(filtered, state.boardTripByShift, state.boardBranches) {
-            filtered.groupBy { it.originBranchId to viewModel.tripOf(it) }
-                .toList()
+        // Pedidos entre sucursales (pan molde, tostado) que van en el camión: se muestran en su
+        // viaje, aunque ese viaje no lleve ninguna nota. Con un filtro de etapa no aplican.
+        val dayTransfers = remember(state.boardTransfers, state.boardBranches, user, stageFilter) {
+            if (user == null || stageFilter != null) emptyList() else state.boardTransfers.filter { t ->
+                user.canAccessBranch(t.originBranchId) || user.canAccessBranch(t.destinationBranchId) ||
+                    user.canAccessBranch(carrierPlantIdOf(t, state.boardBranches.values))
+            }
+        }
+        val sections = remember(filtered, dayTransfers, state.boardTripByShift, state.boardBranches) {
+            val byNotes = filtered.groupBy { it.originBranchId to viewModel.tripOf(it) }
+            // Una planta de un solo viaje (sin `dispatchOrder`) tiene su sección en 0: el pedido va ahí.
+            val transferKeys = dayTransfers.map { t ->
+                val carrier = carrierPlantIdOf(t, state.boardBranches.values)
+                if ((carrier to t.trip) !in byNotes && (carrier to 0) in byNotes) carrier to 0 else carrier to t.trip
+            }
+            (byNotes.keys + transferKeys).distinct()
+                .map { key -> key to byNotes[key].orEmpty() }
                 .sortedWith(compareBy({ state.boardBranches[it.first.first]?.name.orEmpty() }, { if (it.first.second == 0) 9 else it.first.second }))
+        }
+        val transfersBySection = remember(sections, dayTransfers) {
+            val keys = sections.map { it.first }.toSet()
+            dayTransfers.groupBy { t ->
+                val carrier = carrierPlantIdOf(t, state.boardBranches.values)
+                if ((carrier to t.trip) !in keys && (carrier to 0) in keys) carrier to 0 else carrier to t.trip
+            }
         }
         val multiPlant = sections.map { it.first.first }.distinct().size > 1
         var openReceived by rememberSaveable { mutableStateOf(setOf<String>()) }
@@ -237,6 +260,18 @@ fun DeliveryBoardScreen(
                         onDispatch = { viewModel.openDispatchSheet(companyId, plantId, trip) },
                         onOpenRun = onOpenRun
                     )
+                }
+                val sectionTransfers = transfersBySection[key].orEmpty()
+                if (sectionTransfers.isNotEmpty()) {
+                    item(key = "t-$sectionKey", span = { GridItemSpan(maxLineSpan) }) {
+                        TripTransfersCard(
+                            transfers = sectionTransfers,
+                            carrierPlantId = plantId,
+                            user = user,
+                            supervision = viewer.supervision,
+                            onOpen = onOpenTransfer
+                        )
+                    }
                 }
                 val active = sortForBoard(notes.filter { it.boardStage() !in setOf(BoardStage.RECEIVED, BoardStage.CANCELLED) }, viewer)
                 val closed = notes.filter { it.boardStage() in setOf(BoardStage.RECEIVED, BoardStage.CANCELLED) }

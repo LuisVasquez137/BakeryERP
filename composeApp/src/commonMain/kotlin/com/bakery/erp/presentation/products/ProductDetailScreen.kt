@@ -338,7 +338,10 @@ private fun ProductInfoSection(
         product.decorations.forEach { deco ->
             DetailRow(
                 label = deco.preparationName.ifEmpty { deco.ingredientName },
-                value = "${deco.gramsPerUnit.fmt(1)} g / unidad"
+                value = if (deco.isCounted) {
+                    val n = kotlin.math.round(1.0 / deco.unitsPerProduct).toLong()
+                    if (n == 1L) "1 bizcocho" else "1/$n del molde"
+                } else "${deco.gramsPerUnit.fmt(1)} g / unidad"
             )
         }
     }

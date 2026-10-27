@@ -56,6 +56,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -704,6 +706,24 @@ class POSViewModel(
         _uiState.update { it.copy(cart = it.cart + line) }
     }
 
+    /**
+     * "Cobrar ahora" de una cuenta del restaurante en efectivo: entra al carrito sola para que el
+     * cobro pase por el diálogo de pago como cualquier venta (método, vuelto, factura). Antes se
+     * recibía directo con el efectivo que ComandaYa pone por omisión, aunque el cliente pagara
+     * con tarjeta en el mostrador. Con otra venta en el carrito no se mezcla: devuelve false.
+     */
+    fun chargePendingNow(sale: Sale): Boolean {
+        if (_uiState.value.cart.any { it.pendingSaleId != sale.id }) {
+            _uiState.update {
+                it.copy(error = "Hay otra venta en el carrito: cóbrala o ponla en espera primero. " +
+                    "Si es del mismo cliente, usa \"Agregar al carrito\".")
+            }
+            return false
+        }
+        addPendingToCart(sale)
+        return true
+    }
+
     private fun restaurantLineName(sale: Sale): String =
         listOfNotNull(
             "Restaurante",
@@ -875,19 +895,18 @@ class POSViewModel(
         // Sin internet se cobra lo de mostrador (ver createSale). Lo que tiene una guarda contra
         // otra caja o un tercero de por medio se corta acá, antes de mover nada: el saldo de un
         // anticipo o de un crédito se gastaría dos veces, una cuenta del restaurante la podría
-        // recibir otra caja, y la factura la certifica la SAT en línea.
+        // recibir otra caja. La factura sí pasa: la venta sube SOLICITADA y se emite al volver
+        // (ver flushOfflineInvoices).
         if (!ConnectionStatus.isOnline.value) {
             val blocked = when {
-                !ConnectionStatus.offlineSalesSupported -> offlineMessage("cobrar en la versión web")
-                paymentMethod == SalePaymentMethod.CREDIT -> offlineMessage("cargar a crédito")
-                deposit != null -> offlineMessage("aplicar anticipos")
-                state.cart.any { it.isRestaurant } -> offlineMessage("cobrar cuentas del restaurante")
-                invoice != null && canInvoice() ->
-                    "Sin internet no se puede facturar. Cobrá sin factura o esperá a que vuelva la conexión."
+                !ConnectionStatus.offlineSalesSupported -> "cobrar en la versión web"
+                paymentMethod == SalePaymentMethod.CREDIT -> "cargar a crédito"
+                deposit != null -> "aplicar anticipos"
+                state.cart.any { it.isRestaurant } -> "cobrar cuentas del restaurante"
                 else -> null
             }
             if (blocked != null) {
-                _uiState.update { it.copy(error = blocked) }; return
+                _uiState.update { it.copy(error = offlineMessage(blocked)) }; return
             }
         }
         val isCredit = paymentMethod == SalePaymentMethod.CREDIT
@@ -1262,7 +1281,10 @@ class POSViewModel(
                     paymentBreakdown = if (isMixed) chargedParts else sale.paymentBreakdown,
                     depositFolio = depositToApply?.folio.orEmpty().takeIf { depositApplied > 0.004 }.orEmpty(),
                     depositAmount = depositApplied)
+                val invoiced = invoiceRequest != null && invoiceSaleIds.isNotEmpty()
+                val invoiceLater = invoiced && !ConnectionStatus.isOnline.value
                 val receipt = buildReceiptData(checkoutSale, snapshotCart, branch, invoiced = invoiceRequest != null)
+                    .let { r -> if (invoiceLater) r.copy(footerMessage = OFFLINE_INVOICE_FOOTER) else r }
                 val record = CheckoutRecord(
                     checkoutId = payment.checkoutId,
                     at = Clock.System.now().toEpochMilliseconds(),
@@ -1282,7 +1304,6 @@ class POSViewModel(
                     ),
                     cashierName = currentUser.displayName
                 )
-                val invoiced = invoiceRequest != null && invoiceSaleIds.isNotEmpty()
                 _uiState.update {
                     it.copy(
                         isLoading = false,
@@ -1294,10 +1315,19 @@ class POSViewModel(
                         lastSaleSummary = LastSaleSummary(chargedTotal, change, chargeMethod),
                         lastReceiptData = receipt,
                         recentCheckouts = (listOf(record) + it.recentCheckouts).take(MAX_RECENT_CHECKOUTS),
-                        invoiceProgress = if (invoiced) InvoiceProgress(invoiceSaleIds.first(), FelInvoiceStatus.SOLICITADA) else null
+                        invoiceProgress = when {
+                            invoiceLater -> InvoiceProgress(invoiceSaleIds.first(), FelInvoiceStatus.PENDIENTE,
+                                "Sin internet: la factura se emite sola al volver la conexión y queda en el historial de ventas.")
+                            invoiced -> InvoiceProgress(invoiceSaleIds.first(), FelInvoiceStatus.SOLICITADA)
+                            else -> null
+                        }
                     )
                 }
-                if (invoiced && invoiceRequest != null) certifyInvoice(companyId, invoiceSaleIds, invoiceRequest)
+                if (invoiceLater && invoiceRequest != null) {
+                    queueOfflineInvoice(companyId, invoiceSaleIds, invoiceRequest, chargedTotal)
+                } else if (invoiced && invoiceRequest != null) {
+                    certifyInvoice(companyId, invoiceSaleIds, invoiceRequest)
+                }
             }.onFailure { err ->
                 // Lo reservado del anticipo que no llegó a ninguna venta vuelve a estar disponible.
                 val unused = money(depositApplied - depositUsed)
@@ -1824,6 +1854,8 @@ class POSViewModel(
     /** Nombre del NIT en la SAT, para que la cajera confirme a quién le factura. */
     suspend fun lookupNit(companyId: String, nit: String): Result<String?> {
         val branchId = _uiState.value.branch?.id ?: return Result.success(null)
+        // Sin internet la llamada se quedaría esperando: el nombre se escribe a mano.
+        if (!ConnectionStatus.isOnline.value) return Result.failure(IllegalStateException("Sin conexión"))
         return runCatching { felRepository.lookupNit(companyId, branchId, nit) }
     }
 
@@ -1863,6 +1895,61 @@ class POSViewModel(
                 s.copy(
                     invoiceProgress = progress,
                     lastReceiptData = if (certified != null) s.lastReceiptData?.copy(
+                        invoice = com.bakery.erp.model.receiptInvoiceFrom(certified, formatReceiptTimestamp(certified.certifiedAt))
+                    ) else s.lastReceiptData
+                )
+            }
+        }
+    }
+
+    /** Facturas cobradas sin internet que esta caja pide apenas suben sus ventas. */
+    private data class OfflineInvoice(
+        val companyId: String,
+        val saleIds: List<String>,
+        val request: FelInvoiceRequest,
+        val total: Double
+    )
+
+    private val offlineInvoices = mutableListOf<OfflineInvoice>()
+    private var offlineInvoiceJob: Job? = null
+
+    /**
+     * La venta ya va SOLICITADA y con el receptor adentro: el barrido del servidor
+     * (`felReintentarPendientes`, cada 5 min) la factura aunque esta caja no vuelva a abrirse.
+     * Esto solo la adelanta: apenas hay internet y no queda ninguna venta por subir, se pide
+     * como cualquier otra. Si chocan las dos, el candado del DTE deja pasar una.
+     */
+    private fun queueOfflineInvoice(companyId: String, saleIds: List<String>, request: FelInvoiceRequest, total: Double) {
+        offlineInvoices += OfflineInvoice(companyId, saleIds, request, total)
+        if (offlineInvoiceJob?.isActive == true) return
+        offlineInvoiceJob = viewModelScope.launch {
+            combine(ConnectionStatus.isOnline, ConnectionStatus.pendingSales) { online, pending -> online && pending == 0 }
+                .first { it }
+            flushOfflineInvoices()
+        }
+    }
+
+    private suspend fun flushOfflineInvoices() {
+        val queued = offlineInvoices.toList()
+        offlineInvoices.clear()
+        queued.forEach { inv ->
+            val result = runCatching { felRepository.certifySales(inv.companyId, inv.saleIds, inv.request) }.getOrNull()
+                ?: return@forEach  // Lo termina el barrido.
+            // La cajera ya está en otra venta: un rechazo (NIT inexistente, que sin internet no
+            // se pudo consultar) se avisa, porque nadie más lo va a ver hasta revisar el historial.
+            if (result.status == FelInvoiceStatus.RECHAZADO) {
+                _uiState.update {
+                    it.copy(error = "La factura de Q ${inv.total.fmtMoney(2)} cobrada sin internet no se emitió: " +
+                        "${result.message}. Corregila desde el historial de ventas.")
+                }
+            }
+            _uiState.update { s ->
+                if (s.invoiceProgress?.saleId != inv.saleIds.first()) return@update s
+                val certified = result.takeIf { result.status == FelInvoiceStatus.CERTIFICADO }
+                s.copy(
+                    invoiceProgress = InvoiceProgress(inv.saleIds.first(), result.status, result.message, result),
+                    lastReceiptData = if (certified != null) s.lastReceiptData?.copy(
+                        footerMessage = ReceiptData.DEFAULT_FOOTER,
                         invoice = com.bakery.erp.model.receiptInvoiceFrom(certified, formatReceiptTimestamp(certified.certifiedAt))
                     ) else s.lastReceiptData
                 )
@@ -2058,3 +2145,7 @@ private fun money(v: Double): Double = kotlin.math.round(v * 100) / 100
 
 /** Cuánto espera el acuse a que Digifact certifique antes de decir "se completa sola". */
 private const val INVOICE_WAIT_MS = 15_000L
+
+/** Pie del ticket de una venta facturada sin internet: la factura todavía no existe. */
+private const val OFFLINE_INVOICE_FOOTER =
+    "Factura electrónica en trámite: se emite al volver la conexión. ¡Gracias por su compra!"

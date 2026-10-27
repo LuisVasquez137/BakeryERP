@@ -10,6 +10,7 @@
  * Uso:
  *   node _cleanup_test_orders.js          → solo reporta (dry run)
  *   node _cleanup_test_orders.js --apply  → borra
+ *   --orders=id1,id2                      → otros pedidos en vez de la lista de abajo
  */
 
 const { initializeApp } = require('firebase-admin/app');
@@ -20,7 +21,8 @@ const db = getFirestore();
 const APPLY = process.argv.includes('--apply');
 const COMPANY = 'tiO54slG1n9sk6k2ePCD';
 
-const ORDER_IDS = [
+const ordersArg = process.argv.find(a => a.startsWith('--orders='));
+const DEFAULT_ORDER_IDS = [
   '7OM8ozIyZ5gSlccT4NQW', // 2026-09-20 Calvario -> Bombero
   'J2altGmWxPSK1GS1EXX9', // 2026-09-20 Democracia -> Bombero
   'INUNHytr5EC6Ce09BEfW', // 2026-09-27 Democracia -> Bombero
@@ -28,6 +30,7 @@ const ORDER_IDS = [
   '5e1o2qsY8HTkNgv0rUER', // 2026-10-04 Calvario -> Bombero
   'i5mKPaNaXC3wGPhtLwRb'  // 2026-10-04 Democracia -> Bombero
 ];
+const ORDER_IDS = ordersArg ? ordersArg.split('=')[1].split(',').filter(Boolean) : DEFAULT_ORDER_IDS;
 
 const targets = new Set(ORDER_IDS);
 const problems = [];
@@ -171,7 +174,10 @@ async function deleteSubcollection(docRef, name) {
     const d = await c.collection('notifications').doc(n.id).get();
     backup.notifications.push({ id: n.id, data: d.data() });
   }
-  const backupPath = require('path').join(__dirname, 'backup_pedidos_prueba.json');
+  // Con --orders el respaldo lleva fecha: no pisa el de la limpieza original.
+  const backupPath = require('path').join(__dirname, ordersArg
+    ? 'backup_pedidos_prueba_' + new Date().toISOString().replace(/[:.]/g, '-') + '.json'
+    : 'backup_pedidos_prueba.json');
   require('fs').writeFileSync(backupPath, JSON.stringify(backup, null, 2), 'utf8');
   console.log('\nRespaldo escrito en ' + backupPath);
 

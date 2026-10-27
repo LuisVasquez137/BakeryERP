@@ -81,7 +81,20 @@ internal fun User.canReceive(t: StockTransfer): Boolean =
 internal fun User.canCancel(t: StockTransfer): Boolean =
     t.isInTransit && canAccessBranch(t.originBranchId) && hasPermission(Permission.SEND_STOCK_TRANSFER)
 
+/** Quién manda un pedido: el que envía traslados desde la sucursal a la que se lo pidieron. */
+internal fun User.canSendRequest(t: StockTransfer): Boolean =
+    t.isRequested && canAccessBranch(t.originBranchId) && hasPermission(Permission.SEND_STOCK_TRANSFER)
+
+/** Quién pide (y cancela su pedido): el que recibe o maneja inventario en la sucursal que lo necesita. */
+internal fun User.canRequestTransfers(): Boolean =
+    hasPermission(Permission.RECEIVE_DISPATCH) || hasPermission(Permission.SEND_STOCK_TRANSFER) ||
+        hasPermission(Permission.MANAGE_FINISHED_STOCK)
+
+internal fun User.canCancelRequest(t: StockTransfer): Boolean =
+    t.isRequested && canAccessBranch(t.destinationBranchId) && canRequestTransfers()
+
 internal fun statusTone(status: String) = when (status) {
+    StockTransferStatus.REQUESTED -> ChipTone.INFO
     StockTransferStatus.IN_TRANSIT -> ChipTone.ATTENTION
     StockTransferStatus.RECEIVED -> ChipTone.SUCCESS
     else -> ChipTone.NEUTRAL
@@ -112,6 +125,17 @@ fun StockTransferDetailScreen(
 
     val t = state.selected?.takeIf { it.id == transferId }
     val receiving = t != null && user?.canReceive(t) == true
+    val sending = t != null && user?.canSendRequest(t) == true
+    // Quien manda un pedido ve cuánto tiene antes de escribir cuánto va.
+    LaunchedEffect(companyId, sending, t?.originBranchId) {
+        if (sending && t != null) viewModel.prepareForm(companyId, t.originBranchId)
+    }
+    // Lo que se manda, por línea. Arranca en lo pedido.
+    var toSend by remember(t?.id, t?.status) {
+        mutableStateOf<List<String>>(t?.lines?.map { it.requestedQuantity.fmtTrim(3) } ?: emptyList())
+    }
+    val toSendValues = toSend.map { it.replace(',', '.').toDoubleOrNull() }
+    var confirmSend by remember { mutableStateOf(false) }
     // Lo contado, por línea. Arranca en lo enviado.
     var counted by remember(t?.id, t?.status) {
         mutableStateOf<List<String>>(t?.lines?.map { it.quantity.fmtTrim(3) } ?: emptyList())
@@ -139,7 +163,28 @@ fun StockTransferDetailScreen(
                 )
             },
             bottomBar = {
-                if (t != null && user != null && (receiving || user.canCancel(t))) {
+                if (t != null && user != null && (sending || user.canCancelRequest(t))) {
+                    Surface(color = BrandColors.Ivory, shadowElevation = 8.dp) {
+                        AdaptiveContainer {
+                            Row(
+                                Modifier.fillMaxWidth().navigationBarsPadding().padding(12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = { askCancel = true },
+                                    modifier = Modifier.weight(1f)
+                                ) { Text(if (sending) "No se puede" else "Cancelar pedido", color = BrandColors.Danger) }
+                                if (sending) Button(
+                                    onClick = { confirmSend = true },
+                                    enabled = toSendValues.all { it != null && it >= 0.0 } &&
+                                        toSendValues.any { (it ?: 0.0) > 0.0 } && !state.isBusy,
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(containerColor = BrandColors.Primary)
+                                ) { Text("Enviar a ${t.destinationBranchName}", fontWeight = FontWeight.SemiBold) }
+                            }
+                        }
+                    }
+                } else if (t != null && user != null && (receiving || user.canCancel(t))) {
                     Surface(color = BrandColors.Ivory, shadowElevation = 8.dp) {
                         AdaptiveContainer {
                             Row(
@@ -177,6 +222,13 @@ fun StockTransferDetailScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     item { HeaderCard(t, canSeeValue) }
+                    if (sending) item {
+                        Text(
+                            "Escribe lo que de verdad mandas. Al enviarlo sale de tu inventario; si mandas menos, ${t.destinationBranchName} lo ve.",
+                            style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate,
+                            modifier = Modifier.padding(horizontal = 4.dp)
+                        )
+                    }
                     if (receiving) item {
                         Text(
                             "Cuenta lo que llegó. Cada línea trae lo que mandaron: cambia solo lo que no cuadre.",
@@ -187,10 +239,19 @@ fun StockTransferDetailScreen(
                     itemsIndexed(t.lines, key = { i, l -> "$i${l.itemId}" }) { i, line ->
                         LineRow(
                             line = line,
+                            isRequested = t.isRequested,
                             canSeeValue = canSeeValue,
-                            countedText = if (receiving) counted.getOrElse(i) { "" } else null,
+                            available = if (sending) state.originProductStock[line.itemId]?.currentStock ?: 0.0 else null,
+                            countedText = when {
+                                sending -> toSend.getOrElse(i) { "" }
+                                receiving -> counted.getOrElse(i) { "" }
+                                else -> null
+                            },
+                            fieldLabel = if (sending) "Mando" else "Llegó (${line.unit})",
                             onCount = { v ->
-                                counted = counted.toMutableList().also { it[i] = v.filter { c -> c.isDigit() || c == '.' || c == ',' }.take(9) }
+                                val clean = v.filter { c -> c.isDigit() || c == '.' || c == ',' }.take(9)
+                                if (sending) toSend = toSend.toMutableList().also { it[i] = clean }
+                                else counted = counted.toMutableList().also { it[i] = clean }
                             }
                         )
                     }
@@ -239,7 +300,64 @@ fun StockTransferDetailScreen(
         )
     }
 
-    if (askCancel && t != null) {
+    if (confirmSend && t != null) {
+        val values = toSendValues.map { it ?: 0.0 }
+        val short = t.lines.indices.filter { values[it] < t.lines[it].requestedQuantity - 0.0001 }
+        AlertDialog(
+            onDismissRequest = { confirmSend = false },
+            title = { Text("¿Enviar a ${t.destinationBranchName}?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Sale de tu inventario y va ${t.deliveryLabel().lowercase().ifEmpty { "en camino" }}.")
+                    if (short.isNotEmpty()) {
+                        Text("Va menos de lo pedido:", fontWeight = FontWeight.SemiBold, color = BrandColors.AccentDeep)
+                        short.forEach { i ->
+                            val l = t.lines[i]
+                            Text("• ${l.itemName}: ${values[i].fmtTrim()} de ${l.requestedQuantity.fmtTrim()}", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    confirmSend = false
+                    user?.let { viewModel.sendRequest(companyId, t, values, it) }
+                }) { Text("Enviar") }
+            },
+            dismissButton = { TextButton(onClick = { confirmSend = false }) { Text("Revisar") } }
+        )
+    }
+
+    if (askCancel && t != null && t.isRequested) {
+        var reason by remember { mutableStateOf("") }
+        val rejecting = user?.canSendRequest(t) == true
+        AlertDialog(
+            onDismissRequest = { askCancel = false },
+            title = { Text(if (rejecting) "¿No puedes mandar este pedido?" else "¿Cancelar tu pedido?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        if (rejecting) "Se le avisa a ${t.destinationBranchName} para que no lo espere."
+                        else "Se le avisa a ${t.originBranchName} para que no lo prepare."
+                    )
+                    OutlinedTextField(
+                        value = reason,
+                        onValueChange = { reason = it.take(200) },
+                        label = { Text(if (rejecting) "Por qué" else "Por qué (opcional)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { askCancel = false; user?.let { viewModel.cancel(companyId, t, reason, it) } },
+                    enabled = !rejecting || reason.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = BrandColors.Danger)
+                ) { Text(if (rejecting) "No se puede" else "Cancelar pedido") }
+            },
+            dismissButton = { TextButton(onClick = { askCancel = false }) { Text("Volver") } }
+        )
+    } else if (askCancel && t != null) {
         var reason by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { askCancel = false },
@@ -281,14 +399,16 @@ private fun HeaderCard(t: StockTransfer, canSeeValue: Boolean) {
                 Text(t.destinationBranchName, fontWeight = FontWeight.SemiBold, color = BrandColors.TextSlate, modifier = Modifier.weight(1f))
                 BrandChip(StockTransferStatus.label(t.status), statusTone(t.status))
             }
-            Detail("Envió ${t.sentByName} · ${t.sentAt.fmtDateTime()}")
+            if (t.ridesDelivery) Detail(t.deliveryLabel() + " del camión")
+            if (t.wasRequested) Detail("Pidió ${t.requestedByName} · ${t.requestedAt.fmtDateTime()}")
+            if (t.sentAt > 0L) Detail("Envió ${t.sentByName} · ${t.sentAt.fmtDateTime()}")
             if (t.note.isNotBlank()) Detail("Nota: ${t.note}")
             if (t.isReceived) {
                 Detail("Recibió ${t.receivedByName} · ${t.receivedAt.fmtDateTime()}")
                 if (t.receiveNote.isNotBlank()) Detail("Nota: ${t.receiveNote}")
             }
             if (t.status == StockTransferStatus.CANCELLED) {
-                Detail("Canceló ${t.cancelledByName} · ${t.cancelledAt.fmtDateTime()}")
+                Detail((if (t.sentAt > 0L) "Canceló " else "No se mandó · ") + "${t.cancelledByName} · ${t.cancelledAt.fmtDateTime()}")
                 if (t.cancelReason.isNotBlank()) Detail("Motivo: ${t.cancelReason}")
             }
             if (canSeeValue && t.sentValue > 0) {
@@ -305,7 +425,15 @@ private fun Detail(text: String) {
 }
 
 @Composable
-private fun LineRow(line: StockTransferLine, canSeeValue: Boolean, countedText: String?, onCount: (String) -> Unit) {
+private fun LineRow(
+    line: StockTransferLine,
+    isRequested: Boolean,
+    canSeeValue: Boolean,
+    available: Double?,
+    countedText: String?,
+    fieldLabel: String,
+    onCount: (String) -> Unit
+) {
     Card(
         colors = CardDefaults.cardColors(containerColor = Color.White),
         shape = RoundedCornerShape(10.dp),
@@ -315,12 +443,24 @@ private fun LineRow(line: StockTransferLine, canSeeValue: Boolean, countedText: 
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(line.itemName, fontWeight = FontWeight.SemiBold, color = BrandColors.TextSlate)
-                val sent = line.quantityLabel()
-                val base = "${line.quantity.fmtTrim()} ${line.unit}"
-                Text(
-                    "Enviado: $sent" + if (line.displayQuantity.isNotBlank() && sent != base) " ($base)" else "",
+                if (line.requestedQuantity > 0.0) Text(
+                    "Pidieron: ${line.requestedQuantity.fmtTrim()} ${line.unit}",
                     style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate
                 )
+                available?.let {
+                    Text("Tienes ${it.fmtTrim()} ${line.unit}", style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate)
+                }
+                if (!isRequested) {
+                    val sent = line.quantityLabel()
+                    val base = "${line.quantity.fmtTrim()} ${line.unit}"
+                    Text(
+                        "Enviado: $sent" + if (line.displayQuantity.isNotBlank() && sent != base) " ($base)" else "",
+                        style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate
+                    )
+                    if (line.requestedQuantity > line.quantity + 0.0001) {
+                        BrandChip("Mandaron ${(line.requestedQuantity - line.quantity).fmtTrim()} menos", ChipTone.ATTENTION)
+                    }
+                }
                 if (line.kind == StockTransferItemKind.INGREDIENT) Text("Insumo", style = MaterialTheme.typography.labelSmall, color = BrandColors.MutedSlate)
                 line.receivedQuantity?.let { r ->
                     Text("Recibido: ${r.fmtTrim()} ${line.unit}", style = MaterialTheme.typography.bodySmall, color = BrandColors.TextSlate)
@@ -342,7 +482,7 @@ private fun LineRow(line: StockTransferLine, canSeeValue: Boolean, countedText: 
                 OutlinedTextField(
                     value = countedText,
                     onValueChange = onCount,
-                    label = { Text("Llegó (${line.unit})") },
+                    label = { Text(fieldLabel) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.widthIn(max = 130.dp)

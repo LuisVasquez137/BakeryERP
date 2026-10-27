@@ -13,7 +13,12 @@ data class ScaledRecipeView(
     val totalDoughGrams: Double,
     val rows: List<ScaledRecipeRow>,
     val sponge: ScaledSpongeContribution? = null,
-    val decorations: List<ScaledDecoration> = emptyList()
+    val decorations: List<ScaledDecoration> = emptyList(),
+    /**
+     * Receta por tanda (torta de leche): "2 bandejas · salen 70" en lugar de la masa total.
+     * Sus filas traen [ScaledRecipeRow.displayQuantity] y no gramos.
+     */
+    val batchLabel: String? = null
 )
 
 data class ScaledRecipeRow(
@@ -34,7 +39,9 @@ data class ScaledRecipeRow(
      */
     val countEquivalent: Double? = null,
     /** Unidad de conteo del insumo ("unidad" / "docena"). Vacío si se pesa. */
-    val countUnit: String = ""
+    val countUnit: String = "",
+    /** Receta por tanda: la cantidad tal como se escribió en la receta ("12 unidad", "2 lt"). */
+    val displayQuantity: String? = null
 )
 
 data class ScaledSpongeContribution(
@@ -45,5 +52,7 @@ data class ScaledSpongeContribution(
 data class ScaledDecoration(
     val preparationName: String,
     val gramsPerUnit: Double,
-    val totalGrams: Double
+    val totalGrams: Double,
+    /** Bizcochos que se usan (el adorno se cuenta, no se pesa). 0 = va por gramos. */
+    val totalUnits: Double = 0.0
 )

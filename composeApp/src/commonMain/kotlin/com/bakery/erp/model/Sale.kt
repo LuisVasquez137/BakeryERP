@@ -195,6 +195,13 @@ data class Sale(
     /** Cuándo se marcó como ya devuelto por el banco. 0 = sigue pendiente. */
     val bankRefundDoneAt: Long = 0L,
     val bankRefundDoneByName: String = "",
+    /**
+     * Forma de pago con la que se cobró, si después se corrigió (ver `SalePaymentChange.kt`).
+     * Vacío = nunca se corrigió. Guarda la primera: correcciones encadenadas no la pisan.
+     */
+    val originalPaymentMethod: String = "",
+    val paymentChangedAt: Long = 0L,
+    val paymentChangedByName: String = "",
     val createdAt: Long = 0L
 )
 

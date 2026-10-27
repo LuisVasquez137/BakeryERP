@@ -167,6 +167,18 @@ fun DeliveryRunScreen(
                             )
                             Spacer(Modifier.height(8.dp))
                         }
+                        // Pan molde, tostado…: lo que se recoge en otra sucursal y lo que se lleva
+                        // además de las notas. No es una parada de la hoja, pero va en el mismo camión.
+                        if (state.transfersForSelectedRun.isNotEmpty()) {
+                            TripTransfersCard(
+                                transfers = state.transfersForSelectedRun,
+                                carrierPlantId = run.originBranchId,
+                                user = user,
+                                supervision = user?.role == com.bakery.erp.model.UserRole.OWNER,
+                                onOpen = null
+                            )
+                            Spacer(Modifier.height(8.dp))
+                        }
 
                         Spacer(Modifier.height(8.dp))
 

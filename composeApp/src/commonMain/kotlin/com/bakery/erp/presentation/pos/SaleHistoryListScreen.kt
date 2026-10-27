@@ -34,6 +34,9 @@ import com.bakery.erp.model.chargedPackaging
 import com.bakery.erp.model.filterByPackaging
 import com.bakery.erp.ui.theme.BrandChip
 import com.bakery.erp.ui.theme.ChipTone
+import com.bakery.erp.ui.theme.ChipEmphasis
+import com.bakery.erp.ui.theme.chipColors
+import com.bakery.erp.ui.theme.paymentMethodTone
 import androidx.compose.runtime.saveable.rememberSaveable
 import com.bakery.erp.model.Sale
 import com.bakery.erp.model.SalePaymentMethod
@@ -84,6 +87,10 @@ fun SaleHistoryListScreen(
         .filter { o -> packagingIds == null || o.sales.any { it.id in packagingIds } }
         .filter { state.invoiceFilter.accepts(it) }
         .filter { it.matches(state.query) }
+        .filter { o -> state.paymentFilter.isEmpty() || (o.paymentParts[state.paymentFilter] ?: 0.0) > 0.004 }
+    // Métodos que aparecen ese día en la caja elegida (más el filtro activo, para poder quitarlo).
+    val methodsOfDay = (ordersFromSales(registerSales).flatMap { it.paymentParts.keys } + state.paymentFilter)
+        .filter { it in SalePaymentMethod.checkout }.toSet()
     val registers = state.sales.filter { it.registerId.isNotBlank() }
         .distinctBy { it.registerId }
         .map { it.registerId to it.registerName.ifBlank { "Caja" } }
@@ -176,6 +183,20 @@ fun SaleHistoryListScreen(
                             onSelect = { viewModel.setRegisterFilter(it) }
                         )
                     ) ChipSeparator()
+                    if (methodsOfDay.size > 1 || state.paymentFilter.isNotEmpty()) {
+                        SalePaymentMethod.checkout.filter { it in methodsOfDay }.forEach { m ->
+                            val (bg, fg) = chipColors(paymentMethodTone(m), ChipEmphasis.SOFT)
+                            FilterChip(
+                                selected = state.paymentFilter == m,
+                                onClick = { viewModel.setPaymentFilter(if (state.paymentFilter == m) "" else m) },
+                                label = { Text(SalePaymentMethod.label(m)) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = bg, selectedLabelColor = fg
+                                )
+                            )
+                        }
+                        ChipSeparator()
+                    }
                     OrderInvoiceFilter.entries.forEach { f ->
                         FilterChip(
                             selected = state.invoiceFilter == f,
@@ -197,7 +218,7 @@ fun SaleHistoryListScreen(
                 }
                 // En la caja nunca se muestra cuánto se lleva vendido, ni al dueño: con ese dato
                 // se puede contar la gaveta antes del cuadre del cierre.
-                DaySummaryLine(sales = registerSales, orders = shownOrders.size, canSeeValue = canSeeTotals && !fromPos)
+                DaySummaryLine(orders = shownOrders, method = state.paymentFilter, canSeeValue = canSeeTotals && !fromPos)
                 HorizontalDivider()
                 when {
                     state.isLoading && state.sales.isEmpty() ->
@@ -282,17 +303,21 @@ private fun ChipSeparator() {
     Box(Modifier.height(24.dp).width(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
 }
 
-/** "12 cobros · 15 ventas · Q 845.00 · promedio Q 56.33" en una línea, en vez de tarjetas. */
+/**
+ * "12 cobros · Q 845.00 · promedio Q 70.42" de lo que se ve en la lista (caja, forma de pago,
+ * búsqueda), en una línea. Con un filtro de forma de pago suma solo esa parte de cada cobro: así
+ * "Caja 1 + Tarjeta" da lo que debería haber en vouchers. Las anuladas no suman.
+ */
 @Composable
-private fun DaySummaryLine(sales: List<Sale>, orders: Int, canSeeValue: Boolean) {
-    val count = sales.size
-    val total = sales.sumOf { it.total }
+private fun DaySummaryLine(orders: List<SaleOrder>, method: String, canSeeValue: Boolean) {
+    val live = orders.filterNot { it.voided }
+    val total = live.sumOf { o -> if (method.isEmpty()) o.total else o.paymentParts[method] ?: 0.0 }
     val text = buildList {
-        add("$orders cobro(s)")
-        add("$count venta(s)")
+        add("${orders.size} cobro(s)")
+        if (live.size < orders.size) add("${orders.size - live.size} anulado(s)")
         if (canSeeValue) {
-            add("Q ${total.fmtMoney(2)}")
-            if (count > 0) add("promedio Q ${(total / count).fmtMoney(2)}")
+            add((if (method.isEmpty()) "" else SalePaymentMethod.label(method) + " ") + "Q ${total.fmtMoney(2)}")
+            if (live.isNotEmpty()) add("promedio Q ${(total / live.size).fmtMoney(2)}")
         }
     }.joinToString(" · ")
     Text(
@@ -326,12 +351,8 @@ private fun OrderCard(order: SaleOrder, canSeeValue: Boolean, showRegister: Bool
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Text(
-                    SalePaymentMethod.label(order.paymentMethod) +
-                        if (order.paymentParts.size > 1 && canSeeValue) " · " + com.bakery.erp.model.paymentPartsLabel(order.paymentParts) else "",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline
-                )
+                Spacer(Modifier.height(2.dp))
+                PaymentMethodChips(order, showAmounts = canSeeValue)
                 val invoiceSale = order.invoicedSale
                 val packaging = order.sales.filter { it.chargedPackaging }
                 if (invoiceSale != null || packaging.isNotEmpty() || order.voided) {
@@ -389,4 +410,28 @@ private fun daysInMonth(year: Int, month: Int): Int = when (month) {
     4, 6, 9, 11 -> 30
     2 -> if ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0) 29 else 28
     else -> 30
+}
+
+/**
+ * La forma de pago del cobro con su color; un pago dividido, una por parte ("Tarjeta Q 100").
+ * Si se corrigió después, lo dice.
+ */
+@Composable
+internal fun PaymentMethodChips(order: SaleOrder, showAmounts: Boolean) {
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+        val parts = order.paymentParts.filterValues { it > 0.004 }
+        if (parts.size > 1) {
+            parts.forEach { (m, amount) ->
+                BrandChip(
+                    text = SalePaymentMethod.label(m) + if (showAmounts) " Q ${amount.fmtMoney(2)}" else "",
+                    tone = paymentMethodTone(m)
+                )
+            }
+        } else {
+            BrandChip(text = SalePaymentMethod.label(order.paymentMethod), tone = paymentMethodTone(order.paymentMethod))
+        }
+        if (order.sales.any { it.paymentChangedAt > 0L }) {
+            Text("corregido", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+        }
+    }
 }

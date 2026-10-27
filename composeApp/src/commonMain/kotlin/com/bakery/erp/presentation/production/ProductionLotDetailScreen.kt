@@ -69,6 +69,15 @@ import com.bakery.erp.model.physicalGoodCount
 import com.bakery.erp.model.reconcileCount
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.presentation.plantissues.PlantIssueDialog
+import com.bakery.erp.presentation.preparationbatches.BakeSheetViewModel
+import com.bakery.erp.presentation.preparationbatches.BAKE_GROUP_PREFIX
+import com.bakery.erp.presentation.preparationbatches.BakePlanDialog
+import com.bakery.erp.presentation.preparationbatches.BakePlanSummary
+import com.bakery.erp.presentation.preparationbatches.FinishBakeDialog
+import com.bakery.erp.presentation.preparationbatches.bakeRecipeView
+import com.bakery.erp.presentation.preparationbatches.batterOfLine
+import com.bakery.erp.presentation.preparationbatches.mixOfBatter
+import com.bakery.erp.presentation.preparationbatches.rowsOfBatter
 import com.bakery.erp.presentation.plantissues.PlantIssueViewModel
 import com.bakery.erp.presentation.products.ProductViewModel
 import com.bakery.erp.ui.ProductImage
@@ -139,7 +148,12 @@ fun ProductionLotDetailScreen(
      */
     plantIssueViewModel: PlantIssueViewModel,
     /** Equipo compartido: confirmar con PIN a quien inicia el lote. */
-    operatorLockViewModel: com.bakery.erp.presentation.operator.OperatorLockViewModel? = null
+    operatorLockViewModel: com.bakery.erp.presentation.operator.OperatorLockViewModel? = null,
+    /**
+     * Bizcochos del lote: el repostero decide acá cuánto hornear, como la esponja. Instancia
+     * propia (no la de la hoja "Hornear bizcochos").
+     */
+    bakeViewModel: BakeSheetViewModel? = null
 ) {
     val state by viewModel.uiState.collectAsState()
     val productState by productViewModel.uiState.collectAsState()
@@ -227,18 +241,46 @@ fun ProductionLotDetailScreen(
     }
     var showSortDialog by remember { mutableStateOf(false) }
 
+    // ── Bizcochos ────────────────────────────────────────────────────────────
+    // Los pasteles que van sobre bizcocho se agrupan por la masa del bizcocho, como el pan
+    // por su receta. Decidir cuánto hornear solo mientras el lote sigue abierto: al cerrar
+    // ya se descontaron, y mostrar "piden" otra vez contaría doble.
+    val bakeState = bakeViewModel?.let { it.uiState.collectAsState().value }
+    val lotIsOpen = state.selectedLot?.status == ProductionLotStatus.OPEN ||
+        state.selectedLot?.status == ProductionLotStatus.IN_PROGRESS
+    val lotHasBizcochos = remember(lines) { lines.any { l -> l.decorationsSnapshot.any { it.isCounted } } }
+    val bakeEnabled = bakeViewModel != null && lotHasBizcochos
+    val canBake = user?.hasPermission(Permission.MANAGE_PREPARATION_BATCHES) == true
+    LaunchedEffect(state.selectedLot?.id, state.selectedLot?.producingBranchId, bakeEnabled) {
+        val l = state.selectedLot
+        if (bakeEnabled && l != null && companyId.isNotEmpty()) {
+            bakeViewModel?.loadForLot(companyId, l.producingBranchId, l.id, lines)
+        }
+    }
+    LaunchedEffect(lines) { if (bakeEnabled) bakeViewModel?.setLotLines(lines) }
+    LaunchedEffect(bakeState?.error) {
+        bakeState?.error?.let { snackbarHostState.showSnackbar(it); bakeViewModel?.clearError() }
+    }
+    LaunchedEffect(bakeState?.savedMessage) {
+        bakeState?.savedMessage?.let { snackbarHostState.showSnackbar(it); bakeViewModel?.clearSaved() }
+    }
+    val bakeReady = bakeEnabled && bakeState != null && bakeState.lotId == state.selectedLot?.id
+    /** Masa del bizcocho de un pastel sin receta propia (null = no va sobre bizcocho). */
+    fun batterOf(line: ProductionLotLine): Pair<String, String>? =
+        if (bakeReady && line.recipeId.isEmpty()) bakeState?.batterOfLine(line) else null
+
     // La orden se trabaja por MASA, no por producto: la amasada es una sola para
     // todos los panes que salen de la misma receta. Cada fila es una masa y
     // adentro se listan sus productos con las unidades a sacar de cada uno.
-    val masaGroups = remember(lines, productionSortOrder) {
+    val masaGroups = remember(lines, productionSortOrder, bakeReady, bakeState?.basesById, bakeState?.battersById) {
         val itemIndex = productionSortOrder.withIndex().associate { (i, id) -> id to i }
         val recipeIndex = recipeOrderIndexFrom(productionSortOrder) { productId ->
             lines.find { it.productId == productId }?.recipeId
         }
         val ownGroups = groupByMasa(
             items = lines,
-            recipeIdOf = { it.recipeId },
-            recipeNameOf = { it.recipeName },
+            recipeIdOf = { it.recipeId.ifEmpty { batterOf(it)?.let { b -> BAKE_GROUP_PREFIX + b.first }.orEmpty() } },
+            recipeNameOf = { if (it.recipeId.isNotEmpty()) it.recipeName else batterOf(it)?.second },
             nameOf = { it.productName },
             groupOrderIndex = { recipeIndex[it] ?: Int.MAX_VALUE },
             itemOrderIndex = { itemIndex[it.productId] ?: Int.MAX_VALUE }
@@ -303,6 +345,44 @@ fun ProductionLotDetailScreen(
 
     var selectedGroupKey by remember { mutableStateOf<String?>(null) }
     val selectedGroup = masaGroups.find { it.key == selectedGroupKey }
+    val selectedBatterId = selectedGroup?.key?.takeIf { it.startsWith(BAKE_GROUP_PREFIX) }
+        ?.removePrefix(BAKE_GROUP_PREFIX)
+    var bakeDialogFor by remember { mutableStateOf<String?>(null) }
+    var finishBakeFor by remember { mutableStateOf<String?>(null) }
+    val selectedBakeMix = selectedBatterId?.let { bakeState?.mixOfBatter(it) }
+    val bakeView = selectedBakeMix?.let { bakeRecipeView(it, bakeState?.ingredientsById.orEmpty()) }
+
+    /** Panel derecho de un grupo de pasteles sobre bizcocho: la masa escalada, como el pan. */
+    @Composable
+    fun BakePanel(batterId: String, modifier: Modifier) {
+        val bs = bakeState ?: return
+        if (!lotIsOpen) {
+            RecipeIssuePanel(
+                issue = "Los bizcochos de estos pasteles ya se descontaron al cerrar el lote.",
+                modifier = modifier,
+                onClose = { selectedGroupKey = null }
+            )
+            return
+        }
+        val summary: @Composable ColumnScope.() -> Unit = {
+            BakePlanSummary(
+                rows = bs.rowsOfBatter(batterId),
+                mix = selectedBakeMix,
+                canBake = canBake,
+                isSaving = bs.isSaving,
+                onEdit = { bakeDialogFor = batterId },
+                onFinish = { finishBakeFor = batterId }
+            )
+        }
+        if (bakeView != null) {
+            ScaledRecipePanel(view = bakeView, modifier = modifier, onClose = { selectedGroupKey = null }, headerExtra = summary)
+        } else {
+            Column(
+                modifier.background(BrandColors.Ivory).padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) { summary() }
+        }
+    }
     // Masas "ya preparé" — al abrir la receta la marcamos para que el panadero
     // recuerde qué amasadas ya hizo. Solo en sesión.
     var visitedGroupKeys by remember { mutableStateOf(emptySet<String>()) }
@@ -322,7 +402,7 @@ fun ProductionLotDetailScreen(
         viewModel.extraUnitsInGroup(it.items, lines, it.key) { l -> l.wasteQuantity }
     } ?: 0.0) > 0.0
     val showScopeSelector = hasExtraToMake || hasWasteToReplace
-    val scaledView = selectedGroup?.let {
+    val scaledView = selectedGroup?.takeIf { selectedBatterId == null }?.let {
         if (recipeScope == RecipeScope.EXTRA && hasExtraToMake) {
             viewModel.buildExtraOnlyRecipeForGroup(
                 groupLines = it.items,
@@ -346,7 +426,7 @@ fun ProductionLotDetailScreen(
             )
         }
     }
-    val scaledIssue = selectedGroup?.let {
+    val scaledIssue = selectedGroup?.takeIf { selectedBatterId == null }?.let {
         viewModel.diagnoseScaledRecipeForGroup(
             it.items,
             extraDoughGrams = viewModel.extraDoughGramsForRecipe(lines, it.key),
@@ -455,7 +535,9 @@ fun ProductionLotDetailScreen(
                             val turnoTxt = if (lot.shiftName.isNotBlank()) "Turno: ${lot.shiftName}" else ""
                             val estadoTxt = ProductionLotStatus.label(lot.status)
                             Text(
-                                listOf(turnoTxt, estadoTxt).filter { it.isNotEmpty() }
+                                // "Para existencia" primero: cambia a dónde va el pan al cerrar.
+                                listOf(if (lot.isForStock) "Para existencia" else "", turnoTxt, estadoTxt)
+                                    .filter { it.isNotEmpty() }
                                     .joinToString("  ·  "),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = Color(0xFFFFD166),
@@ -651,6 +733,7 @@ fun ProductionLotDetailScreen(
                             doughGramsOf = { viewModel.doughGramsOf(it) },
                             missingRawWeight = viewModel.linesMissingRawWeight(group.items)
                                 .map { it.productId }.toSet(),
+                            batchLabel = viewModel.batchLabelForGroup(group.items),
                             spongeGrams = viewModel.spongeGramsOfGroup(group.items),
                             extraDoughGrams = viewModel.extraDoughGramsForRecipe(lines, group.key),
                             extraDoughContributions = viewModel.extraDoughContributionsForRecipe(lines, group.key),
@@ -689,6 +772,12 @@ fun ProductionLotDetailScreen(
                             onClick = {
                                 selectedGroupKey = group.key
                                 visitedGroupKeys = visitedGroupKeys + group.key
+                                // Pasteles sobre bizcocho: la primera vez decide cuánto hornear.
+                                val batterId = group.key.takeIf { it.startsWith(BAKE_GROUP_PREFIX) }
+                                    ?.removePrefix(BAKE_GROUP_PREFIX)
+                                if (batterId != null && lotIsOpen &&
+                                    batterId !in bakeState?.confirmedBatterIds.orEmpty()
+                                ) bakeDialogFor = batterId
                             }
                         )
                     }
@@ -775,6 +864,7 @@ fun ProductionLotDetailScreen(
                     VerticalDivider(color = Color(0xFFE0E0E0))
                     Box(modifier = Modifier.weight(1.4f).fillMaxHeight()) {
                         when {
+                            selectedBatterId != null -> BakePanel(selectedBatterId, Modifier.fillMaxSize())
                             scaledView != null -> ScaledRecipePanel(
                                 view = scaledView,
                                 modifier = Modifier.fillMaxSize(),
@@ -825,6 +915,7 @@ fun ProductionLotDetailScreen(
                         containerColor = BrandColors.Ivory
                     ) {
                         when {
+                            selectedBatterId != null -> BakePanel(selectedBatterId, Modifier.fillMaxWidth())
                             scaledView != null -> ScaledRecipePanel(
                                 view = scaledView,
                                 onClose = { selectedGroupKey = null },
@@ -965,6 +1056,38 @@ fun ProductionLotDetailScreen(
         }
     }
     LoadingOverlay(visible = state.isLoading)
+    LoadingOverlay(visible = bakeState?.isSaving == true, message = "Anotando la horneada...")
+    }
+
+    bakeDialogFor?.let { batterId ->
+        val bs = bakeState
+        if (bs != null) {
+            BakePlanDialog(
+                batterName = bs.battersById[batterId]?.name
+                    ?: bs.rowsOfBatter(batterId).firstOrNull()?.base?.batterPreparationName.orEmpty(),
+                rows = bs.rowsOfBatter(batterId),
+                current = bs.toBake,
+                state = bs,
+                onDismiss = { bakeDialogFor = null },
+                onConfirm = { values ->
+                    bakeViewModel?.confirmBatterPlan(batterId, values)
+                    bakeDialogFor = null
+                }
+            )
+        }
+    }
+    finishBakeFor?.let { batterId ->
+        val mix = bakeState?.mixOfBatter(batterId)
+        if (mix != null) {
+            FinishBakeDialog(
+                molds = mix.molds.map { it.base.id to (it.base.name to it.units) },
+                onDismiss = { finishBakeFor = null },
+                onConfirm = { produced ->
+                    finishBakeFor = null
+                    if (user != null) bakeViewModel?.finishBake(companyId, user, produced, batterId)
+                }
+            )
+        } else finishBakeFor = null
     }
 }
 
@@ -1798,6 +1921,8 @@ private fun MasaProductionCard(
     isVisited: Boolean,
     doughGramsOf: (ProductionLotLine) -> Double,
     missingRawWeight: Set<String>,
+    /** Receta por tanda (torta de leche): "2 bandejas". null = masa de pan. */
+    batchLabel: String? = null,
     spongeGrams: Double,
     /** Masa extra que otros productos (de otra masa) necesitan como relleno de
      *  ESTA receta — ver [DoughFilling]. Ya sumada al total mostrado. */
@@ -1907,6 +2032,7 @@ private fun MasaProductionCard(
                         Text(
                             buildString {
                                 append("${totalUnits.toInt()} unidades")
+                                if (batchLabel != null) append(" · $batchLabel")
                                 if (totalDough > 0) append(" · ${(totalDough / GRAMS_PER_LB_DETAIL).fmt(1)} lb de masa")
                                 if (spongeGrams > 0) append(" · con esponja")
                             },

@@ -151,10 +151,12 @@ fun PreparationBatchFormScreen(
                 }
 
                 // ── Paso 2: Preparación ──────────────────────────────────────
+                val branchPreparations = state.selectedBranch?.let { b -> state.preparations.filter { it.isMadeIn(b.id) } }
+                    .orEmpty()
                 if (state.selectedBranch != null) {
                     HorizontalDivider()
                     Text("2. Preparación", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    if (state.preparations.isEmpty()) {
+                    if (branchPreparations.isEmpty()) {
                         Text(
                             "No hay preparaciones activas. Crea una en el módulo Preparaciones.",
                             style = MaterialTheme.typography.bodySmall,
@@ -173,7 +175,7 @@ fun PreparationBatchFormScreen(
                                 Icon(Icons.Default.ArrowDropDown, contentDescription = null)
                             }
                             DropdownMenu(expanded = prepMenu, onDismissRequest = { prepMenu = false }) {
-                                state.preparations.forEach { p ->
+                                branchPreparations.forEach { p ->
                                     DropdownMenuItem(
                                         text = { Text(p.name) },
                                         onClick = { viewModel.selectPreparation(companyId, p); prepMenu = false }

@@ -16,6 +16,9 @@ import com.bakery.erp.model.canAccessBranch
 import com.bakery.erp.model.isRestaurantSale
 import com.bakery.erp.model.bankRefundPending
 import com.bakery.erp.model.voidCashAmount
+import com.bakery.erp.model.effectivePaymentBreakdown
+import com.bakery.erp.model.hasPermission
+import com.bakery.erp.model.withPaymentMethod
 import com.bakery.erp.util.fmtMoney
 import kotlin.time.Clock
 import kotlinx.coroutines.Job
@@ -51,6 +54,8 @@ data class SaleHistoryUiState(
     val invoiceFilter: com.bakery.erp.model.OrderInvoiceFilter = com.bakery.erp.model.OrderInvoiceFilter.ALL,
     /** Monto, número de orden, mesa o nombre (ver [com.bakery.erp.model.matches]). */
     val query: String = "",
+    /** Forma de pago de la lista de cobros. Vacío = todas. Un pago dividido sale en cada una. */
+    val paymentFilter: String = "",
     /**
      * Abierta desde una caja ("Ventas de esta caja"): sucursal fija, la caja propia marcada y
      * los montos visibles para quien cobra, que los necesita para encontrar la venta.
@@ -62,7 +67,9 @@ data class SaleHistoryUiState(
     /** Caja del cobro abierto en el detalle: decide si todavía se puede anular. */
     val orderSession: CashSession? = null,
     /** Anulando un cobro: tapa la pantalla (factura, inventario y caja). */
-    val isVoidBusy: Boolean = false
+    val isVoidBusy: Boolean = false,
+    /** Corrigiendo la forma de pago de un cobro. */
+    val isPaymentChangeBusy: Boolean = false
 ) {
     val posMode: Boolean get() = posRegisterId.isNotEmpty()
 }
@@ -94,7 +101,8 @@ class SaleHistoryViewModel(
     fun load(companyId: String, currentUser: User) {
         // Desde el Home: todas las cajas, sin la caja propia de una sesión anterior.
         _uiState.update {
-            it.copy(posRegisterId = "", registerFilter = "", invoiceFilter = com.bakery.erp.model.OrderInvoiceFilter.ALL, query = "")
+            it.copy(posRegisterId = "", registerFilter = "", invoiceFilter = com.bakery.erp.model.OrderInvoiceFilter.ALL, query = "",
+                paymentFilter = "")
         }
         loadBranches(companyId, currentUser, forcedBranchId = null)
     }
@@ -108,7 +116,7 @@ class SaleHistoryViewModel(
         _uiState.update {
             it.copy(
                 posRegisterId = registerId, registerFilter = registerId,
-                invoiceFilter = com.bakery.erp.model.OrderInvoiceFilter.ALL, query = "",
+                invoiceFilter = com.bakery.erp.model.OrderInvoiceFilter.ALL, query = "", paymentFilter = "",
                 selectedBranchId = branchId, selectedDate = today
             )
         }
@@ -118,6 +126,7 @@ class SaleHistoryViewModel(
     fun setRegisterFilter(registerId: String) { _uiState.update { it.copy(registerFilter = registerId) } }
     fun setInvoiceFilter(f: com.bakery.erp.model.OrderInvoiceFilter) { _uiState.update { it.copy(invoiceFilter = f) } }
     fun setQuery(q: String) { _uiState.update { it.copy(query = q) } }
+    fun setPaymentFilter(method: String) { _uiState.update { it.copy(paymentFilter = method) } }
 
     private fun loadBranches(companyId: String, currentUser: User, forcedBranchId: String?) {
         viewModelScope.launch {
@@ -313,6 +322,72 @@ class SaleHistoryViewModel(
         }
     }
 
+    /**
+     * Corrige la forma de pago del cobro entero a [method] (ver `SalePaymentChange.kt`). Cada venta
+     * del cobro por separado (pan y restaurante): si una falla, las ya corregidas quedan bien y el
+     * reintento salta las que ya están en ese método. Bitácora y aviso al dueño al final.
+     */
+    fun changePaymentMethod(companyId: String, order: com.bakery.erp.model.SaleOrder, method: String, currentUser: User) {
+        if (_uiState.value.isPaymentChangeBusy) return
+        if (!ConnectionStatus.isOnline.value) {
+            _uiState.update { it.copy(error = "Sin internet no se puede cambiar la forma de pago. Esperá a que vuelva la conexión.") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isPaymentChangeBusy = true, error = null) }
+            val result = runCatching {
+                val session = cashSessionRepository.getSession(companyId, order.primary.sessionId)
+                com.bakery.erp.model.paymentChangeBlocker(order, session)?.let { error(it) }
+                if (!currentUser.hasPermission(com.bakery.erp.model.paymentChangePermission(session)))
+                    error("No tienes permiso para corregir la forma de pago de esta caja.")
+                order.sales
+                    .filter { it.effectivePaymentBreakdown != it.withPaymentMethod(method).effectivePaymentBreakdown }
+                    .forEach { saleRepository.changePaymentMethod(companyId, it.id, method, currentUser.displayName) }
+                session!!
+            }
+            result.onFailure { e ->
+                _uiState.update { it.copy(isPaymentChangeBusy = false, error = readable(e, "No se pudo cambiar la forma de pago.")) }
+                return@launch
+            }
+            val session = result.getOrThrow()
+            val from = com.bakery.erp.model.SalePaymentMethod.label(order.paymentMethod)
+            val to = com.bakery.erp.model.SalePaymentMethod.label(method)
+            val time = formatReceiptTimestamp(order.at)
+            runCatching {
+                cashAuditRepository.log(companyId, com.bakery.erp.model.CashAuditEvent(
+                    type = com.bakery.erp.model.CashAuditEventType.PAYMENT_CHANGE,
+                    branchId = session.branchId,
+                    branchName = session.branchName,
+                    registerId = session.registerId,
+                    registerName = session.registerName,
+                    sessionId = session.id,
+                    userId = currentUser.id,
+                    userName = currentUser.displayName,
+                    employeeName = session.openedByEmployeeName,
+                    expectedCash = order.total,
+                    notes = "$from → $to · cobro de $time" +
+                        if (session.status == com.bakery.erp.model.CashSessionStatus.CLOSED) " · caja ya cerrada" else ""
+                ))
+            }
+            runCatching {
+                notificationRepository.push(companyId, com.bakery.erp.model.AppNotification(
+                    type = com.bakery.erp.model.NotificationType.SALE_PAYMENT_CHANGED,
+                    title = "Forma de pago corregida: Q ${order.total.fmtMoney(2)}",
+                    body = "${session.branchName} · ${session.registerName} · ${currentUser.displayName} cambió el cobro de " +
+                        "$time de $from a $to.",
+                    targetBranchIds = listOf(session.branchId),
+                    requiredPermission = com.bakery.erp.model.Permission.VIEW_CASH_AUDIT.name,
+                    targetScreen = com.bakery.erp.model.NotificationTarget.CASH_AUDIT,
+                    targetId = session.branchId,
+                    createdByUserId = currentUser.id,
+                    createdByUserName = currentUser.displayName
+                ))
+            }
+            _uiState.update { it.copy(isPaymentChangeBusy = false, notice = "Cobro cambiado a $to.") }
+            loadOrderSession(companyId, session.id)
+        }
+    }
+
     /** La parte de tarjeta/transferencia de un cobro anulado ya se le devolvió al cliente. */
     fun markBankRefunded(companyId: String, order: com.bakery.erp.model.SaleOrder, currentUser: User) {
         if (_uiState.value.isVoidBusy) return
@@ -333,6 +408,10 @@ class SaleHistoryViewModel(
      */
     fun invoiceOrder(companyId: String, order: com.bakery.erp.model.SaleOrder, to: com.bakery.erp.model.FelInvoiceRequest) {
         if (_uiState.value.isInvoiceBusy) return
+        if (!ConnectionStatus.isOnline.value) {
+            _uiState.update { it.copy(error = "Sin internet no se puede facturar desde el historial. Esperá a que vuelva la conexión.") }
+            return
+        }
         val ids = order.uninvoicedSales.map { it.id }
         if (ids.isEmpty()) return
         viewModelScope.launch {
@@ -433,6 +512,10 @@ class SaleHistoryViewModel(
      */
     fun reissueInvoice(companyId: String, sale: Sale, to: com.bakery.erp.model.FelInvoiceRequest) {
         if (_uiState.value.isInvoiceBusy) return
+        if (!ConnectionStatus.isOnline.value) {
+            _uiState.update { it.copy(error = "Sin internet no se puede facturar desde el historial. Esperá a que vuelva la conexión.") }
+            return
+        }
         val reissue = sale.invoiceStatus.isNotBlank()
         viewModelScope.launch {
             _uiState.update { it.copy(isInvoiceBusy = true, error = null) }

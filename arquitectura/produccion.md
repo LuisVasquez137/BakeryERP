@@ -597,3 +597,52 @@ sucursales) y nunca al inventario de la planta.
   en su lista: pudo haber impreso la orden y el papel dice el número viejo. En un lote en
   producción una línea que queda en 0 no se borra, para que vea que ese pan se quitó.
 - El detalle del pedido lista los ajustes hechos (quién, cuándo, si se verificó).
+
+### Producción para existencia (oct 2026)
+
+Pan molde (Bombero) y rosca de panela (Calvario) no se hornean por pedido: la encargada los
+manda hacer antes de que se acaben y las sucursales piden de lo que ya hay. Lógica pura en
+`model/MadeForStock.kt` (`MadeForStockTest`).
+
+- **Opcional por empresa (18 oct).** `Organization.usesMadeForStock` (existencia, "Pedir a otra
+  sucursal", Transformar) y `Organization.usesBakedAhead` (tipos Masa de bizcocho / Bizcocho y
+  "Hornear bizcochos"), en Ajustes de la empresa → Producción, apagadas por defecto. La sesión
+  las lleva en `AuthUiState` (`applyOrganization`; Ajustes la llama al cambiar). Apagar solo
+  **esconde las entradas**: un producto o preparación ya marcado sigue mostrando su sección
+  para poder desmarcarlo, y lo ya marcado sigue funcionando. Sabropan encendida con
+  `functions/tools/enable-production-options.js`.
+
+- **`Product.isMadeForStock` + `plantStockMinimum`** (form del producto, junto a "Es porción").
+  No aparece en el pedido de sucursales, ni en el ajuste de pedido, ni en la sugerencia del
+  patrón: `Product.isOrderedFromPlant` es el único filtro (porción y existencia fuera).
+  Excluyente con porción.
+- **La planta que lo guarda es la que lo tiene asignado** (`Branch.assignedProductIds` +
+  `CAN_PRODUCE`, `keeperPlantsOf`). No hay un segundo campo de "planta dueña" que pueda
+  contradecir a Sucursales.
+- **Lo pide la planta en su pedido normal (18 oct 2026)**: Bombero ya se hace un pedido a sí
+  misma cada día; el pan molde sale ahí y en ningún otro pedido (`Product.isOrderableIn`:
+  para existencia solo si `sellingBranchId == producingBranchId`; lo transformado nunca).
+  Entra al lote del día como cualquier pan (receta escalada, conteo, insumos) y la nota de
+  despacho a sí misma ("Marcar como recibida en mostrador") lo deja en el inventario de la
+  planta. **Se quitó el "Lote para existencia" aparte** (el dueño lo pidió así: "no por
+  aparte"); `ProductionLot.isForStock` y sus guardas quedan solo para leer lotes viejos.
+- **Se pide por unidad, como todo** (la receta escalada sale de las unidades × peso en
+  crudo). Se probó pedir por quintal y el dueño lo descartó el 18 oct: no lo agregues de nuevo.
+  La fila muestra "Hay 12 · mínimo 20" (`StockOrderInfo`, `loadStockOrderInfo`).
+- **Aviso en el Home** (`AlertTarget.STOCK_REPLENISHMENT`, permiso `MANAGE_PRODUCTION_LOTS`):
+  "Toca hacer Pan molde — quedan 12 de 20 (Bombero)". Sin mínimo no avisa nunca.
+- Reemplaza la decisión vieja "la planta no almacena terminado" (`decisiones-y-paleta.md`).
+
+**Pendiente (plan acordado con el dueño, 17 oct 2026):**
+1. ~~Solicitud de traslado~~ hecho 17 oct: ver "Pedido de la sucursal" en `distribucion.md`.
+2. ~~Transformar~~ hecho 17 oct: ver "Transformar" en `distribucion.md`.
+3. ~~Bizcochos~~ hecho 17 oct: ver "Bizcochos: masa + molde" en `catalogo.md`.
+- El pedido del revendedor (`CustomerOrderFormScreen`) todavía no filtra `isOrderedFromPlant`.
+
+### Doble toque al enviar pedido (19 oct 2026)
+
+Calvario y Democracia → Bombero quedaron duplicados (0.3 s y 1.5 s de diferencia) y el de Calvario entró a los dos lotes del día. Causa: `saveOrder` encendía `isLoading` DESPUÉS de `findPendingOrderForCombination` + `getLotsForBranch`; en esa espera el botón seguía activo y el segundo toque también pasaba la búsqueda. Ahora hay guarda síncrona `isSubmittingOrder` antes del `launch` (se libera en `invokeOnCompletion`) y el overlay se enciende desde el primer toque. Limpieza de datos con respaldo en `functions/tools/backup_lotes_19oct_duplicado_*.json`. Ojo: `removeOrderFromLot` borra la línea si `plannedQuantity - porción ≤ 0` aunque queden otras sucursales en el desglose (pasa cuando el planeado se bajó a mano); ese caso se restauró a mano.
+
+**Un solo pedido por sucursal + planta + día + turno (19 oct 2026).** Se quitó el "pedido tardío": si el existente ya estaba en un lote, `saveOrder` creaba otro con `isLateOrder=true` y la planta lo horneaba dos veces. Ahora cualquier choque bloquea el alta: sin lote → "Modificar el pedido" (form de edición); en lote → "Ver el pedido" (detalle, donde la planta tiene "Ajustar pedido"/"Cancelar"). Si la búsqueda del existente falla (sin red) no se guarda. Se quitó `skipDuplicateCheck`. `isLateOrder` se sigue leyendo en docs viejos. Solo cuenta pedidos PENDING (los de un lote ya completado son CONFIRMED y no bloquean).
+
+**`removeOrderFromLot` ya no borra pan ajeno.** El planeado nuevo es `max(planeado − porción, min(planeado, demanda de los que quedan))` y la línea solo se borra si el desglose queda vacío.

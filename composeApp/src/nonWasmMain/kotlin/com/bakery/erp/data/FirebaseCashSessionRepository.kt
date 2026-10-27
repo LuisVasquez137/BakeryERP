@@ -3,6 +3,7 @@ package com.bakery.erp.data
 import com.bakery.erp.domain.CashDenominationStage
 import com.bakery.erp.domain.CashSessionRepository
 import com.bakery.erp.model.expectedCashNow
+import com.bakery.erp.model.expectedCardNow
 import com.bakery.erp.model.CashMovement
 import com.bakery.erp.model.CashMovementType
 import com.bakery.erp.model.CashSession
@@ -107,6 +108,11 @@ class FirebaseCashSessionRepository(
         sessionsCol(companyId).document(sessionId).set(current.withSaleVoided(sale).toMap())
     }
 
+    override suspend fun applyTotalsDeltas(companyId: String, sessionId: String, deltas: Map<String, Double>) {
+        if (deltas.isEmpty()) return
+        sessionsCol(companyId).document(sessionId).update(deltas.toSessionIncrements())
+    }
+
     override suspend fun addMovement(companyId: String, movement: CashMovement): String {
         val docRef = movementsCol(companyId, movement.sessionId).document
         val now = Clock.System.now().toEpochMilliseconds()
@@ -140,7 +146,8 @@ class FirebaseCashSessionRepository(
         receivedByEmployeeName: String,
         closedByUserId: String,
         closedByUserName: String,
-        closedByEmployeeId: String
+        closedByEmployeeId: String,
+        nonCash: com.bakery.erp.model.NonCashCount
     ): CashSession {
         val current = getSession(companyId, sessionId)
             ?: throw IllegalStateException("Sesión no encontrada: $sessionId")
@@ -159,7 +166,11 @@ class FirebaseCashSessionRepository(
             receivedByEmployeeName = receivedByEmployeeName,
             closedByUserId = closedByUserId,
             closedByUserName = closedByUserName,
-            closedByEmployeeId = closedByEmployeeId
+            closedByEmployeeId = closedByEmployeeId,
+            expectedCardVouchers = current.expectedCardNow,
+            countedCardVouchers = nonCash.cardVouchers,
+            countedTransfers = nonCash.transfers,
+            countedPedidosYa = nonCash.pedidosYa
         )
         sessionsCol(companyId).document(sessionId).set(closed.toMap())
         return closed
@@ -169,6 +180,11 @@ class FirebaseCashSessionRepository(
     private fun DocumentSnapshot.readMoney(field: String): Double =
         runCatching { get<Double?>(field) }.getOrNull()
             ?: runCatching { get<Long?>(field)?.toDouble() }.getOrNull() ?: 0.0
+
+    /** Como [readMoney], pero null si el campo falta (no es lo mismo "no se contó" que "cero"). */
+    private fun DocumentSnapshot.readMoneyOrNull(field: String): Double? =
+        runCatching { get<Double?>(field) }.getOrNull()
+            ?: runCatching { get<Long?>(field)?.toDouble() }.getOrNull()
 
     override suspend fun recordHandover(
         companyId: String,
@@ -420,7 +436,11 @@ class FirebaseCashSessionRepository(
         "handoverRecorded" to handoverRecorded,
         "voidedSaleCount" to voidedSaleCount,
         "totalVoidedSales" to totalVoidedSales,
-        "totalVoidedNonCash" to totalVoidedNonCash
+        "totalVoidedNonCash" to totalVoidedNonCash,
+        "expectedCardVouchers" to expectedCardVouchers,
+        "countedCardVouchers" to countedCardVouchers,
+        "countedTransfers" to countedTransfers,
+        "countedPedidosYa" to countedPedidosYa
     )
 
     private fun DocumentSnapshot.toSession() = CashSession(
@@ -469,7 +489,11 @@ class FirebaseCashSessionRepository(
         handoverRecorded = runCatching { get<Boolean?>("handoverRecorded") }.getOrNull() ?: false,
         voidedSaleCount = readMoney("voidedSaleCount").toInt(),
         totalVoidedSales = readMoney("totalVoidedSales"),
-        totalVoidedNonCash = readMoney("totalVoidedNonCash")
+        totalVoidedNonCash = readMoney("totalVoidedNonCash"),
+        expectedCardVouchers = readMoney("expectedCardVouchers"),
+        countedCardVouchers = readMoneyOrNull("countedCardVouchers"),
+        countedTransfers = readMoneyOrNull("countedTransfers"),
+        countedPedidosYa = readMoneyOrNull("countedPedidosYa")
     )
 
     private fun CashMovement.toMap(): Map<String, Any?> = firestoreSafeOf(
@@ -531,14 +555,7 @@ class FirebaseCashSessionRepository(
  * mientras tanto.
  */
 internal fun saleTotalsDeltas(method: String, amount: Double): Map<String, Double> {
-    val methodField = when (method) {
-        SalePaymentMethod.CASH -> "totalCashSales"
-        SalePaymentMethod.CARD -> "totalCardSales"
-        SalePaymentMethod.TRANSFER -> "totalTransferSales"
-        SalePaymentMethod.PEDIDOS_YA -> "totalPedidosYaSales"
-        SalePaymentMethod.CREDIT -> "totalCreditSales"
-        else -> null
-    }
+    val methodField = com.bakery.erp.model.sessionTotalField(method)
     return buildMap {
         put("totalSales", amount)
         methodField?.let { put(it, amount) }

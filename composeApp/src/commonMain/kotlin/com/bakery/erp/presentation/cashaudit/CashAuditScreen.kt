@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccountBalance
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.LockClock
@@ -176,6 +177,7 @@ private fun AuditRow(e: CashAuditEvent) {
         CashAuditEventType.CLOSE_SCREEN -> Icons.Default.Visibility
         CashAuditEventType.HELD_CART_DISCARDED -> Icons.Default.RemoveShoppingCart
         CashAuditEventType.SALE_VOID -> Icons.Default.RemoveShoppingCart
+        CashAuditEventType.PAYMENT_CHANGE -> Icons.Default.SwapHoriz
         CashAuditEventType.BANK_DEPOSIT_OUT, CashAuditEventType.BANK_DEPOSIT_SLIP,
         CashAuditEventType.BANK_DEPOSIT_NO_SLIP -> Icons.Default.AccountBalance
         else -> Icons.Default.PointOfSale
@@ -229,6 +231,8 @@ private fun AuditRow(e: CashAuditEvent) {
                         "Venta de Q ${e.expectedCash.fmtMoney(2)}" +
                             if (e.countedCash > 0.004) " · salió de la gaveta Q ${e.countedCash.fmtMoney(2)}" else "",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.SemiBold)
+                    CashAuditEventType.PAYMENT_CHANGE -> Text("Cobro de Q ${e.expectedCash.fmtMoney(2)}",
+                        style = MaterialTheme.typography.bodySmall, color = BrandColors.AccentDeep, fontWeight = FontWeight.SemiBold)
                     CashAuditEventType.BANK_DEPOSIT_OUT -> Text("Q ${e.expectedCash.fmtMoney(2)} salieron de la gaveta",
                         style = MaterialTheme.typography.bodySmall, color = BrandColors.MutedSlate)
                     CashAuditEventType.BANK_DEPOSIT_SLIP -> Text(

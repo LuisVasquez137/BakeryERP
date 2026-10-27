@@ -1,12 +1,17 @@
 package com.bakery.erp.domain
 
 import com.bakery.erp.model.Ingredient
+import com.bakery.erp.model.IngredientUsage
+import com.bakery.erp.model.TransformExtra
 import com.bakery.erp.model.Preparation
 import com.bakery.erp.model.Product
 import com.bakery.erp.model.PurchaseLine
 import com.bakery.erp.model.PurchaseLineKind
 import com.bakery.erp.model.Recipe
 import com.bakery.erp.model.lineTotal
+import com.bakery.erp.model.batchSpec
+import com.bakery.erp.model.isBatch
+import com.bakery.erp.model.isProduct
 import com.bakery.erp.model.toGramsOrNull
 
 /**
@@ -51,7 +56,7 @@ fun ingredientGramPrices(
         .filter { it.ingredientId.isNotEmpty() && it.quantityReceived > 0.0 && it.lineTotal > 0.0 }
         .groupBy { it.ingredientId }
     return ingredients.mapNotNull { ing ->
-        fromPurchases(ing, linesByIngredient[ing.id].orEmpty()) ?: fromDefaultFormat(ing)
+        fromPurchases(ing, linesByIngredient[ing.id].orEmpty()) ?: defaultFormatGramPrice(ing)
     }.associateBy { it.ingredientId }
 }
 
@@ -70,7 +75,7 @@ private fun fromPurchases(ing: Ingredient, lines: List<PurchaseLine>): Ingredien
     return if (grams > 0.0) IngredientGramPrice(ing.id, cost / grams, IngredientPriceOrigin.PURCHASES, count) else null
 }
 
-private fun fromDefaultFormat(ing: Ingredient): IngredientGramPrice? {
+fun defaultFormatGramPrice(ing: Ingredient): IngredientGramPrice? {
     val fmt = ing.purchaseFormats.firstOrNull { it.isDefault } ?: ing.purchaseFormats.firstOrNull() ?: return null
     if (fmt.packageCost <= 0.0 || fmt.unitsPerPackage <= 0.0) return null
     val grams = toGramsOrNull(fmt.unitsPerPackage, fmt.unit, ing.unitWeightGrams) ?: return null
@@ -169,12 +174,49 @@ fun productMaterialCost(
     recipesById: Map<String, Recipe>,
     preparationsById: Map<String, Preparation>,
     ingredientsById: Map<String, Ingredient>,
-    prices: Map<String, IngredientGramPrice>
+    prices: Map<String, IngredientGramPrice>,
+    /** Para las recetas por tanda que llevan otro producto (el pan molde de la torta). */
+    productsById: Map<String, Product> = emptyMap(),
+    /** Guarda contra recetas que se lleven entre sí (torta → pan molde → torta). */
+    depth: Int = 0
 ): ProductMaterialCost {
     val recipe = recipeByProduct[product.id]
     val raw = product.rawWeightGrams ?: 0.0
     fun fail(p: CostProblem) = ProductMaterialCost(product, recipe?.name.orEmpty(), raw, 0.0, 0.0, 0.0, null, listOf(p))
     if (recipe == null) return fail(CostProblem.NoRecipe)
+    if (recipe.isBatch) {
+        // Por tanda: lo que cuesta una tanda entera ÷ lo que rinde. El producto que lleva (pan
+        // molde) cuesta lo que cuesta producirlo, con su propia receta.
+        val spec = recipe.batchSpec ?: return fail(CostProblem.EmptyRecipe)
+        val comps = recipe.allComponents.filter { it.inputQuantity > 0.0 }
+        if (comps.isEmpty()) return fail(CostProblem.EmptyRecipe)
+        val missing = mutableListOf<String>()
+        val batchCost = comps.sumOf { c ->
+            if (c.isProduct) {
+                val inner = productsById[c.productId]?.takeIf { depth < 3 }
+                    ?.let { productMaterialCost(it, recipeByProduct, recipesById, preparationsById, ingredientsById, prices, productsById, depth + 1) }
+                val unitCost = inner?.total
+                if (unitCost == null) { missing += c.productName; 0.0 }
+                else { inner.problems.filterIsInstance<CostProblem.MissingPrices>().forEach { missing += it.names }; c.inputQuantity * unitCost }
+            } else {
+                val grams = toGramsOrNull(c.inputQuantity, c.ingredientUnit, ingredientsById[c.ingredientId]?.unitWeightGrams ?: 0.0)
+                val price = prices[c.ingredientId]
+                if (grams == null || price == null) { missing += c.ingredientName; 0.0 } else grams * price.costPerGram
+            }
+        }
+        val perUnit = batchCost / spec.fullYield
+        return ProductMaterialCost(
+            product = product,
+            recipeName = recipe.name,
+            doughGrams = 0.0,
+            doughCost = perUnit,
+            fillingsCost = 0.0,
+            decorationsCost = 0.0,
+            total = perUnit,
+            problems = missing.distinct().takeIf { it.isNotEmpty() }
+                ?.let { listOf(CostProblem.MissingPrices(it)) }.orEmpty()
+        )
+    }
     if (raw <= 0.0) return fail(CostProblem.NoRawWeight)
     val dough = recipe.doughGramCost(prices) ?: return fail(CostProblem.EmptyRecipe)
     val missing = dough.missingPrices.toMutableList()
@@ -189,6 +231,13 @@ fun productMaterialCost(
         if (d.isIngredientSourced) {
             val price = prices[d.ingredientId]
             if (price == null) { missing += d.ingredientName; 0.0 } else d.gramsPerUnit * price.costPerGram
+        } else if (d.isCounted) {
+            // Bizcocho: lo que cuesta su masa por la masa que lleva el molde (1/24 de plancha
+            // = 1/24 de esa masa).
+            val base = preparationsById[d.preparationId]
+            val batter = base?.batterPreparationId?.let { preparationsById[it] }?.gramCost(prices, ingredientsById)
+            if (base == null || batter == null || base.batterGramsPerUnit <= 0.0) { missing += d.preparationName; 0.0 }
+            else { missing += batter.missingPrices; d.unitsPerProduct * base.batterGramsPerUnit * batter.costPerGram }
         } else {
             val prep = preparationsById[d.preparationId]?.gramCost(prices, ingredientsById)
             if (prep == null) { missing += d.preparationName; 0.0 }
@@ -207,4 +256,30 @@ fun productMaterialCost(
         total = doughCost + fillingsCost + decorationsCost,
         problems = problems
     )
+}
+
+/** Lo que cuestan los insumos que se le agregan al transformar, y los que no tienen precio. */
+data class TransformExtrasCost(val cost: Double, val missingPrices: List<String>)
+
+/**
+ * Costo de los extras de una transformación ([extras] = insumo + cantidad en su unidad), al
+ * precio de su presentación predeterminada. Los suministros (la bolsa) no suman: su compra ya
+ * se fue a gasto del mes, y sumarlos al costo del pan los contaría dos veces.
+ */
+fun transformExtrasCost(
+    extras: List<Pair<TransformExtra, Double>>,
+    ingredientsById: Map<String, Ingredient>
+): TransformExtrasCost {
+    val missing = mutableListOf<String>()
+    var cost = 0.0
+    for ((extra, qty) in extras) {
+        val ing = ingredientsById[extra.ingredientId]
+        if (ing == null) { missing += extra.ingredientName; continue }
+        if (ing.usage == IngredientUsage.SUPPLY) continue
+        val price = defaultFormatGramPrice(ing)
+        val grams = toGramsOrNull(qty, extra.unit, ing.unitWeightGrams)
+        if (price == null || grams == null) { missing += ing.name; continue }
+        cost += grams * price.costPerGram
+    }
+    return TransformExtrasCost(cost, missing.distinct())
 }

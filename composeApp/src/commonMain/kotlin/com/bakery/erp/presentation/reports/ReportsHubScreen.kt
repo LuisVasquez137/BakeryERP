@@ -29,7 +29,7 @@ import com.bakery.erp.ui.AdaptiveContainer
 import com.bakery.erp.ui.theme.BrandColors
 
 /** Cada reporte formal de la app. La navegación traduce la llave a su ruta. */
-enum class ReportKey { SALES, PRODUCTION, BRANCH_SUPPLY, FINANCIAL, BRANCH_RESULT, PRODUCT_COST, STANDARD_COST, DELIVERY_COST }
+enum class ReportKey { SALES, PRODUCTION, BRANCH_SUPPLY, FINANCIAL, BRANCH_RESULT, PRODUCT_COST, STANDARD_COST, DELIVERY_COST, CASH_DAY }
 
 private data class ReportLink(
     val key: ReportKey,
@@ -46,6 +46,8 @@ private const val GROUP_COSTS = "Costos y resultados"
 private val ALL_REPORTS = listOf(
     ReportLink(ReportKey.SALES, "Ventas", "Por día, método de pago, cajero y producto",
         Icons.AutoMirrored.Filled.TrendingUp, GROUP_OPERATION, Permission.VIEW_SALES_REPORT),
+    ReportLink(ReportKey.CASH_DAY, "Resumen de cajas", "Por día y sucursal: ventas, retiros, lo que quedó y diferencias",
+        Icons.Default.PointOfSale, GROUP_OPERATION, Permission.MANAGE_DAILY_CASH_CLOSE),
     ReportLink(ReportKey.PRODUCTION, "Producción", "Planeado vs. producido, eficiencia y mermas",
         Icons.Default.Factory, GROUP_OPERATION, Permission.VIEW_PRODUCTION_REPORT),
     ReportLink(ReportKey.BRANCH_SUPPLY, "Pedido vs. recibido", "Lo que pidió cada sucursal y lo que le llegó",

@@ -1,5 +1,6 @@
 package com.bakery.erp.model
 
+import com.bakery.erp.util.fmtTrim
 import kotlin.math.ceil
 
 const val GRAMS_PER_POUND = 453.592
@@ -25,7 +26,14 @@ data class RecipeBatchCheck(
     /** Harina base que se mojaría con lo pedido hoy. */
     val currentFlourGrams: Double,
     /** Líneas del lote que salen de esta receta. */
-    val lines: List<ProductionLotLine>
+    val lines: List<ProductionLotLine>,
+    /**
+     * Receta por tanda (torta de leche, `model/BatchRecipe.kt`): la bandeja se hace siempre
+     * entera, así que el "mínimo" es completar bandejas. En ese caso [currentFlourGrams] y
+     * [minFlourGrams] son **piezas**, no gramos: lo pedido (50) y lo que dan las bandejas
+     * enteras (70). El reparto del sobrante es el mismo diálogo que el de la amasadora.
+     */
+    val batch: BatchSpec? = null
 ) {
     val isUnderMinimum: Boolean
         get() = minFlourGrams > 0.0 && currentFlourGrams > 0.0 && currentFlourGrams < minFlourGrams
@@ -54,6 +62,19 @@ data class RecipeBatchCheck(
         }
     }
 }
+
+/** Una línea para la tarjeta del aviso: "2.1 lb de 3 lb" o "piden 50 · 2 bandejas dan 70". */
+fun RecipeBatchCheck.progressText(): String = batch?.let { spec ->
+    "piden ${currentFlourGrams.fmtTrim(0)} · ${spec.label(spec.batchesFor(minFlourGrams))} dan ${minFlourGrams.fmtTrim(0)}"
+} ?: "${currentFlourGrams.flourGramsAsPounds()} de ${minFlourGrams.flourGramsAsPounds()}"
+
+/** Explicación del aviso, para el diálogo y el reparto por turnos. */
+fun RecipeBatchCheck.shortfallText(): String = batch?.let { spec ->
+    "Piden ${currentFlourGrams.fmtTrim(0)} y la ${spec.label(1).substringAfter(' ')} se hace entera: " +
+        "${spec.label(spec.batchesFor(minFlourGrams))} dan ${minFlourGrams.fmtTrim(0)}, sobran " +
+        "${(minFlourGrams - currentFlourGrams).fmtTrim(0)}."
+} ?: ("Con lo que pidieron se mojarían solo ${currentFlourGrams.flourGramsAsPounds()} de harina, " +
+    "y la amasadora necesita al menos ${minFlourGrams.flourGramsAsPounds()}.")
 
 /**
  * Harina base necesaria para [doughGrams] de masa según los porcentajes de la
@@ -97,6 +118,20 @@ fun checkRecipeBatchMinimums(
 
     val withOwnLines = byRecipe.mapNotNull { (recipeId, recipeLines) ->
         val recipe = recipesById[recipeId] ?: return@mapNotNull null
+        // Por tanda: lo pedido se completa a bandejas enteras (50 → 70).
+        recipe.batchSpec?.let { spec ->
+            val pieces = recipeLines.sumOf { it.plannedQuantity }
+            val target = spec.roundUp(pieces)
+            return@mapNotNull if (pieces <= 0.0 || target <= pieces + 1e-9) null
+            else RecipeBatchCheck(
+                recipeId = recipeId,
+                recipeName = recipe.name.ifEmpty { recipeLines.first().recipeName },
+                minFlourGrams = target,
+                currentFlourGrams = pieces,
+                lines = recipeLines.sortedBy { it.productName },
+                batch = spec
+            )
+        }
         if (recipe.minBatchFlourGrams <= 0.0) return@mapNotNull null
         val doughGrams = recipeLines.sumOf { line ->
             val raw = rawWeightResolver(line) ?: 0.0

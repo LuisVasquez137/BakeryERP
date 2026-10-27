@@ -86,6 +86,11 @@ class FirebasePreparationRepository(
         "flourFractionPct" to flourFractionPct,
         "notes" to notes,
         "active" to active,
+        "batterPreparationId" to batterPreparationId,
+        "batterPreparationName" to batterPreparationName,
+        "batterGramsPerUnit" to batterGramsPerUnit,
+        "stockMinimumUnits" to stockMinimumUnits,
+        "branchIds" to branchIds,
         "createdAt" to if (createdAt == 0L) Clock.System.now().toEpochMilliseconds() else createdAt,
         "updatedAt" to Clock.System.now().toEpochMilliseconds()
         // ingredients NO se guardan en el documento raíz (subcolección)
@@ -111,6 +116,11 @@ class FirebasePreparationRepository(
         flourFractionPct = get<Double?>("flourFractionPct") ?: 0.0,
         notes = get<String?>("notes"),
         active = get<Boolean?>("active") ?: true,
+        batterPreparationId = runCatching { get<String?>("batterPreparationId") }.getOrNull() ?: "",
+        batterPreparationName = runCatching { get<String?>("batterPreparationName") }.getOrNull() ?: "",
+        batterGramsPerUnit = readNumber("batterGramsPerUnit"),
+        stockMinimumUnits = readNumber("stockMinimumUnits"),
+        branchIds = runCatching { get<List<String>?>("branchIds") }.getOrNull() ?: emptyList(),
         createdAt = readTimestampAsMillis("createdAt"),
         updatedAt = readTimestampAsMillis("updatedAt")
     )
@@ -123,6 +133,11 @@ class FirebasePreparationRepository(
         unit = get<String?>("unit") ?: "",
         unitWeightGrams = runCatching { get<Double?>("unitWeightGrams") }.getOrNull() ?: 0.0
     )
+
+    private fun DocumentSnapshot.readNumber(field: String): Double =
+        runCatching { get<Double?>(field) }.getOrNull()
+            ?: runCatching { get<Long?>(field)?.toDouble() }.getOrNull()
+            ?: 0.0
 
     private fun DocumentSnapshot.readTimestampAsMillis(field: String): Long =
         runCatching { get<Timestamp?>(field)?.toMilliseconds()?.toLong() }.getOrNull()
