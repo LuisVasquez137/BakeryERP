@@ -1,5 +1,17 @@
 package com.bakery.erp.presentation.home
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.scale
+import com.bakery.erp.ui.FallingConfetti
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -160,7 +172,7 @@ fun UpdatedAgo(lastUpdatedAt: Long, refreshing: Boolean, onRefresh: () -> Unit) 
 // ── Cumpleaños ───────────────────────────────────────────────────────────────
 
 @Composable
-private fun PersonPhoto(name: String, photoUrl: String, size: Int, ring: Color = Color.White) {
+internal fun PersonPhoto(name: String, photoUrl: String, size: Int, ring: Color = Color.White) {
     Box(
         Modifier.size(size.dp).clip(CircleShape).background(BrandColors.Primary).border(2.dp, ring, CircleShape),
         contentAlignment = Alignment.Center
@@ -178,10 +190,10 @@ private fun PersonPhoto(name: String, photoUrl: String, size: Int, ring: Color =
     }
 }
 
-private fun firstName(name: String) = name.trim().split(" ").firstOrNull().orEmpty().ifBlank { name }
+internal fun firstName(name: String) = name.trim().split(" ").firstOrNull().orEmpty().ifBlank { name }
 
 /** "María", "María y José", "María, José y Ana", "María, José y 3 más". */
-private fun joinNames(names: List<String>): String = when (names.size) {
+internal fun joinNames(names: List<String>): String = when (names.size) {
     0 -> ""
     1 -> names[0]
     2 -> "${names[0]} y ${names[1]}"
@@ -194,7 +206,14 @@ private fun joinNames(names: List<String>): String = when (names.size) {
  * una línea discreta para abrir la lista; sin ninguno, no ocupa espacio.
  */
 @Composable
-fun BirthdaysCard(birthdays: Birthdays?, onOpenMonth: () -> Unit, onOpenYear: () -> Unit) {
+fun BirthdaysCard(
+    birthdays: Birthdays?,
+    onOpenMonth: () -> Unit,
+    onOpenYear: () -> Unit,
+    /** Cumpleañeros de hoy a quienes quien mira todavía no felicitó: botón "Felicitar". */
+    greetable: List<BirthdayPerson> = emptyList(),
+    onGreet: (BirthdayPerson) -> Unit = {}
+) {
     if (birthdays == null) return
     val week = birthdays.thisWeek
     if (week.isEmpty()) {
@@ -233,7 +252,14 @@ fun BirthdaysCard(birthdays: Birthdays?, onOpenMonth: () -> Unit, onOpenYear: ()
             Modifier
                 .background(Brush.linearGradient(listOf(BrandColors.AccentSoft, Color.White, BrandColors.PrimaryContainer.copy(alpha = 0.5f))))
         ) {
-            Confetti(Modifier.matchParentSize(), density = 14)
+            // Solo el día del cumpleaños se mueve; el resto de la semana, puntitos quietos.
+            if (todays.isNotEmpty()) FallingConfetti(Modifier.matchParentSize(), count = 26, alpha = 0.55f)
+            else Confetti(Modifier.matchParentSize(), density = 14)
+            val beat = rememberInfiniteTransition(label = "birthday")
+            val pulse by beat.animateFloat(1f, 1.07f,
+                infiniteRepeatable(tween(900, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "pulse")
+            val wobble by beat.animateFloat(-10f, 10f,
+                infiniteRepeatable(tween(700, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "wobble")
             Row(
                 Modifier.padding(14.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -242,7 +268,8 @@ fun BirthdaysCard(birthdays: Birthdays?, onOpenMonth: () -> Unit, onOpenYear: ()
                 // Fotos encimadas: se ve de un vistazo cuántos son y quiénes.
                 Box(Modifier.width((48 + (week.take(3).size - 1) * 26).dp).height(48.dp)) {
                     week.take(3).forEachIndexed { i, p ->
-                        Box(Modifier.offset(x = (i * 26).dp)) {
+                        // El de hoy "respira" con su anillo naranja.
+                        Box(Modifier.offset(x = (i * 26).dp).scale(if (p.daysFromToday == 0) pulse else 1f)) {
                             PersonPhoto(p.name, p.photoUrl, 48, ring = if (p.daysFromToday == 0) BrandColors.Accent else Color.White)
                         }
                     }
@@ -271,11 +298,28 @@ fun BirthdaysCard(birthdays: Birthdays?, onOpenMonth: () -> Unit, onOpenYear: ()
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                Box(
-                    Modifier.size(36.dp).clip(CircleShape).background(BrandColors.Accent),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(Icons.Default.Cake, "Ver cumpleaños del mes", tint = BrandColors.OnAccent, modifier = Modifier.size(20.dp))
+                val toGreet = greetable.firstOrNull()
+                if (toGreet != null) {
+                    // Por si se omitió el aviso al entrar: felicitar sigue a un toque.
+                    Button(
+                        onClick = { onGreet(toGreet) },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = BrandColors.Accent, contentColor = BrandColors.OnAccent),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Icon(Icons.Default.Cake, null, modifier = Modifier.size(18.dp).rotate(wobble))
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (greetable.size > 1) "Felicitar" else "Felicitar a ${firstName(toGreet.name)}",
+                            fontWeight = FontWeight.Bold, maxLines = 1)
+                    }
+                } else {
+                    Box(
+                        Modifier.size(36.dp).clip(CircleShape).background(BrandColors.Accent),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Default.Cake, "Ver cumpleaños del mes", tint = BrandColors.OnAccent,
+                            modifier = Modifier.size(20.dp).rotate(if (todays.isNotEmpty()) wobble else 0f))
+                    }
                 }
             }
         }

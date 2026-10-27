@@ -274,7 +274,8 @@ private fun hasModuleAccess(title: String, user: User) = with(user) {
         "Anotar material"      -> hasPermission(Permission.ISSUE_PLANT_MATERIAL) ||
                                   hasPermission(Permission.VIEW_INVENTORY_REPORT)
         "Colaboradores"           -> hasPermission(Permission.MANAGE_EMPLOYEES)
-        "Asistencia"         -> hasPermission(Permission.MANAGE_EMPLOYEES)
+        // Todo el personal marca su entrada; quien administra colaboradores marca a cualquiera.
+        "Asistencia"         -> true
         "Puestos" -> hasPermission(Permission.MANAGE_EMPLOYEES)
         "Activos fijos"  -> hasPermission(Permission.VIEW_ASSETS) ||
                             hasPermission(Permission.EDIT_ASSETS) ||
@@ -369,6 +370,8 @@ fun HomeScreen(
     onNavigateToNotificationTarget: (targetScreen: String, targetId: String) -> Unit = { _, _ -> },
     viewModel: AuthViewModel,
     homeViewModel: HomeViewModel,
+    /** Felicitar a los cumpleañeros de hoy desde la tarjeta. */
+    birthdayGreetingViewModel: BirthdayGreetingViewModel? = null,
     notificationViewModel: NotificationViewModel
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -720,10 +723,15 @@ fun HomeScreen(
             }
             if (!isSearching && homeState.birthdays != null) {
                 item(key = "birthdays") {
+                    val greetState = birthdayGreetingViewModel?.uiState?.collectAsState()?.value
+                    val me = greetState?.me
                     BirthdaysCard(
                         homeState.birthdays,
                         onOpenMonth = { showBirthdays = true },
-                        onOpenYear = onNavigateToBirthdays
+                        onOpenYear = onNavigateToBirthdays,
+                        greetable = if (me == null) emptyList() else homeState.birthdays?.thisWeek.orEmpty()
+                            .filter { it.daysFromToday == 0 && it.employeeId != me.employeeId && it.employeeId !in greetState.greetedIds },
+                        onGreet = { birthdayGreetingViewModel?.send(it) }
                     )
                     if (homeState.birthdays?.thisMonth?.isNotEmpty() == true) Spacer(Modifier.height(24.dp))
                 }

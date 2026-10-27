@@ -171,6 +171,8 @@ fun ShiftClockInScreen(
         }
     }
 
+    // Lista completa para todos (decisión del dueño): no todos tienen PIN, y lo que identifica a
+    // quien marca es la selfie.
     val filtered = state.employees
         .filter { it.status == EmployeeStatus.ACTIVE || it.status == EmployeeStatus.ON_VACATION }
         .filter {

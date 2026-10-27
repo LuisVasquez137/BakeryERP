@@ -32,6 +32,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
@@ -79,7 +80,9 @@ fun OperatorLockScreen(
     account: User,
     viewModel: OperatorLockViewModel,
     onSession: (OperatorSession) -> Unit,
-    onSignOutDevice: () -> Unit
+    onSignOutDevice: () -> Unit,
+    /** Reloj de entrada sin PIN: la lista de colaboradores y la selfie, nada más de la app. */
+    onMarkAttendance: (() -> Unit)? = null
 ) {
     val state by viewModel.uiState.collectAsState()
     var confirmSignOut by remember { mutableStateOf(false) }
@@ -128,7 +131,8 @@ fun OperatorLockScreen(
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
                 val selected = state.selected
                 if (selected == null) {
-                    PickPerson(account = account, state = state, onPick = viewModel::select)
+                    PickPerson(account = account, state = state, onPick = viewModel::select,
+                        onMarkAttendance = onMarkAttendance)
                 } else {
                     PinEntry(
                         employee = selected,
@@ -164,21 +168,41 @@ fun OperatorLockScreen(
 }
 
 @Composable
-private fun PickPerson(account: User, state: OperatorLockUiState, onPick: (Employee) -> Unit) {
+private fun PickPerson(
+    account: User,
+    state: OperatorLockUiState,
+    onPick: (Employee) -> Unit,
+    onMarkAttendance: (() -> Unit)? = null
+) {
     var query by remember { mutableStateOf("") }
     val filtered = state.employees.filter { query.isBlank() || it.name.contains(query.trim(), ignoreCase = true) }
     // Primero la gente de las sucursales de este equipo; los demás, por si alguien cubre turno.
     val (here, others) = filtered.partition { account.branchIds.isEmpty() || it.branchId in account.branchIds }
 
-    Column(Modifier.widthIn(max = 900.dp).fillMaxSize().padding(horizontal = 16.dp)) {
-        Text(
-            "¿Quién va a usar el equipo?",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            color = BrandColors.Primary,
-            modifier = Modifier.padding(top = 20.dp, bottom = 4.dp)
-        )
-        Text("Toca tu nombre y escribe tu PIN.", color = BrandColors.MutedSlate)
+    BoxWithConstraints(Modifier.widthIn(max = 900.dp).fillMaxSize()) {
+    // Ancho (tablet): el botón de asistencia a la derecha del título. Angosto: debajo, a lo ancho.
+    val wide = maxWidth >= 600.dp
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 20.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "¿Quién va a usar el equipo?",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = BrandColors.Primary,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                Text("Toca tu nombre y escribe tu PIN.", color = BrandColors.MutedSlate)
+            }
+            if (wide && onMarkAttendance != null) {
+                Spacer(Modifier.width(16.dp))
+                MarkAttendanceButton(onMarkAttendance)
+            }
+        }
+        if (!wide && onMarkAttendance != null) {
+            Spacer(Modifier.height(12.dp))
+            MarkAttendanceButton(onMarkAttendance, Modifier.fillMaxWidth())
+        }
         if (state.employees.size > 8) {
             OutlinedTextField(
                 value = query,
@@ -220,6 +244,33 @@ private fun PickPerson(account: User, state: OperatorLockUiState, onPick: (Emplo
                     items(others, key = { it.id }) { PersonCard(it, onPick) }
                 }
                 item(span = { GridItemSpan(maxLineSpan) }) { Spacer(Modifier.height(24.dp)) }
+            }
+        }
+    }
+    }
+}
+
+/** Entrada al reloj de asistencia: naranja de marca (relleno) para que se vea al llegar. */
+@Composable
+private fun MarkAttendanceButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(14.dp),
+        color = BrandColors.Accent,
+        shadowElevation = 2.dp,
+        modifier = modifier
+    ) {
+        Row(
+            Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(Icons.Default.Fingerprint, null, tint = BrandColors.OnAccent, modifier = Modifier.size(26.dp))
+            Spacer(Modifier.width(10.dp))
+            Column {
+                Text("Marcar asistencia", color = BrandColors.OnAccent, fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleMedium)
+                Text("Sin PIN, con foto", color = BrandColors.OnAccent, style = MaterialTheme.typography.labelSmall)
             }
         }
     }

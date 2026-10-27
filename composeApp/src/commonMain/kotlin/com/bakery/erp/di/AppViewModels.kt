@@ -92,6 +92,8 @@ data class AppViewModels(
     val dailyCashClose: DailyCashCloseViewModel,
     val spotCashCheck: SpotCashCheckViewModel,
     val home: HomeViewModel,
+    /** Felicitaciones de cumpleaños entre colaboradores. */
+    val birthdayGreeting: com.bakery.erp.presentation.home.BirthdayGreetingViewModel,
     val salesReport: SalesReportViewModel,
     val productionReport: ProductionReportViewModel,
     val financialReport: FinancialReportViewModel,

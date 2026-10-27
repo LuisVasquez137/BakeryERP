@@ -887,6 +887,7 @@ fun AppNavigation(
                 onNavigateToNotificationTarget = ::navigateToNotificationTarget,
                 viewModel = viewModel,
                 homeViewModel = homeViewModel,
+                birthdayGreetingViewModel = vms.birthdayGreeting,
                 notificationViewModel = notificationViewModel
             )
         }
@@ -2273,14 +2274,13 @@ fun AppNavigation(
         }
 
         // ── Ingreso a Turno ───────────────────────────────────────────────────
+        // Sin permiso: cada quien marca su propia entrada (la pantalla limita a quién).
         composable(Screen.ShiftClockIn.route) {
-            RequirePermission(state.user, Permission.MANAGE_EMPLOYEES, onBack = { navController.popBackStack() }) {
-                ShiftClockInScreen(
-                    onNavigateBack = { navController.popBackStack() },
-                    authViewModel = viewModel,
-                    viewModel = employeeViewModel
-                )
-            }
+            ShiftClockInScreen(
+                onNavigateBack = { navController.popBackStack() },
+                authViewModel = viewModel,
+                viewModel = employeeViewModel
+            )
         }
 
         // ── Producción — Turnos ──────────────────────────────────────────────
@@ -2817,12 +2817,26 @@ fun AppNavigation(
         // Cuenta de equipo sin persona identificada: la pantalla de PIN tapa todo.
         val deviceAccount = state.accountUser
         if (state.needsOperator && deviceAccount != null) {
-            com.bakery.erp.presentation.operator.OperatorLockScreen(
-                account = deviceAccount,
-                viewModel = vms.operatorLock,
-                onSession = viewModel::startOperatorSession,
-                onSignOutDevice = viewModel::signOut
-            )
+            // Reloj de entrada desde el bloqueo: no todos tienen PIN, y quien marca se
+            // identifica con la selfie. Solo la asistencia; lo demás sigue tapado.
+            var attendanceFromLock by remember { mutableStateOf(false) }
+            if (attendanceFromLock) {
+                androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+                    ShiftClockInScreen(
+                        onNavigateBack = { attendanceFromLock = false },
+                        authViewModel = viewModel,
+                        viewModel = employeeViewModel
+                    )
+                }
+            } else {
+                com.bakery.erp.presentation.operator.OperatorLockScreen(
+                    account = deviceAccount,
+                    viewModel = vms.operatorLock,
+                    onSession = viewModel::startOperatorSession,
+                    onSignOutDevice = viewModel::signOut,
+                    onMarkAttendance = { attendanceFromLock = true }
+                )
+            }
         }
         // Primera entrada del día con PIN: saludo encima del Home.
         val welcome by vms.operatorLock.welcome.collectAsState()
@@ -2831,6 +2845,17 @@ fun AppNavigation(
                 session = session,
                 onFinished = vms.operatorLock::dismissWelcome
             )
+        }
+        // Cumpleaños: cada vez que alguien entra (PIN, o la app con cuenta propia) se revisa a
+        // quién felicitar y si al cumpleañero le llegaron felicitaciones. Después del saludo.
+        val greetUser = state.user
+        LaunchedEffect(state.needsOperator, greetUser?.id, greetUser?.operatorEmployeeId) {
+            if (greetUser != null && !state.needsOperator && greetUser.orgId.isNotEmpty()) {
+                vms.birthdayGreeting.onEnter(greetUser)
+            }
+        }
+        if (welcome == null && !state.needsOperator && greetUser != null) {
+            com.bakery.erp.presentation.home.BirthdayGreetingOverlays(vms.birthdayGreeting)
         }
 
         if (showSplash) {

@@ -32,6 +32,16 @@ Inventario valorado por sucursal: maquinaria, mobiliario, vehículos, herramient
 - Lista con KPIs (total / inversión / valor en libros / mantenimientos 30 d), filtros sucursal+categoría+búsqueda, badge naranja si `nextMaintenanceDate ≤ +7 días`.
 - `AssetImageUploader` default `NoOp` en appModule; overrides `AndroidAssetImageUploader` y `JsAssetImageUploader`.
 
+### Asistencia para todo el personal (27 oct 2026)
+
+"Asistencia" pedía `MANAGE_EMPLOYEES` (módulo del Home y ruta): a nadie más le aparecía y no había
+permiso que dar. Ahora no pide permiso y todos ven la lista completa (decisión del dueño: no
+todos tienen PIN; lo que identifica a quien marca es la selfie). Se probó limitar a la propia ficha
+y se descartó el mismo día. En el equipo de sucursal, la pantalla de PIN (`OperatorLockScreen`)
+tiene **"Marcar asistencia"** (naranja, a la derecha del título en tablet, debajo en teléfono): abre
+`ShiftClockInScreen` encima del bloqueo sin identificar a nadie; la flecha vuelve al PIN.
+Las reglas ya dejaban escribir `attendance` a todo el personal.
+
 ### Asistencia: selfie al marcar en el kiosko (oct 2026)
 
 Problema: en el kiosko (`ShiftClockInScreen`) cualquiera tocaba el nombre de otro y le marcaba; un PIN se presta igual. La huella de `BiometricClockButton` (código muerto, sin uso) **no identifica a nadie**: `BiometricPrompt` solo dice "coincidió alguna huella de este equipo", no de quién.
@@ -62,3 +72,22 @@ Problema: en el kiosko (`ShiftClockInScreen`) cualquiera tocaba el nombre de otr
   `NET_CAPABILITY_VALIDATED` — wifi conectado sin internet cuenta como sin conexión. JS usa `navigator.onLine`.
   iOS y wasmJs devuelven siempre `true` (pendiente `NWPathMonitor`).
 - La franja consume el inset de la barra de estado para que `BrandTopAppBar` no deje un segundo hueco.
+
+### Cumpleaños: tarjeta animada y felicitaciones (27 oct 2026, sin probar en dispositivo)
+
+- **Tarjeta del Inicio** (`BirthdaysCard`): el resto de la semana, puntitos quietos. El día que
+  alguien cumple: confeti que cae (`ui/FallingConfetti.kt`), la foto del cumpleañero "respira"
+  y el pastel se mece; botón **"Felicitar a X"** si quien mira todavía no lo felicitó.
+- **Felicitaciones** (`model/BirthdayGreeting.kt`, `companies/{c}/birthdayGreetings`, plana; sin
+  regla nueva: la general de la empresa). Id = `año_cumpleañero_quienFelicita`: una por persona
+  y año. "Omitir" se guarda como `SKIPPED` para no volver a preguntar; el botón de la tarjeta la
+  pasa a `SENT`.
+- **Al entrar** (`BirthdayGreetingViewModel.onEnter`, disparado en `AppNavigation` cuando
+  `needsOperator` pasa a falso o al abrir con cuenta propia; quién soy = persona del PIN o ficha
+  con `userId`): se pinta encima de todo después de la bienvenida (`BirthdayGreetingOverlays`,
+  no diálogos, para no adelantarse al saludo). Orden: si soy el cumpleañero, la celebración con
+  las felicitaciones no vistas (al cerrar se marcan `seenAt`; las nuevas vuelven a salir en la
+  siguiente entrada, con el total del día); después, un aviso por cumpleañero estilo Duolingo
+  (botón naranja grande "Felicitar a X", "Omitir" casi invisible) y un "¡Enviado!" que se va solo.
+- Sin push (en la tablet compartida llegaría al equipo, no a la persona).
+

@@ -234,6 +234,9 @@ actual fun createAppViewModels(): AppViewModels {
             employeeRepo, com.bakery.erp.data.FirebaseHomeShortcutRepository(firestore),
             customerOrderRepo, attendanceRepo, productRepoJs, finishedStockRepo
         ),
+        birthdayGreeting = com.bakery.erp.presentation.home.BirthdayGreetingViewModel(
+            com.bakery.erp.data.FirebaseBirthdayGreetingRepository(firestore), employeeRepo
+        ),
         salesReport = SalesReportViewModel(saleRepo, branchRepo),
         productionReport = ProductionReportViewModel(productionRepo, dispatchRepo, branchRepo, plantIssueRepo),
         financialReport = FinancialReportViewModel(

@@ -46,6 +46,7 @@ actual fun createAppViewModels(): AppViewModels {
         dailyCashClose = koin.get(),
         spotCashCheck = koin.get(),
         home = koin.get(),
+        birthdayGreeting = koin.get(),
         salesReport = koin.get(),
         productionReport = koin.get(),
         financialReport = koin.get(),
