@@ -40,6 +40,16 @@ object FinishedMovementType {
     const val ACCIDENTE     = "ACCIDENTE"
     /** Regalado desde la caja, dentro de la cuota diaria de la sucursal. Ver `CounterRemoval`. */
     const val CORTESIA      = "CORTESIA"
+    /**
+     * Pan de cortesía de una colaboradora, a costo. Lo escribe el conteo de cierre al repartir
+     * las unidades de grupo anotadas en caja (ver `allocateGroupSales`).
+     */
+    const val PAN_COLABORADOR = "PAN_COLABORADOR"
+    /**
+     * Pan del mostrador que llevó un platillo del restaurante (el pirujo del chicken sandwich),
+     * a costo. Lo escribe el servidor al llegar la cuenta de ComandaYa. Ver `RestaurantDish`.
+     */
+    const val CONSUMO_RESTAURANTE = "CONSUMO_RESTAURANTE"
 
     fun label(type: String) = when (type) {
         RECEPCION     -> "Recepción"
@@ -52,7 +62,9 @@ object FinishedMovementType {
         TRANSFORMACION -> "Transformación"
         ACCIDENTE     -> "Accidente (cobrado)"
         CORTESIA      -> "Regalo"
-        else          -> "Desconocido"
+        PAN_COLABORADOR -> "Pan de colaborador"
+        CONSUMO_RESTAURANTE -> "Usado en restaurante"
+        else         -> "Desconocido"
     }
 }
 
@@ -68,4 +80,5 @@ object FinishedMovementReference {
     const val TRANSFORMATION = "TRANSFORMATION" // molde → tostado: referenceId une las dos puntas
     const val PRODUCTION_LOT = "PRODUCTION_LOT" // producto usado como ingrediente (pan molde de la torta): referenceId = el lote
     const val SALE_VOID   = "SALE_VOID"  // venta anulada: referenceId = la venta
+    const val RESTAURANT_ORDER = "RESTAURANT_ORDER" // pan de un platillo: referenceId = la cuenta de ComandaYa
 }

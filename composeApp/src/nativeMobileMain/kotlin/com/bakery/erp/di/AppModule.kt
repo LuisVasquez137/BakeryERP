@@ -176,6 +176,7 @@ val appModule = module {
     single<DeliveryRepository> { FirebaseDeliveryRepository(get(), get()) }
     single<POSCategoryRepository> { FirebasePOSCategoryRepository(get()) }
     single<com.bakery.erp.domain.PackagingItemRepository> { com.bakery.erp.data.FirebasePackagingItemRepository(get()) }
+    single<com.bakery.erp.domain.RestaurantDishRepository> { com.bakery.erp.data.FirebaseRestaurantDishRepository(get()) }
     single<com.bakery.erp.domain.PaymentRulesRepository> { com.bakery.erp.data.FirebasePaymentRulesRepository(get()) }
     single<com.bakery.erp.domain.HeldCartRepository> { com.bakery.erp.data.FirebaseHeldCartRepository(get()) }
     single<com.bakery.erp.domain.BankDepositRepository> { com.bakery.erp.data.FirebaseBankDepositRepository(get()) }
@@ -186,7 +187,7 @@ val appModule = module {
     single<CashRegisterRepository> { FirebaseCashRegisterRepository(get()) }
     single<CashSessionRepository> { FirebaseCashSessionRepository(get()) }
     single<SaleRepository> { FirebaseSaleRepository(get(), get(), get(), get()) }
-    single<BreadCountRepository> { FirebaseBreadCountRepository(get(), get(), get(), get()) }
+    single<BreadCountRepository> { FirebaseBreadCountRepository(get(), get(), get(), get(), get()) }
     single<com.bakery.erp.domain.CreditRepository> { com.bakery.erp.data.FirebaseCreditRepository(get()) }
     single { com.bakery.erp.presentation.credit.CreditViewModel(get(), get()) }
     single<DailyCashCloseRepository> { FirebaseDailyCashCloseRepository(get(), get()) }
@@ -242,8 +243,9 @@ val appModule = module {
     single { CashRegisterAdminViewModel(get(), get(), get()) }
     single { POSCategoryAdminViewModel(get(), get(), get()) }
     single { com.bakery.erp.presentation.pos.admin.PackagingAdminViewModel(get()) }
+    single { com.bakery.erp.presentation.pos.admin.RestaurantDishBreadViewModel(get(), get()) }
     single { com.bakery.erp.presentation.pos.admin.CardRulesViewModel(get()) }
-    single { BreadCountViewModel(get(), get()) }
+    single { BreadCountViewModel(get(), get(), get()) }
     single { DailyCashCloseViewModel(get(), get(), get(), get()) }
     single { SpotCashCheckViewModel(get(), get(), get()) }
     single { HomeViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }

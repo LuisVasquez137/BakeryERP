@@ -130,6 +130,7 @@ class FirebaseBranchRepository(
         "invoiceByDefault" to invoiceByDefault,
         "storeSharePercent" to storeSharePercent,
         "dailyCourtesyQuota" to dailyCourtesyQuota,
+        "dailyStaffBreadUnits" to dailyStaffBreadUnits,
         "active" to active,
         "createdAt" to if (createdAt == 0L) Clock.System.now().toEpochMilliseconds() else createdAt,
         "updatedAt" to Clock.System.now().toEpochMilliseconds()
@@ -180,6 +181,8 @@ class FirebaseBranchRepository(
             ?: runCatching { get<Long?>("storeSharePercent")?.toDouble() }.getOrNull() ?: 0.0,
         dailyCourtesyQuota = runCatching { get<Double?>("dailyCourtesyQuota") }.getOrNull()
             ?: runCatching { get<Long?>("dailyCourtesyQuota")?.toDouble() }.getOrNull() ?: 0.0,
+        dailyStaffBreadUnits = runCatching { get<Double?>("dailyStaffBreadUnits") }.getOrNull()
+            ?: runCatching { get<Long?>("dailyStaffBreadUnits")?.toDouble() }.getOrNull() ?: 0.0,
         active = get<Boolean?>("active") ?: true,
         createdAt = readTimestampAsMillis("createdAt"),
         updatedAt = readTimestampAsMillis("updatedAt")

@@ -1,0 +1,636 @@
+{
+ "branchId": "7c72132c7c97052f49228125523aa886",
+ "reason": "Conteo físico 26 oct 2026 (después del primer día de POS)",
+ "items": [
+  {
+   "name": "Tostada tipo Champurrada",
+   "qty": 434,
+   "note": "Champurrada unidad 265 + 169"
+  },
+  {
+   "name": "Rosca de panela",
+   "qty": 11,
+   "note": "Rosca de panela 11 bolsa"
+  },
+  {
+   "name": "Pan molde integral",
+   "qty": 2,
+   "note": "Molde integral 2 bolsa"
+  },
+  {
+   "name": "Pan Tostado Molde Integral",
+   "qty": 4,
+   "note": "Molde tostado integral 4 bolsas"
+  },
+  {
+   "name": "Concha de mantequilla",
+   "qty": 2,
+   "note": "Conchita mantequilla 2"
+  },
+  {
+   "name": "Pan tostado",
+   "qty": 12,
+   "note": "Pan molde tostado 12"
+  },
+  {
+   "name": "Bollo",
+   "qty": 19,
+   "note": "Bollos 19"
+  },
+  {
+   "name": "Chocolate de cardamomo",
+   "qty": 13,
+   "note": "Choco cardamomo 13"
+  },
+  {
+   "name": "Chocolate de canela",
+   "qty": 5,
+   "note": "Choco canela 5"
+  },
+  {
+   "name": "Galletas de mantequilla",
+   "qty": 6,
+   "note": "Cajas de galleta de mantequilla 6"
+  },
+  {
+   "name": "Pan De Muerto",
+   "qty": 10,
+   "note": "Pan muerto 10"
+  },
+  {
+   "name": "Sheca con frijol",
+   "qty": 4,
+   "note": "Shecas frijol 4"
+  },
+  {
+   "name": "Sheca con higo",
+   "qty": 7,
+   "note": "Shecas higo 7"
+  },
+  {
+   "name": "Sheca con platano y frijol",
+   "qty": 4,
+   "note": "Sheca frijol y platano 4"
+  },
+  {
+   "name": "Campechana grande",
+   "qty": 3,
+   "note": "Campechana G 3"
+  },
+  {
+   "name": "Gallina",
+   "qty": 9,
+   "note": "Gallinita 9"
+  },
+  {
+   "name": "Sheca cabezona",
+   "qty": 2,
+   "note": ""
+  },
+  {
+   "name": "Sheca con anis",
+   "qty": 7,
+   "note": ""
+  },
+  {
+   "name": "Pan de yemas pequeño",
+   "qty": 4,
+   "note": "Yemas P"
+  },
+  {
+   "name": "Pan de yemas grande",
+   "qty": 3,
+   "note": "Yemas G"
+  },
+  {
+   "name": "Sheca con queso",
+   "qty": 5,
+   "note": ""
+  },
+  {
+   "name": "Sheca negra con jalea de fresa",
+   "qty": 5,
+   "note": "Sheca fresa"
+  },
+  {
+   "name": "Sheca con mermelada de manzana",
+   "qty": 1,
+   "note": "Sheca manzana"
+  },
+  {
+   "name": "Pirujo grande sin punta",
+   "qty": 7,
+   "note": ""
+  },
+  {
+   "name": "Pirujo grande con punta",
+   "qty": 15,
+   "note": "escrito 75, el 7 sin palito = 1"
+  },
+  {
+   "name": "Pirujo con mantequilla",
+   "qty": 5,
+   "note": ""
+  },
+  {
+   "name": "Pan de torta",
+   "qty": 2,
+   "note": ""
+  },
+  {
+   "name": "Pirujo integral pequeño",
+   "qty": 16,
+   "note": ""
+  },
+  {
+   "name": "Pirujo integral grande",
+   "qty": 3,
+   "note": ""
+  },
+  {
+   "name": "Pan de agua",
+   "qty": 48,
+   "note": ""
+  },
+  {
+   "name": "Zepelin de chispas de chocolate",
+   "qty": 1,
+   "note": ""
+  },
+  {
+   "name": "Zepelin de fruta cristalizada",
+   "qty": 1,
+   "note": ""
+  },
+  {
+   "name": "Zepelin de almendra",
+   "qty": 2,
+   "note": ""
+  },
+  {
+   "name": "Zepelin de naranja",
+   "qty": 1,
+   "note": ""
+  },
+  {
+   "name": "Magdalena de chispas",
+   "qty": 1,
+   "note": ""
+  },
+  {
+   "name": "Magdalena de almendra",
+   "qty": 1,
+   "note": ""
+  },
+  {
+   "name": "Magdalena Con Fruta Cristalizada",
+   "qty": 1,
+   "note": ""
+  },
+  {
+   "name": "Carton De Huevos",
+   "qty": 9,
+   "note": "9 cartones"
+  },
+  {
+   "name": "Pan de molde",
+   "qty": 22,
+   "note": "22 bolsa"
+  },
+  {
+   "name": "Pirujo",
+   "qty": 36,
+   "note": "Pirujos pequeños"
+  },
+  {
+   "name": "Frances",
+   "qty": 188,
+   "note": "Frances P"
+  },
+  {
+   "name": "Torta de leche",
+   "qty": 38,
+   "note": ""
+  },
+  {
+   "name": "Pastel tres leches coco",
+   "qty": 1,
+   "note": "Coco pastel"
+  },
+  {
+   "name": "Pastel frio de frutas",
+   "qty": 1,
+   "note": ""
+  },
+  {
+   "name": "Pastel selva negra",
+   "qty": 1,
+   "note": ""
+  },
+  {
+   "name": "Pie de queso",
+   "qty": 3,
+   "note": ""
+  },
+  {
+   "name": "Pie de queso fresa",
+   "qty": 4,
+   "note": ""
+  },
+  {
+   "name": "Pie De Calabaza",
+   "qty": 2,
+   "note": ""
+  },
+  {
+   "name": "Pie De Calabaza Porcion",
+   "qty": 4,
+   "note": ""
+  },
+  {
+   "name": "Pie de blue berry",
+   "qty": 1,
+   "note": ""
+  },
+  {
+   "name": "Pie De Blue Berry Porcion",
+   "qty": 4,
+   "note": ""
+  },
+  {
+   "name": "Pastel tres leches chocolate porcion pequeña",
+   "qty": 1,
+   "note": "Porcion 3 leches P chocolate"
+  },
+  {
+   "name": "Chese Cake Melocoton",
+   "qty": 5,
+   "note": ""
+  },
+  {
+   "name": "Gelatina mosaico",
+   "qty": 24,
+   "note": "Gelatinas"
+  },
+  {
+   "name": "Donas",
+   "qty": 4,
+   "note": "Dona"
+  },
+  {
+   "name": "Donita pequeña",
+   "qty": 10,
+   "note": "Donitas"
+  },
+  {
+   "name": "Cresta",
+   "qty": 1,
+   "note": ""
+  },
+  {
+   "name": "Tambor de milhoja",
+   "qty": 1,
+   "note": ""
+  },
+  {
+   "name": "Milhoja",
+   "qty": 3,
+   "note": ""
+  },
+  {
+   "name": "Canape",
+   "qty": 1,
+   "note": ""
+  },
+  {
+   "name": "Canoli",
+   "qty": 2,
+   "note": ""
+  },
+  {
+   "name": "Cono de milhoja",
+   "qty": 2,
+   "note": ""
+  },
+  {
+   "name": "Bolita De Queso",
+   "qty": 5,
+   "note": ""
+  },
+  {
+   "name": "Volovan de carne",
+   "qty": 1,
+   "note": "Volovan res"
+  },
+  {
+   "name": "Volovan de pollo",
+   "qty": 4,
+   "note": ""
+  },
+  {
+   "name": "Rollo de jamon",
+   "qty": 7,
+   "note": ""
+  },
+  {
+   "name": "Rollo de salchicha",
+   "qty": 3,
+   "note": ""
+  },
+  {
+   "name": "Queso De Colomba",
+   "qty": 1,
+   "note": ""
+  },
+  {
+   "name": "Queso de San Marcos",
+   "qty": 23,
+   "note": ""
+  },
+  {
+   "name": "Malteada sula chocolate 473 ML",
+   "qty": 3,
+   "note": "Choco Sula chocolate"
+  },
+  {
+   "name": "Queso crema bolsa 460 gr",
+   "qty": 5,
+   "note": "Queso crema bolsa Foremost"
+  },
+  {
+   "name": "Jugo De Naranja Sula",
+   "qty": 5,
+   "note": ""
+  },
+  {
+   "name": "Jugo De Naranja Zanahoria Sula",
+   "qty": 3,
+   "note": ""
+  },
+  {
+   "name": "Crema foremost 225 ml",
+   "qty": 3,
+   "note": "Crema Foremost vaso"
+  },
+  {
+   "name": "Yogurt lala durazno 200gr",
+   "qty": 4,
+   "note": ""
+  },
+  {
+   "name": "Yogurt lala fresa 200gr",
+   "qty": 4,
+   "note": ""
+  },
+  {
+   "name": "Yogurt lala fresa-mora 200gr",
+   "qty": 3,
+   "note": ""
+  },
+  {
+   "name": "Yogurt Yoplait",
+   "qty": 2,
+   "note": "Yoplait bebible fresa"
+  },
+  {
+   "name": "Yogurt natural 125gr",
+   "qty": 7,
+   "note": "Lala 125 natural"
+  },
+  {
+   "name": "Yogurt Mora 125 Gr. Lala",
+   "qty": 2,
+   "note": ""
+  },
+  {
+   "name": "Yogurt Fresa 125 Gr Lala",
+   "qty": 2,
+   "note": ""
+  },
+  {
+   "name": "Yogurt Durazno 125 Gr Lala",
+   "qty": 1,
+   "note": ""
+  },
+  {
+   "name": "Yogurt Melocoton 125 Gr. Dos Pinos",
+   "qty": 1,
+   "note": "Dos Pinos 125 durazno"
+  },
+  {
+   "name": "Yogurt Fresa 125 Gr. Dos Pinos",
+   "qty": 1,
+   "note": ""
+  },
+  {
+   "name": "Yogurt Aloe Bebible",
+   "qty": 1,
+   "note": "Dos Pinos bebible aloe"
+  },
+  {
+   "name": "Queso crema Philadelphia tarro",
+   "qty": 3,
+   "note": ""
+  },
+  {
+   "name": "Queso mozarella La villita",
+   "qty": 2,
+   "note": "Pizzero Villita mozarela"
+  },
+  {
+   "name": "Queso Mozarella Rodajas Dos Pinos",
+   "qty": 4,
+   "note": "Mozarella Dos Pinos rebanada"
+  },
+  {
+   "name": "Jamon de pavo Chimex 10 rodajas",
+   "qty": 5,
+   "note": ""
+  },
+  {
+   "name": "Jamon de pavo chimex 5 rodajas",
+   "qty": 6,
+   "note": ""
+  },
+  {
+   "name": "Coca cola  Zero 300 Ml",
+   "qty": 8,
+   "note": ""
+  },
+  {
+   "name": "Coca Cola 355 Ml",
+   "qty": 1,
+   "note": "Coca cola pequeña"
+  },
+  {
+   "name": "Coca cola 600 Ml",
+   "qty": 3,
+   "note": ""
+  },
+  {
+   "name": "Shangrila",
+   "qty": 7,
+   "note": "Shangri-la 600 ml, 7 con palito"
+  },
+  {
+   "name": "Fanta Naranja Lata",
+   "qty": 8,
+   "note": ""
+  },
+  {
+   "name": "Sprite Lata 354 Ml",
+   "qty": 10,
+   "note": ""
+  },
+  {
+   "name": "Coca Cola Lata",
+   "qty": 13,
+   "note": ""
+  },
+  {
+   "name": "Fanta Uva Lata 354 Ml",
+   "qty": 1,
+   "note": "el 7 sin palito = 1"
+  },
+  {
+   "name": "Corbata de higo",
+   "qty": 5,
+   "note": "Cabrito de higo"
+  },
+  {
+   "name": "Concha grande (pan suave)",
+   "qty": 3,
+   "note": "Scabe grande"
+  },
+  {
+   "name": "Cacho con dulce de leche",
+   "qty": 5,
+   "note": "Cachito de cajeta"
+  },
+  {
+   "name": "Bolsa de rosquitas",
+   "qty": 5,
+   "note": "producto nuevo"
+  },
+  {
+   "name": "Chocolate Artesanal",
+   "qty": 18,
+   "note": "Choco Natural Sabropan"
+  },
+  {
+   "name": "Chiquiadores",
+   "qty": 21,
+   "note": "Chiquiador bolsa"
+  },
+  {
+   "name": "Chiquiadores en cajita",
+   "qty": 2,
+   "note": "producto nuevo"
+  },
+  {
+   "name": "Pastel de zanahoria porcion",
+   "qty": 7,
+   "note": "producto nuevo"
+  },
+  {
+   "name": "Pastel de zanahoria",
+   "qty": 0,
+   "note": "ya se porcionó"
+  },
+  {
+   "name": "Malteada Fresco Leche Chocolate Dos Pinos",
+   "qty": 2,
+   "note": "Frescoleche"
+  },
+  {
+   "name": "Yogurt Griego Yoplait Natural",
+   "qty": 4,
+   "note": "143g, reparto dicho por el dueño"
+  },
+  {
+   "name": "Yogurt Griego Yoplait Mora",
+   "qty": 1,
+   "note": "143g, reparto dicho por el dueño"
+  },
+  {
+   "name": "Chile en escabeche",
+   "qty": 6,
+   "note": "producto nuevo"
+  },
+  {
+   "name": "Batidas (pan suave)",
+   "qty": 0,
+   "note": "Q0.50 no aparece en el conteo = se acabó"
+  },
+  {
+   "name": "Campechanita",
+   "qty": 0,
+   "note": "Q0.50 no aparece en el conteo = se acabó"
+  },
+  {
+   "name": "Conchita (pan suave)",
+   "qty": 0,
+   "note": "Q0.50 no aparece en el conteo = se acabó"
+  },
+  {
+   "name": "Cortadas",
+   "qty": 0,
+   "note": "Q0.50 no aparece en el conteo = se acabó"
+  },
+  {
+   "name": "Cubo pequeño",
+   "qty": 0,
+   "note": "Q0.50 no aparece en el conteo = se acabó"
+  },
+  {
+   "name": "Frances integral",
+   "qty": 0,
+   "note": "Q0.50 no aparece en el conteo = se acabó"
+  },
+  {
+   "name": "Gusanito",
+   "qty": 0,
+   "note": "Q0.50 no aparece en el conteo = se acabó"
+  },
+  {
+   "name": "Lenguitas",
+   "qty": 0,
+   "note": "Q0.50 no aparece en el conteo = se acabó"
+  },
+  {
+   "name": "Pan de capa",
+   "qty": 0,
+   "note": "Q0.50 no aparece en el conteo = se acabó"
+  },
+  {
+   "name": "Rosca desabrida",
+   "qty": 0,
+   "note": "Q0.50 no aparece en el conteo = se acabó"
+  },
+  {
+   "name": "Royal",
+   "qty": 0,
+   "note": "Q0.50 no aparece en el conteo = se acabó"
+  },
+  {
+   "name": "Sheca blanca",
+   "qty": 0,
+   "note": "Q0.50 no aparece en el conteo = se acabó"
+  },
+  {
+   "name": "Sheca colorada Pequeña.",
+   "qty": 0,
+   "note": "Q0.50 no aparece en el conteo = se acabó"
+  },
+  {
+   "name": "Sheca negra Pequeña",
+   "qty": 0,
+   "note": "Q0.50 no aparece en el conteo = se acabó"
+  },
+  {
+   "name": "Tostada tipo azucarada",
+   "qty": 0,
+   "note": "Q0.50 no aparece en el conteo = se acabó"
+  }
+ ]
+}

@@ -136,7 +136,8 @@ actual fun createAppViewModels(): AppViewModels {
         productRepoJs, recipeRepo, ingredientRepo, preparationRepo, purchaseRepo
     )
     val saleRepo = FirebaseSaleRepository(firestore, finishedStockRepo, cashSessionRepo, ingredientRepo)
-    val breadCountRepo = FirebaseBreadCountRepository(firestore, finishedStockRepo, saleRepo, posCategoryRepo)
+    val counterRemovalRepo = com.bakery.erp.data.FirebaseCounterRemovalRepository(firestore, finishedStockRepo, creditRepo)
+    val breadCountRepo = FirebaseBreadCountRepository(firestore, finishedStockRepo, saleRepo, posCategoryRepo, counterRemovalRepo)
     val dailyCloseRepo = FirebaseDailyCashCloseRepository(firestore, cashSessionRepo)
     val spotCheckRepo = FirebaseSpotCashCheckRepository(firestore)
     val externalCustomerRepo = FirebaseExternalCustomerRepository(firestore)
@@ -212,7 +213,7 @@ actual fun createAppViewModels(): AppViewModels {
         ),
         saleHistory = SaleHistoryViewModel(saleRepo, cashSessionRepo, branchRepo, felRepo, JsReceiptPrinter(), authRepo, notificationRepo, cashAuditRepo),
         counterRemoval = com.bakery.erp.presentation.pos.CounterRemovalViewModel(
-            com.bakery.erp.data.FirebaseCounterRemovalRepository(firestore, finishedStockRepo, creditRepo),
+            counterRemovalRepo,
             com.bakery.erp.data.JsCounterRemovalPhotoUploader(storage),
             employeeRepo, employeeAccessRepo, notificationRepo, branchRepo
         ),
@@ -223,9 +224,12 @@ actual fun createAppViewModels(): AppViewModels {
         cashRegisterAdmin = CashRegisterAdminViewModel(cashRegisterRepo, branchRepo, cashSessionRepo),
         posCategoryAdmin = POSCategoryAdminViewModel(posCategoryRepo, productRepoJs, branchRepo),
         packagingAdmin = com.bakery.erp.presentation.pos.admin.PackagingAdminViewModel(packagingItemRepo),
+        restaurantDishBread = com.bakery.erp.presentation.pos.admin.RestaurantDishBreadViewModel(
+            com.bakery.erp.data.FirebaseRestaurantDishRepository(firestore), productRepoJs
+        ),
         cardRules = com.bakery.erp.presentation.pos.admin.CardRulesViewModel(paymentRulesRepo),
         credit = com.bakery.erp.presentation.credit.CreditViewModel(creditRepo, employeeRepo),
-        breadCount = BreadCountViewModel(breadCountRepo, branchRepo),
+        breadCount = BreadCountViewModel(breadCountRepo, branchRepo, productRepoJs),
         dailyCashClose = DailyCashCloseViewModel(dailyCloseRepo, branchRepo, breadCountRepo, spotCheckRepo),
         spotCashCheck = SpotCashCheckViewModel(spotCheckRepo, cashSessionRepo, branchRepo),
         home = HomeViewModel(

@@ -132,6 +132,10 @@ fun BranchFormScreen(
     var courtesyQuotaText by rememberSaveable(existing?.id) {
         mutableStateOf(existing?.dailyCourtesyQuota?.takeIf { it > 0.0 }?.fmtTrim(2) ?: "")
     }
+    // Panes de colaborador por persona al día; mismo permiso que la cuota de regalos.
+    var staffBreadText by rememberSaveable(existing?.id) {
+        mutableStateOf(existing?.dailyStaffBreadUnits?.takeIf { it > 0.0 }?.fmtTrim(0) ?: "")
+    }
 
     var nameError by remember { mutableStateOf(false) }
     var locationError by remember { mutableStateOf(false) }
@@ -189,6 +193,9 @@ fun BranchFormScreen(
         dailyCourtesyQuota = if (canSetCourtesyQuota)
             courtesyQuotaText.replace(',', '.').toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
         else existing?.dailyCourtesyQuota ?: 0.0,
+        dailyStaffBreadUnits = if (canSetCourtesyQuota)
+            staffBreadText.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
+        else existing?.dailyStaffBreadUnits ?: 0.0,
         active = active
     )
 
@@ -376,7 +383,7 @@ fun BranchFormScreen(
                 // ── Regalos desde la caja ─────────────────────────────────────
                 if (BranchCapability.CAN_SELL in capabilities) {
                     SectionDivider()
-                    SectionHeader("Regalos desde la caja")
+                    SectionHeader("Regalos y pan de colaborador")
                     Text(
                         text = "Cuánto pueden regalar al día las cajas de esta sucursal, a precio de venta. " +
                             "Al llegar al límite la caja ya no deja registrar más regalos. Vacío = no se regala.",
@@ -394,6 +401,22 @@ fun BranchFormScreen(
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                    )
+                    OutlinedTextField(
+                        value = staffBreadText,
+                        onValueChange = { v -> staffBreadText = v.filter { it.isDigit() }.take(3) },
+                        label = { Text("Pan de colaborador (panes por persona al día)") },
+                        placeholder = { Text("Ej: 4") },
+                        enabled = canSetCourtesyQuota,
+                        supportingText = {
+                            Text(
+                                if (!canSetCourtesyQuota) "Solo el dueño lo cambia."
+                                else "Del pan por grupo (Q0.50). Cuenta lo que la persona ya tomó en otras sucursales. Vacío = no se da."
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                     )
                 }
 

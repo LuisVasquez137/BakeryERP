@@ -636,6 +636,47 @@ sistema no sabe quién tiró el pan: cada caso tiene un control que hace que men
 - Pendiente: el descuento en planilla del cargo lo decide el dueño con su contador (queda como
   deuda en la cuenta, no se descuenta solo).
 
+### Pan de colaborador (oct 2026)
+
+De cortesía, las colaboradoras pueden tomar pan de Q0.50 (y de ningún otro precio). Antes no
+quedaba registrado y salía en el conteo de cierre como faltante. En el pan por grupo eso
+significa venta sin dinero en la gaveta. Ahora es el 4.º caso de "Sacar del mostrador"
+(`CounterRemovalKind.STAFF_BREAD`):
+
+- **Sin escoger el tipo**, igual que la venta del grupo: se anotan unidades del grupo
+  (`groupId/groupUnits/groupUnitPrice` en el encabezado, sin líneas) y **no descuenta al
+  registrarse**. El conteo de cierre las reparte con `allocateGroupSales(..., staffUnitsByGroup)`
+  **después** de la venta, porque la venta es dinero que ya está en la gaveta y va primero.
+  Escribe `PAN_COLABORADOR` a costo y `BreadCountLine.staffBread`. La merma queda como faltante −
+  vendido − colaborador. Lo que no cabe en el faltante sale como "no explicado".
+- **Para quién**: va en `responsibleEmployeeId`, **sin PIN** (decisión del dueño, 28 oct: todas
+  tienen derecho y no todas tienen PIN). El control es el tope y el resumen por persona.
+- **Tope por persona y día** (`Branch.dailyStaffBreadUnits`, el dueño pidió 4; solo el OWNER lo
+  edita en Sucursales). Cuenta lo que la persona ya tomó en **cualquier** sucursal
+  (`staffBreadUsedOn`) y **bloquea**. Se relee justo antes de guardar.
+- Reportes: "Salidas del mostrador" tiene filtro propio y lo muestra por persona. El financiero
+  lo resta en su propia línea, "Pan de colaboradores (a costo)" (`StockMovementSummary.staffBreadValue`).
+
+### Pan en platillos del restaurante (oct 2026)
+
+La cocina toma pan del mostrador para algunos platillos (el chicken sandwich lleva un pirujo con
+punta), y el conteo lo veía como faltante. Ahora se configura una vez en Inicio → **Pan en platillos**
+(`RestaurantDishBreadScreen`, permiso `MANAGE_POS_CONFIG`, regla de Firestore también) qué pan
+lleva cada platillo. La cocina no anota nada.
+
+- `companies/{c}/restaurantDishes/{externalItemId}`: el id es el del platillo en ComandaYa (la
+  línea de la cuenta trae `externalItemId`), así que renombrarlo allá no rompe el vínculo. **El
+  servidor crea el documento** la primera vez que llega el platillo. La app solo hace `update`
+  del pan (`breadProductIds/Names/Quantities`).
+- **Se descuenta al llegar la cuenta** (`ingestExternalSale`, decisión del dueño): suma en el
+  servidor sobre `finishedStocks` + Kardex `CONSUMO_RESTAURANTE` (ref `RESTAURANT_ORDER`, a
+  costo), dentro de la misma transacción de la venta. La venta guarda `appliedBread`. Un reenvío
+  corregido aplica solo la diferencia y una cancelación antes de recibirse lo devuelve
+  (`restaurantBread.js`, con pruebas). Los adicionales de una cuenta ya recibida descuentan solo
+  su pan.
+- No va al P&L (igual que la venta: el costo del pan es consumo, no gasto). El conteo ya espera
+  ese pan de menos.
+
 
 ---
 

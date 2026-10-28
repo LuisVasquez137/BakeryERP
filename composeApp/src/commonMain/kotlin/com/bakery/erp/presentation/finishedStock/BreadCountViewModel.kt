@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bakery.erp.domain.BranchRepository
 import com.bakery.erp.domain.BreadCountRepository
+import com.bakery.erp.domain.ProductRepository
 import com.bakery.erp.model.Branch
 import com.bakery.erp.model.BranchCapability
 import com.bakery.erp.model.BreadCount
@@ -35,6 +36,8 @@ data class BreadCountUiState(
      */
     val groupWindow: GroupSalesWindow? = null,
     val isGroupWindowLoading: Boolean = false,
+    /** Foto de cada producto (id → url) para reconocerlo de un vistazo al contar. */
+    val productImages: Map<String, String> = emptyMap(),
     val yearMonth: String = "",
     val isLoading: Boolean = false,
     val error: String? = null,
@@ -44,7 +47,8 @@ data class BreadCountUiState(
 
 class BreadCountViewModel(
     private val repo: BreadCountRepository,
-    private val branchRepository: BranchRepository
+    private val branchRepository: BranchRepository,
+    private val productRepository: ProductRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(BreadCountUiState())
@@ -131,6 +135,7 @@ class BreadCountViewModel(
         linesJob?.cancel()
         _uiState.update { it.copy(groupWindow = null) }
         refreshGroupSales(companyId, countId)
+        if (_uiState.value.productImages.isEmpty()) loadProductImages(companyId)
         headerJob = viewModelScope.launch {
             repo.observeCount(companyId, countId)
                 .catch { e -> _uiState.update { it.copy(error = e.message) } }
@@ -153,6 +158,17 @@ class BreadCountViewModel(
             runCatching { repo.groupSalesWindow(companyId, countId) }
                 .onSuccess { w -> _uiState.update { it.copy(groupWindow = w, isGroupWindowLoading = false) } }
                 .onFailure { err -> _uiState.update { it.copy(isGroupWindowLoading = false, error = err.message) } }
+        }
+    }
+
+    // Sin fotos el conteo igual funciona: un error aquí no se le muestra a quien cuenta.
+    private fun loadProductImages(companyId: String) {
+        viewModelScope.launch {
+            runCatching { productRepository.getProducts(companyId) }.onSuccess { products ->
+                val images = products.mapNotNull { p -> p.imageUrl?.takeIf { it.isNotBlank() }?.let { p.id to it } }
+                    .toMap()
+                _uiState.update { it.copy(productImages = images) }
+            }
         }
     }
 

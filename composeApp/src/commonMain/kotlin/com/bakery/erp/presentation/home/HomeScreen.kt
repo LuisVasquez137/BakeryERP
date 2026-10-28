@@ -200,6 +200,8 @@ private val ALL_SECTIONS = listOf(
             "botones grupos venta categorias"),
         ModuleItem("Empaques",             "Bolsa y cajas que se cobran", Icons.Default.LocalMall,
             "bolsa caja cobrar empaque"),
+        ModuleItem("Pan en platillos",     "Pan que usa el restaurante", Icons.Default.Restaurant,
+            "restaurante cocina comandaya platillo pirujo sandwich"),
         ModuleItem("Pago con tarjeta",     "Mínimo y recargo",           Icons.Default.CreditCard,
             "tarjeta pos recargo comision visa minimo"),
     ))
@@ -294,6 +296,7 @@ private fun hasModuleAccess(title: String, user: User) = with(user) {
         "Cajas" -> hasPermission(Permission.MANAGE_POS_CONFIG)
         "Categorías POS"    -> hasPermission(Permission.MANAGE_POS_CONFIG)
         "Empaques"          -> hasPermission(Permission.MANAGE_POS_CONFIG)
+        "Pan en platillos"  -> hasPermission(Permission.MANAGE_POS_CONFIG)
         "Pago con tarjeta"  -> hasPermission(Permission.MANAGE_POS_CONFIG)
         "Cuadre sorpresa"   -> hasPermission(Permission.SPOT_CHECK_CASH)
         "Conteo de pan"     -> hasPermission(Permission.COUNT_FINISHED_STOCK) ||
@@ -351,6 +354,7 @@ fun HomeScreen(
     onNavigateToCashRegisterAdmin: () -> Unit = {},
     onNavigateToQuickGroupAdmin: () -> Unit = {},
     onNavigateToPackagingAdmin: () -> Unit = {},
+    onNavigateToRestaurantDishBread: () -> Unit = {},
     onNavigateToCardRules: () -> Unit = {},
     onNavigateToCredit: () -> Unit = {},
     onNavigateToBreadCount: () -> Unit = {},
@@ -461,6 +465,7 @@ fun HomeScreen(
             "Cajas"     -> onNavigateToCashRegisterAdmin()
             "Categorías POS"          -> onNavigateToQuickGroupAdmin()
             "Empaques"                -> onNavigateToPackagingAdmin()
+            "Pan en platillos"        -> onNavigateToRestaurantDishBread()
             "Pago con tarjeta"        -> onNavigateToCardRules()
             "Conteo de pan"           -> onNavigateToBreadCount()
             "Cuadre sorpresa"         -> onNavigateToSpotCashCheck()

@@ -116,6 +116,12 @@ data class Branch(
      * venta. Pasarse BLOQUEA el regalo. 0 = no se regala. Solo el dueño lo cambia. Ver `CounterRemoval`.
      */
     val dailyCourtesyQuota: Double = 0.0,
+    /**
+     * Panes de cortesía (del grupo Q0.50) que cada colaboradora puede tomar al día desde las
+     * cajas de esta sucursal. Es por PERSONA: lo que ya tomó en otra sucursal también cuenta.
+     * Pasarse BLOQUEA. 0 = no se da. Solo el dueño lo cambia. Ver `CounterRemoval`.
+     */
+    val dailyStaffBreadUnits: Double = 0.0,
     val active: Boolean = true,
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L

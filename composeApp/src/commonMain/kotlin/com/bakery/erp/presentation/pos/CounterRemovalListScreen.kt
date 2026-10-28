@@ -164,7 +164,8 @@ fun CounterRemovalListScreen(
                             }
                             ChipRow {
                                 listOf("" to "Todo", CounterRemovalKind.DAMAGED to "Venía mal",
-                                    CounterRemovalKind.ACCIDENT to "Accidentes", CounterRemovalKind.COURTESY to "Regalos"
+                                    CounterRemovalKind.ACCIDENT to "Accidentes", CounterRemovalKind.COURTESY to "Regalos",
+                                    CounterRemovalKind.STAFF_BREAD to "Pan de colaborador"
                                 ).forEach { (k, label) ->
                                     FilterChip(selected = kindFilter == k, onClick = { kindFilter = k }, label = { Text(label) })
                                 }
@@ -259,6 +260,7 @@ private fun PersonSummary(stats: List<com.bakery.erp.model.CounterRemovalPersonS
                             if (s.accidentForgiven > 0) " (perdonado Q ${s.accidentForgiven.fmtMoney(2)})" else ""
                     )
                     if (s.courtesyValue > 0) add("regaló Q ${s.courtesyValue.fmtMoney(2)}")
+                    if (s.staffBreadUnits > 0) add("pan de colaborador ${s.staffBreadUnits.fmtTrim()} (Q ${s.staffBreadValue.fmtMoney(2)})")
                 }
                 Column {
                     Text(s.name.ifEmpty { "—" }, fontWeight = FontWeight.Medium, color = BrandColors.TextSlate)
@@ -266,7 +268,7 @@ private fun PersonSummary(stats: List<com.bakery.erp.model.CounterRemovalPersonS
                 }
             }
             Text(
-                "Venía mal y regalos cuentan para quien los registró; los accidentes, para la responsable.",
+                "Venía mal y regalos cuentan para quien los registró; los accidentes y el pan de colaborador, para la responsable.",
                 style = MaterialTheme.typography.labelSmall,
                 color = BrandColors.MutedSlate
             )
@@ -301,23 +303,31 @@ private fun RemovalCard(
                         CounterRemovalKind.label(r.kind),
                         when (r.kind) {
                             CounterRemovalKind.ACCIDENT -> if (r.forgiven) ChipTone.NEUTRAL else ChipTone.DANGER
-                            CounterRemovalKind.COURTESY -> ChipTone.BRAND
+                            CounterRemovalKind.COURTESY, CounterRemovalKind.STAFF_BREAD -> ChipTone.BRAND
                             else -> ChipTone.ATTENTION
                         }
                     )
                     Text(r.createdAt.fmtDateTime(), style = MaterialTheme.typography.labelSmall, color = BrandColors.MutedSlate)
                 }
                 Text(
-                    r.lines.joinToString { "${it.quantity.fmtTrim()} ${it.productName}" },
+                    if (r.isStaffBread) "${r.groupUnits.fmtTrim()} ${r.groupName.ifBlank { "pan" }} para ${r.responsibleEmployeeName}"
+                    else r.lines.joinToString { "${it.quantity.fmtTrim()} ${it.productName}" },
                     fontWeight = FontWeight.Medium,
                     color = BrandColors.TextSlate
                 )
                 Text(
-                    if (r.kind == CounterRemovalKind.COURTESY) "Q ${r.totalPrice.fmtMoney(2)} a precio de venta"
+                    if (r.kind == CounterRemovalKind.COURTESY || r.isStaffBread) "Q ${r.totalPrice.fmtMoney(2)} a precio de venta"
                     else "Q ${r.totalCost.fmtMoney(2)} a costo",
                     style = MaterialTheme.typography.bodySmall,
                     color = BrandColors.TextSlate
                 )
+                if (r.isStaffBread) {
+                    Text(
+                        if (r.responsibleConfirmation == ResponsibleConfirmation.SELF) "Lo registró ella"
+                        else "Registró ${r.createdByUserName}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
                 if (r.isAccident) {
                     val how = when (r.responsibleConfirmation) {
                         ResponsibleConfirmation.SELF -> "lo registró ella"

@@ -12,9 +12,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -31,7 +33,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -54,6 +55,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -70,6 +72,7 @@ import com.bakery.erp.model.shortage
 import androidx.compose.material.icons.filled.Refresh
 import com.bakery.erp.presentation.auth.AuthViewModel
 import com.bakery.erp.ui.AdaptiveContainer
+import com.bakery.erp.ui.ProductImage
 import com.bakery.erp.util.fmt
 import com.bakery.erp.util.fmtMoney
 import kotlinx.datetime.Instant
@@ -119,11 +122,14 @@ fun BreadCountFormScreen(
     // solo el resto es merma. Cerrado, manda lo que quedó escrito en la línea.
     val allocation = remember(lines, window) {
         if (window == null) GroupAllocation()
-        else allocateGroupSales(window.unitsByGroup, window.groupProductIds, lines)
+        else allocateGroupSales(window.unitsByGroup, window.groupProductIds, lines, window.staffUnitsByGroup)
     }
     fun soldOf(line: BreadCountLine) =
         if (isClosed) line.soldAsGroup else allocation.soldOf(line.productId)
-    fun wasteOf(line: BreadCountLine) = (line.shortage - soldOf(line)).coerceAtLeast(0.0)
+    // Pan de colaborador anotado en caja: tampoco es merma.
+    fun staffOf(line: BreadCountLine) =
+        if (isClosed) line.staffBread else allocation.staffOf(line.productId)
+    fun wasteOf(line: BreadCountLine) = (line.shortage - soldOf(line) - staffOf(line)).coerceAtLeast(0.0)
     val totalShortage = lines.sumOf { wasteOf(it) * it.unitCostSnapshot }
     val totalSurplus = lines.filter { it.difference > 0 }
         .sumOf { it.difference * it.unitCostSnapshot }
@@ -155,99 +161,106 @@ fun BreadCountFormScreen(
             return@Scaffold
         }
         AdaptiveContainer(modifier = Modifier.padding(padding)) {
-            Column(modifier = Modifier.fillMaxSize().imePadding().padding(16.dp)) {
-                Card(
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = DeepSeaBlue)
+            Column(modifier = Modifier.fillMaxSize().imePadding()) {
+                // Lo de arriba va dentro de la lista y se va con el scroll: fijo, en celular solo
+                // dejaba ver tres productos a la vez.
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Column(Modifier.padding(14.dp)) {
-                        Text(header.branchName, fontWeight = FontWeight.SemiBold, color = Color.White)
-                        Text("Fecha: ${header.countDate} · Por ${header.countedByUserName}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.White.copy(alpha = 0.85f))
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-
-                if (isClosed) {
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1B5E20).copy(alpha = 0.12f))
-                    ) {
-                        Column(Modifier.padding(12.dp)) {
-                            Text("Conteo cerrado el ${formatTimestamp(header.closedAt)}",
-                                fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFF1B5E20))
-                            Text("Las mermas y ajustes ya se aplicaron al stock.",
-                                style = MaterialTheme.typography.bodySmall)
+                    item(key = "header") {
+                        Card(
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(containerColor = DeepSeaBlue)
+                        ) {
+                            Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
+                                Text(header.branchName, fontWeight = FontWeight.SemiBold, color = Color.White)
+                                Text("Fecha: ${header.countDate} · Por ${header.countedByUserName} · ${lines.size} productos",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.White.copy(alpha = 0.85f))
+                            }
                         }
                     }
-                    Spacer(Modifier.height(8.dp))
-                }
-
-                if (canSeeValue) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    KpiBox(label = "Mermas (valor)",
-                        value = "Q ${totalShortage.fmtMoney(2)}",
-                        color = if (totalShortage > 0) Color(0xFFB00020) else MaterialTheme.colorScheme.onSurface)
-                    KpiBox(label = "Sobrante (valor)",
-                        value = "Q ${totalSurplus.fmtMoney(2)}",
-                        color = if (totalSurplus > 0) Color(0xFF1B5E20) else MaterialTheme.colorScheme.onSurface)
-                }
-                if (window != null && window.groupProductIds.isNotEmpty()) {
-                    Spacer(Modifier.height(8.dp))
-                    GroupSalesCard(
-                        window = window,
-                        allocation = allocation,
-                        isClosed = isClosed,
-                        closedUnexplained = header.unexplainedGroupUnits,
-                        isRefreshing = state.isGroupWindowLoading,
-                        onRefresh = { viewModel.refreshGroupSales(companyId, countId) }
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-                HorizontalDivider()
-                Spacer(Modifier.height(8.dp))
-
-                LazyColumn(modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (isClosed) item(key = "closed") {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF1B5E20).copy(alpha = 0.12f))
+                        ) {
+                            Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                                Text("Conteo cerrado el ${formatTimestamp(header.closedAt)}",
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color(0xFF1B5E20))
+                                Text("Las mermas y ajustes ya se aplicaron al stock.",
+                                    style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                    if (canSeeValue) item(key = "kpis") {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            KpiBox(label = "Mermas (valor)",
+                                value = "Q ${totalShortage.fmtMoney(2)}",
+                                color = if (totalShortage > 0) Color(0xFFB00020) else MaterialTheme.colorScheme.onSurface)
+                            KpiBox(label = "Sobrante (valor)",
+                                value = "Q ${totalSurplus.fmtMoney(2)}",
+                                color = if (totalSurplus > 0) Color(0xFF1B5E20) else MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+                    if (window != null && window.groupProductIds.isNotEmpty()) item(key = "group") {
+                        GroupSalesCard(
+                            window = window,
+                            allocation = allocation,
+                            isClosed = isClosed,
+                            closedUnexplained = header.unexplainedGroupUnits,
+                            isRefreshing = state.isGroupWindowLoading,
+                            onRefresh = { viewModel.refreshGroupSales(companyId, countId) }
+                        )
+                    }
                     items(lines, key = { it.id }) { line ->
                         LineRow(
                             line = line,
+                            imageUrl = state.productImages[line.productId],
                             groupName = groupOfProduct[line.productId]?.let { window?.groupNames?.get(it) },
                             soldAsGroup = soldOf(line),
+                            staffBread = staffOf(line),
                             readOnly = isClosed,
                             onChange = { updated -> viewModel.updateLine(companyId, countId, updated) }
+                        )
+                    }
+                    if (!isClosed) item(key = "notes") {
+                        OutlinedTextField(
+                            value = notes,
+                            onValueChange = { notes = it },
+                            label = { Text("Notas (opcional)") },
+                            minLines = 2,
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
                 }
 
                 if (!isClosed) {
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = notes,
-                        onValueChange = { notes = it },
-                        label = { Text("Notas (opcional)") },
-                        minLines = 2,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Button(
-                        onClick = { showConfirm = true },
-                        enabled = !state.isLoading && missingReasons.isEmpty(),
-                        modifier = Modifier.fillMaxWidth()
+                    Column(
+                        Modifier.fillMaxWidth().navigationBarsPadding()
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
                     ) {
-                        Icon(Icons.Default.Save, null)
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            if (window?.hasGroupSales == true) "Cerrar conteo y repartir ventas"
-                            else "Cerrar conteo y aplicar mermas",
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                    if (missingReasons.isNotEmpty()) {
-                        Spacer(Modifier.height(4.dp))
-                        Text("Falta razón en ${missingReasons.size} producto(s).",
-                            color = Color(0xFFB00020),
-                            style = MaterialTheme.typography.labelSmall)
+                        Button(
+                            onClick = { showConfirm = true },
+                            enabled = !state.isLoading && missingReasons.isEmpty(),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Save, null)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                if (window?.hasGroupSales == true) "Cerrar conteo y repartir ventas"
+                                else "Cerrar conteo y aplicar mermas",
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        if (missingReasons.isNotEmpty()) {
+                            Spacer(Modifier.height(4.dp))
+                            Text("Falta razón en ${missingReasons.size} producto(s).",
+                                color = Color(0xFFB00020),
+                                style = MaterialTheme.typography.labelSmall)
+                        }
                     }
                 }
             }
@@ -257,25 +270,29 @@ fun BreadCountFormScreen(
     if (showConfirm && user != null && header != null) {
         AlertDialog(
             onDismissRequest = { showConfirm = false },
-            title = { Text("¿Cerrar conteo?") },
+            title = { Text("¿Contaste bien todo?") },
             text = {
+                val changed = lines.count { it.countedStock != it.expectedStock }
                 Text(
+                    "Al cerrar, el inventario de la tienda queda con estas cantidades y el conteo ya " +
+                        "no se puede cambiar. Revisá que no te falte ningún producto: " +
+                        "$changed de ${lines.size} tienen diferencia.\n\n" +
                     (if (allocation.totalAllocated > 0)
                         "Se registrarán como venta ${allocation.totalAllocated.fmt(0)} panes vendidos por grupo, " +
                             "repartidos según lo que falta de cada uno. " else "") +
                     (if (canSeeValue) "Se aplicarán las mermas (Q ${totalShortage.fmtMoney(2)}) y " +
                         "los sobrantes (Q ${totalSurplus.fmtMoney(2)}) al stock terminado. "
                     else "Se aplicarán las mermas y los sobrantes al stock terminado. ") +
-                    "Las ventas de grupo se vuelven a leer al cerrar. El conteo quedará inmutable."
+                    "Las ventas de grupo se vuelven a leer al cerrar."
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
                     showConfirm = false
                     viewModel.closeCount(companyId, countId, notes.trim().ifEmpty { null }, user)
-                }) { Text("Sí, cerrar") }
+                }) { Text("Sí, estoy segura", fontWeight = FontWeight.SemiBold) }
             },
-            dismissButton = { TextButton(onClick = { showConfirm = false }) { Text("Cancelar") } }
+            dismissButton = { TextButton(onClick = { showConfirm = false }) { Text("Revisar otra vez") } }
         )
     }
 }
@@ -321,10 +338,12 @@ private fun GroupSalesCard(
             }
             window.groupProductIds.keys.forEach { gid ->
                 val sold = allocation.soldByGroup[gid] ?: window.unitsByGroup[gid] ?: 0.0
+                val staff = allocation.staffByGroup[gid] ?: window.staffUnitsByGroup[gid] ?: 0.0
                 val missing = allocation.shortageByGroup[gid] ?: 0.0
-                val waste = (missing - sold).coerceAtLeast(0.0)
+                val waste = (missing - sold - staff).coerceAtLeast(0.0)
                 Text(
                     "${window.groupNames[gid].orEmpty()}: vendidos ${sold.fmt(0)} · " +
+                        (if (staff > 0) "colaboradores ${staff.fmt(0)} · " else "") +
                         "faltan ${missing.fmt(0)} en el conteo" +
                         if (waste > 0) " → ${waste.fmt(0)} de merma" else "",
                     style = MaterialTheme.typography.bodySmall
@@ -333,7 +352,7 @@ private fun GroupSalesCard(
             val unexplained = if (isClosed) closedUnexplained else allocation.totalUnexplained
             if (unexplained > 0) {
                 Text(
-                    "Se vendieron ${unexplained.fmt(0)} panes de grupo más de los que faltan. " +
+                    "Se vendieron o dieron a colaboradores ${unexplained.fmt(0)} panes de grupo más de los que faltan. " +
                         "Revisá el conteo, o si entró pan sin registrar su recepción.",
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.SemiBold,
@@ -354,8 +373,10 @@ private fun GroupSalesCard(
 @Composable
 private fun LineRow(
     line: BreadCountLine,
+    imageUrl: String?,
     groupName: String?,
     soldAsGroup: Double,
+    staffBread: Double,
     readOnly: Boolean,
     onChange: (BreadCountLine) -> Unit
 ) {
@@ -364,8 +385,15 @@ private fun LineRow(
     }
     val parsed = countedText.toDoubleOrNull() ?: 0.0
     val diff = parsed - line.expectedStock
-    // Solo lo que no explica la venta de grupo es merma y pide razón.
-    val waste = (-diff - soldAsGroup).coerceAtLeast(0.0)
+    // Solo lo que no explican la venta de grupo ni el pan de colaborador es merma y pide razón.
+    val sold = soldAsGroup.coerceAtMost((-diff).coerceAtLeast(0.0))
+    val staff = staffBread.coerceAtMost((-diff - sold).coerceAtLeast(0.0))
+    val waste = (-diff - sold - staff).coerceAtLeast(0.0)
+    val diffColor = when {
+        diff < 0 -> Color(0xFFB00020)
+        diff > 0 -> Color(0xFF1B5E20)
+        else     -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -373,16 +401,35 @@ private fun LineRow(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(1.dp)
     ) {
-        Column(Modifier.padding(12.dp)) {
+        Column(Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+            // Una sola fila con la foto: se reconoce el pan sin leer el nombre.
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(line.productName, modifier = Modifier.weight(1f),
-                    fontWeight = FontWeight.SemiBold)
-                Text("Esperado: ${line.expectedStock.fmt(0)}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Spacer(Modifier.height(6.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
+                ProductImage(
+                    imageUrl = imageUrl,
+                    contentDescription = line.productName,
+                    modifier = Modifier.size(56.dp).clip(RoundedCornerShape(8.dp))
+                )
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(line.productName, fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.bodyMedium, maxLines = 2)
+                    Text(
+                        "Esperado ${line.expectedStock.fmt(0)}" +
+                            if (diff != 0.0) " · Dif. ${if (diff > 0) "+" else ""}${diff.fmt(0)}" else "",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = if (diff != 0.0) FontWeight.SemiBold else FontWeight.Normal,
+                        color = diffColor
+                    )
+                    if (groupName != null && diff < 0) {
+                        Text("Vendido ($groupName) ${sold.fmt(0)}" +
+                                (if (staff > 0) " · colaboradores ${staff.fmt(0)}" else "") +
+                                " · merma ${waste.fmt(0)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (waste > 0) Color(0xFFB00020) else BrandColors.Primary)
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
                 OutlinedTextField(
                     value = countedText,
                     onValueChange = {
@@ -391,33 +438,13 @@ private fun LineRow(
                         val newParsed = countedText.toDoubleOrNull() ?: 0.0
                         onChange(line.copy(countedStock = newParsed))
                     },
-                    label = { Text("Contado") },
+                    placeholder = { Text("0") },
                     singleLine = true,
                     readOnly = readOnly,
+                    textStyle = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.widthIn(min = 110.dp, max = 140.dp)
+                    modifier = Modifier.width(84.dp)
                 )
-                Spacer(Modifier.width(12.dp))
-                val diffColor = when {
-                    diff < 0 -> Color(0xFFB00020)
-                    diff > 0 -> Color(0xFF1B5E20)
-                    else     -> MaterialTheme.colorScheme.onSurface
-                }
-                Column {
-                    Text("Diferencia", style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline)
-                    Text(diff.fmt(0), fontWeight = FontWeight.SemiBold, color = diffColor)
-                }
-                if (groupName != null && diff < 0) {
-                    Spacer(Modifier.width(12.dp))
-                    Column {
-                        Text("Vendido ($groupName)", style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline)
-                        Text("${soldAsGroup.coerceAtMost(-diff).fmt(0)} · merma ${waste.fmt(0)}",
-                            fontWeight = FontWeight.SemiBold,
-                            color = if (waste > 0) Color(0xFFB00020) else BrandColors.Primary)
-                    }
-                }
             }
             if (waste > 0) {
                 Spacer(Modifier.height(6.dp))

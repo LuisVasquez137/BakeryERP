@@ -26,7 +26,12 @@ data class BreadCountLine(
      */
     val soldAsGroup: Double = 0.0,
     /**
-     * Merma real de la línea: faltante − [soldAsGroup]. `null` en conteos anteriores al
+     * Del faltante, cuánto fue pan de colaborador anotado en caja (sin tipo, por grupo). Se fija
+     * al cerrar. Ver `allocateGroupSales`.
+     */
+    val staffBread: Double = 0.0,
+    /**
+     * Merma real de la línea: faltante − [soldAsGroup] − [staffBread]. `null` en conteos anteriores al
      * reparto por grupo, donde todo faltante era merma ([effectiveWaste] cae a eso).
      */
     val wasteQuantity: Double? = null

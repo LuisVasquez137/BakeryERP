@@ -174,6 +174,8 @@ data class StockMovementSummary(
     val counterDamagedValue: Double = 0.0,
     /** Regalos desde la caja, a costo. */
     val courtesyValue: Double = 0.0,
+    /** Pan de colaborador (lo reparte el conteo de cierre), a costo. */
+    val staffBreadValue: Double = 0.0,
     val byProduct: List<ProductMovementStat> = emptyList(),
     val byMermaReason: Map<String, MermaReasonStat> = emptyMap()
 )

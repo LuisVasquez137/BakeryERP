@@ -34,7 +34,8 @@ class FirebaseCounterRemovalRepository(
     override suspend fun register(companyId: String, removal: CounterRemoval, responsible: Employee?): CounterRemoval {
         require(removal.id.isNotEmpty()) { "La salida necesita id (newId)" }
         val now = Clock.System.now().toEpochMilliseconds()
-        val lines = removal.lines.filter { it.quantity > 0.0 }
+        // El pan de colaborador no lleva líneas: no descuenta aquí, lo reparte el conteo de cierre.
+        val lines = if (removal.isStaffBread) emptyList() else removal.lines.filter { it.quantity > 0.0 }
         val accident = removal.kind == CounterRemovalKind.ACCIDENT
         require(!accident || responsible != null) { "Accidente sin responsable" }
         val saved = removal.copy(
@@ -190,6 +191,10 @@ class FirebaseCounterRemovalRepository(
         "forgivenAt" to forgivenAt,
         "forgiveReason" to forgiveReason,
         "forgiveCreditMovementId" to forgiveCreditMovementId,
+        "groupId" to groupId,
+        "groupName" to groupName,
+        "groupUnits" to groupUnits,
+        "groupUnitPrice" to groupUnitPrice,
         "createdByUserId" to createdByUserId,
         "createdByUserName" to createdByUserName,
         "createdByEmployeeId" to createdByEmployeeId,
@@ -254,6 +259,10 @@ class FirebaseCounterRemovalRepository(
             forgivenAt = millis("forgivenAt"),
             forgiveReason = str("forgiveReason"),
             forgiveCreditMovementId = str("forgiveCreditMovementId"),
+            groupId = str("groupId"),
+            groupName = str("groupName"),
+            groupUnits = num("groupUnits"),
+            groupUnitPrice = num("groupUnitPrice"),
             createdByUserId = str("createdByUserId"),
             createdByUserName = str("createdByUserName"),
             createdByEmployeeId = str("createdByEmployeeId"),

@@ -1,6 +1,7 @@
 package com.bakery.erp.data
 
 import com.bakery.erp.domain.BreadCountRepository
+import com.bakery.erp.domain.CounterRemovalRepository
 import com.bakery.erp.domain.FinishedStockRepository
 import com.bakery.erp.domain.POSCategoryRepository
 import com.bakery.erp.domain.SaleRepository
@@ -40,7 +41,8 @@ class FirebaseBreadCountRepository(
     private val firestore: FirebaseFirestore,
     private val finishedStockRepo: FinishedStockRepository,
     private val saleRepository: SaleRepository,
-    private val posCategoryRepository: POSCategoryRepository
+    private val posCategoryRepository: POSCategoryRepository,
+    private val counterRemovalRepository: CounterRemovalRepository
 ) : BreadCountRepository {
 
     private fun countsCol(companyId: String) =
@@ -176,10 +178,18 @@ class FirebaseBreadCountRepository(
                 }
             }
 
+        // Pan de colaborador anotado en caja: tampoco descontó producto, lo reparte este conteo.
+        // +1: getInRange excluye el extremo final y la ventana lo incluye.
+        val staffUnitsByGroup = counterRemovalRepository.getInRange(companyId, header.branchId, from, until + 1)
+            .filter { it.isStaffBread && it.groupId.isNotEmpty() && it.groupUnits > 0.0 }
+            .groupBy { it.groupId }
+            .mapValues { (_, list) -> list.sumOf { it.groupUnits } }
+
         return GroupSalesWindow(
             fromMillis = from,
             untilMillis = until,
             unitsByGroup = unitsByGroup,
+            staffUnitsByGroup = staffUnitsByGroup,
             groupNames = categories.associate { it.id to it.groupDisplayName },
             groupUnitPrices = categories.associate { it.id to it.groupUnitPrice },
             groupProductIds = categories.associate { it.id to it.productIds.toSet() }
@@ -207,7 +217,7 @@ class FirebaseBreadCountRepository(
         if (header.status == BreadCountStatus.CLOSED) return header
         val lines = getLines(companyId, countId)
         val window = groupSalesWindow(companyId, countId)
-        val allocation = allocateGroupSales(window.unitsByGroup, window.groupProductIds, lines)
+        val allocation = allocateGroupSales(window.unitsByGroup, window.groupProductIds, lines, window.staffUnitsByGroup)
         val groupOfProduct = window.groupOfProduct
         val now = Clock.System.now().toEpochMilliseconds()
 
@@ -223,7 +233,8 @@ class FirebaseBreadCountRepository(
             val unitCost = line.unitCostSnapshot
             if (diff < 0) {
                 val sold = allocation.soldOf(line.productId).coerceAtMost(absDiff)
-                val waste = absDiff - sold
+                val staff = allocation.staffOf(line.productId).coerceAtMost(absDiff - sold)
+                val waste = absDiff - sold - staff
                 if (sold > 0.0) {
                     val groupId = groupOfProduct[line.productId].orEmpty()
                     val groupName = window.groupNames[groupId].orEmpty().ifEmpty { "por grupo" }
@@ -238,6 +249,24 @@ class FirebaseBreadCountRepository(
                         referenceType = FinishedMovementReference.SALE,
                         referenceId = countId,
                         reason = "Venta $groupName repartida en conteo $countId",
+                        createdByUserId = currentUserId,
+                        createdByUserName = currentUserName,
+                        createdAt = now
+                    ))
+                }
+                if (staff > 0.0) {
+                    // A costo: es lo que resta el reporte financiero, como los regalos.
+                    finishedStockRepo.applyMovement(companyId, FinishedStockMovement(
+                        productId = line.productId,
+                        productName = line.productName,
+                        branchId = header.branchId,
+                        branchName = header.branchName,
+                        type = FinishedMovementType.PAN_COLABORADOR,
+                        quantity = -staff,
+                        unitPriceAtMovement = unitCost,
+                        referenceType = FinishedMovementReference.COUNTER_REMOVAL,
+                        referenceId = countId,
+                        reason = "Pan de colaborador repartido en conteo $countId",
                         createdByUserId = currentUserId,
                         createdByUserName = currentUserName,
                         createdAt = now
@@ -272,6 +301,7 @@ class FirebaseBreadCountRepository(
                         difference = diff,
                         valueImpact = diff * unitCost,
                         soldAsGroup = sold,
+                        staffBread = staff,
                         wasteQuantity = waste
                     ).toMap()
                 )
@@ -400,6 +430,7 @@ class FirebaseBreadCountRepository(
         "unitCostSnapshot" to unitCostSnapshot,
         "valueImpact" to valueImpact,
         "soldAsGroup" to soldAsGroup,
+        "staffBread" to staffBread,
         "wasteQuantity" to wasteQuantity
     )
 
@@ -415,6 +446,8 @@ class FirebaseBreadCountRepository(
         unitCostSnapshot = get<Double?>("unitCostSnapshot") ?: 0.0,
         valueImpact = get<Double?>("valueImpact") ?: 0.0,
         soldAsGroup = get<Double?>("soldAsGroup") ?: 0.0,
+        staffBread = runCatching { get<Double?>("staffBread") }.getOrNull()
+            ?: runCatching { get<Long?>("staffBread")?.toDouble() }.getOrNull() ?: 0.0,
         wasteQuantity = get<Double?>("wasteQuantity")
     )
 

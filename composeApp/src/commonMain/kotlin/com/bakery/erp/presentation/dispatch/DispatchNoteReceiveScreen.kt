@@ -717,9 +717,12 @@ private fun ColumnScope.CountSection(
         )
     }
 
+    // El botón queda donde cae el pulgar al deslizar la lista: se tocaba sin haber
+    // terminado de contar. Cerrar mueve inventario y no se deshace, así que pregunta.
+    var showConfirm by remember { mutableStateOf(false) }
     Spacer(Modifier.height(12.dp))
     Button(
-        onClick = onSubmit,
+        onClick = { showConfirm = true },
         modifier = Modifier.fillMaxWidth(),
         enabled = canSubmit && !isLoading
     ) {
@@ -731,6 +734,33 @@ private fun ColumnScope.CountSection(
             Spacer(Modifier.width(8.dp))
             Text("Confirmar conteo final", fontWeight = FontWeight.SemiBold)
         }
+    }
+
+    if (showConfirm) {
+        val units = lineStates.sumOf { it.receivedInput.toDoubleOrNull() ?: 0.0 }
+        val changed = lineStates.count {
+            (it.receivedInput.toDoubleOrNull() ?: 0.0) != it.original.packedQuantity
+        }
+        AlertDialog(
+            onDismissRequest = { showConfirm = false },
+            title = { Text("¿Contaste bien todo?") },
+            text = {
+                Text(
+                    "Van a entrar ${units.fmt(0)} unidades de ${lineStates.size} producto(s) al " +
+                        "inventario de la tienda y el conteo ya no se puede cambiar.\n\n" +
+                        if (changed == 0) "Todo llegó cabal, igual a lo empacado."
+                        else "$changed producto(s) con cantidad distinta a lo empacado."
+                )
+            },
+            confirmButton = {
+                Button(onClick = { showConfirm = false; onSubmit() }) {
+                    Text("Sí, ya conté todo", fontWeight = FontWeight.SemiBold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConfirm = false }) { Text("Revisar otra vez") }
+            }
+        )
     }
 }
 

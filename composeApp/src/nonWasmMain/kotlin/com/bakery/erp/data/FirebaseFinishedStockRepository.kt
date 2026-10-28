@@ -218,6 +218,8 @@ class FirebaseFinishedStockRepository(
                 .sumOf { -it.quantity * it.unitPriceAtMovement },
             courtesyValue = moves.filter { it.type == FinishedMovementType.CORTESIA }
                 .sumOf { -it.quantity * it.unitPriceAtMovement },
+            staffBreadValue = moves.filter { it.type == FinishedMovementType.PAN_COLABORADOR }
+                .sumOf { -it.quantity * it.unitPriceAtMovement },
             byProduct = byProduct,
             byMermaReason = byReason
         )

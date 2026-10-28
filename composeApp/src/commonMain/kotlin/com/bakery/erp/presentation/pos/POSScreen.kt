@@ -786,6 +786,7 @@ fun POSScreen(
             CounterRemovalDialog(
                 // Lo que se vende del mostrador con inventario propio (el huevo vive en el insumo).
                 products = state.products.filter { !it.isIngredientBacked },
+                groups = state.posCategories.filter { it.sellAsGroup },
                 stockOf = viewModel::stockOf,
                 unitCostOf = { id ->
                     state.stocksByProductId[id]?.avgUnitCost?.takeIf { it > 0.0 }

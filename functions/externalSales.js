@@ -11,7 +11,9 @@
  * alguien la recibe desde el POS. Cada sucursal tiene dos cajas y cualquiera puede recibir,
  * así que no hay forma de deducirlo: solo lo sabe quien recibe el dinero.
  *
- * Nunca toca `finishedStocks` ni el Kardex de pan: los platos no son productos de BakeOS.
+ * Los platos no son productos de BakeOS, pero algunos llevan pan del mostrador (el chicken
+ * sandwich lleva un pirujo): ese pan sí se descuenta de `finishedStocks` con su Kardex, según
+ * lo configurado en `restaurantDishes`. Ver restaurantBread.js.
  */
 
 const { onRequest } = require("firebase-functions/v2/https");
@@ -19,6 +21,7 @@ const { defineSecret } = require("firebase-functions/params");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 
 const { buildAddendum, accountedItemsFrom } = require("./externalAddendum");
+const { breadNeedFor, breadDelta, dishIdsOf } = require("./restaurantBread");
 
 const INGEST_KEY = defineSecret("COMANDAYA_INGEST_KEY");
 
@@ -165,6 +168,62 @@ function rollupUpdate(applied, sign, meta) {
   };
 }
 
+/**
+ * Escribe en la transacción el pan que sale (qty > 0) o vuelve (qty < 0) por una cuenta del
+ * restaurante: saldo como suma en el servidor (dos cuentas a la vez no se pisan) + Kardex.
+ */
+function applyBreadDelta(tx, db, companyId, delta, ctx) {
+  const now = Date.now();
+  for (const [productId, d] of Object.entries(delta)) {
+    const stockId = `${ctx.branchId}_${productId}`;
+    tx.set(db.doc(`companies/${companyId}/finishedStocks/${stockId}`), {
+      id: stockId,
+      branchId: ctx.branchId,
+      branchName: ctx.branchName,
+      productId,
+      productName: d.name,
+      currentStock: FieldValue.increment(-d.qty),
+      updatedAt: now
+    }, { merge: true });
+    const moveRef = db.collection(`companies/${companyId}/finishedMovements`).doc();
+    tx.set(moveRef, {
+      id: moveRef.id,
+      productId,
+      productName: d.name,
+      branchId: ctx.branchId,
+      branchName: ctx.branchName,
+      type: "CONSUMO_RESTAURANTE",
+      quantity: -d.qty,
+      // A costo, como toda salida que no es venta.
+      unitPriceAtMovement: d.unitCost || 0,
+      referenceType: "RESTAURANT_ORDER",
+      referenceId: ctx.saleId,
+      reason: `${d.qty > 0 ? "Usado en" : "Devuelto de"} ${ctx.label}`,
+      createdByUserId: "",
+      createdByUserName: "ComandaYa",
+      createdAt: now
+    });
+  }
+}
+
+/** Lo que se guarda en la venta como `appliedBread`: cantidad, nombre y costo de cada pan. */
+function withCosts(need, costs, previous) {
+  const out = {};
+  for (const [pid, n] of Object.entries(need)) {
+    out[pid] = { qty: n.qty, name: n.name, unitCost: costs[pid] ?? (previous && previous[pid] && previous[pid].unitCost) ?? 0 };
+  }
+  return out;
+}
+
+/** El delta lleva el costo de lo nuevo, o el que tenía al descontarse si es pan que vuelve. */
+function deltaWithCosts(previous, next) {
+  const delta = breadDelta(previous, next);
+  for (const [pid, d] of Object.entries(delta)) {
+    d.unitCost = (next[pid] && next[pid].unitCost) ?? (previous && previous[pid] && previous[pid].unitCost) ?? 0;
+  }
+  return delta;
+}
+
 function badRequest(res, message) {
   console.warn("ingestExternalSale rechazado:", message);
   res.status(400).json({ ok: false, error: message });
@@ -296,6 +355,23 @@ exports.ingestExternalSale = onRequest(
       date: day.date, startMillis: day.startMillis
     };
 
+    // Pan de los platillos. La configuración y el costo se leen fuera de la transacción:
+    // cambian casi nunca y el costo es referencia (igual que en el cobro del POS).
+    const dishIds = dishIdsOf(lines);
+    const dishSnaps = dishIds.length
+      ? await db.getAll(...dishIds.map((id) => db.doc(`companies/${companyId}/restaurantDishes/${id}`)))
+      : [];
+    const dishes = {};
+    dishSnaps.forEach((s) => { if (s.exists) dishes[s.id] = s.data(); });
+    const fullNeed = breadNeedFor(lines, dishes);
+    const breadIds = Object.keys(fullNeed);
+    const stockSnaps = breadIds.length
+      ? await db.getAll(...breadIds.map((pid) => db.doc(`companies/${companyId}/finishedStocks/${branchId}_${pid}`)))
+      : [];
+    const breadCosts = {};
+    stockSnaps.forEach((s, i) => { breadCosts[breadIds[i]] = s.exists ? (Number(s.data().avgUnitCost) || 0) : 0; });
+    const orderLabelForBread = `restaurante, orden ${sale.externalOrderNumber || externalId}`;
+
     let previousLineCount = 0;
     let skipped = "";
     try {
@@ -372,8 +448,12 @@ exports.ingestExternalSale = onRequest(
                 ...contributionOf(adSale, adLines, [{ method: dominantMethod, amount: ad.deltaTotal }], day),
                 transactions: 0,
               };
+              // El pan de lo que se agregó después de recibirse: solo el de las líneas nuevas.
+              const adBread = withCosts(breadNeedFor(adLines, dishes), breadCosts, null);
               tx.set(dailyRef, rollupUpdate(adContribution, +1, meta), { merge: true });
-              tx.set(adRef, { ...adSale, appliedRollup: adContribution });
+              tx.set(adRef, { ...adSale, appliedRollup: adContribution, appliedBread: adBread });
+              applyBreadDelta(tx, db, companyId, deltaWithCosts({}, adBread),
+                { branchId, branchName, saleId: adId, label: `${orderLabelForBread} (adicional)` });
               for (const l of adLines) tx.set(adRef.collection("lines").doc(l.id), l);
 
               // Lo que queda contabilizado pasa a ser lo nuevo: un reenvío idéntico no crea
@@ -399,14 +479,45 @@ exports.ingestExternalSale = onRequest(
           tx.set(dailyRef, rollupUpdate(contribution, +1, meta), { merge: true });
         }
 
+        // Mismo criterio con el pan: se descuenta la diferencia contra lo ya descontado, y
+        // una cancelación lo devuelve entero.
+        const prevBread = (prev && prev.appliedBread) || {};
+        const nextBread = isCancelled ? {} : withCosts(fullNeed, breadCosts, prevBread);
+        applyBreadDelta(tx, db, companyId, deltaWithCosts(prevBread, nextBread),
+          { branchId, branchName, saleId: externalId, label: orderLabelForBread });
+
         tx.set(saleRef, {
           ...sale,
-          appliedRollup: isCancelled ? null : contribution
+          appliedRollup: isCancelled ? null : contribution,
+          appliedBread: nextBread
         });
       });
     } catch (e) {
       console.error(`ingestExternalSale: falló la transacción de ${externalId}`, e);
       return res.status(500).json({ ok: false, error: e.message });
+    }
+
+    // Catálogo de platillos: el que llega por primera vez (o renombrado) queda listo para que
+    // en BakeOS se le diga qué pan lleva. Merge: nunca toca el pan ya configurado. Si falla no
+    // importa: se vuelve a intentar con la siguiente orden que lo traiga.
+    try {
+      const seen = db.batch();
+      let pending = 0;
+      for (const l of lines) {
+        if (!l.productId) continue;
+        const known = dishes[l.productId];
+        if (known && known.dishName === l.productName) continue;
+        dishes[l.productId] = { ...(known || {}), dishName: l.productName };
+        seen.set(db.doc(`companies/${companyId}/restaurantDishes/${l.productId}`), {
+          externalItemId: l.productId,
+          dishName: l.productName,
+          lastSeenAt: closedAt
+        }, { merge: true });
+        pending++;
+      }
+      if (pending) await seen.commit();
+    } catch (e) {
+      console.warn("ingestExternalSale: no se pudo anotar el catálogo de platillos", e);
     }
 
     if (skipped) {

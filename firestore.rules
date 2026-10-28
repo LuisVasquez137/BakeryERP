@@ -203,8 +203,9 @@ service cloud.firestore {
       return isApprovedMemberOf(companyId)
         && !(collection in ['employees', 'felProfiles'])
         // packagingItems: el precio de la bolsa lo cobran todas las cajas. paymentRules: el
-        // mínimo y el recargo de tarjeta, igual.
-        && (!(collection in ['cashRegisters', 'saleQuickGroups', 'packagingItems', 'paymentRules']) || hasPermission('MANAGE_POS_CONFIG'))
+        // mínimo y el recargo de tarjeta, igual. restaurantDishes: el pan que lleva cada platillo
+        // descuenta inventario de todas las sucursales (el servidor crea los documentos).
+        && (!(collection in ['cashRegisters', 'saleQuickGroups', 'packagingItems', 'paymentRules', 'restaurantDishes']) || hasPermission('MANAGE_POS_CONFIG'))
         && (collection != 'priceLists' || hasPermission('MANAGE_PRICE_LISTS'))
         // Congelar el costo estándar cambia el valor de todos los despachos del mes.
         && (!(collection in ['standardCosts', 'standardCostPeriods']) || hasPermission('MANAGE_PRICE_LISTS'))

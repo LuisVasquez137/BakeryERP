@@ -21,13 +21,16 @@ data class GroupSalesWindow(
     val untilMillis: Long = 0L,
     /** groupId → unidades vendidas en la ventana. */
     val unitsByGroup: Map<String, Double> = emptyMap(),
+    /** groupId → pan de colaborador anotado en caja en la ventana (`CounterRemovalKind.STAFF_BREAD`). */
+    val staffUnitsByGroup: Map<String, Double> = emptyMap(),
     val groupNames: Map<String, String> = emptyMap(),
     /** groupId → precio unitario del grupo, para valorar el movimiento de VENTA. */
     val groupUnitPrices: Map<String, Double> = emptyMap(),
     /** groupId → productos que el grupo reparte (de la categoría POS actual). */
     val groupProductIds: Map<String, Set<String>> = emptyMap()
 ) {
-    val hasGroupSales: Boolean get() = unitsByGroup.values.any { it > 0.0 }
+    val hasGroupSales: Boolean
+        get() = unitsByGroup.values.any { it > 0.0 } || staffUnitsByGroup.values.any { it > 0.0 }
 
     /** productId → groupId, para las filas del conteo. */
     val groupOfProduct: Map<String, String>
@@ -49,11 +52,17 @@ data class GroupAllocation(
      * falta. Pasa si llegó pan sin registrar su recepción o si el conteo está mal. No se
      * inventa un movimiento para cubrirlo — se avisa.
      */
-    val unexplainedByGroup: Map<String, Double> = emptyMap()
+    val unexplainedByGroup: Map<String, Double> = emptyMap(),
+    /** productId → pan de colaborador que se le asigna (después de la venta). */
+    val staffByProduct: Map<String, Double> = emptyMap(),
+    /** groupId → pan de colaborador anotado en la ventana. */
+    val staffByGroup: Map<String, Double> = emptyMap()
 ) {
     fun soldOf(productId: String): Double = soldByProduct[productId] ?: 0.0
+    fun staffOf(productId: String): Double = staffByProduct[productId] ?: 0.0
     val totalUnexplained: Double get() = unexplainedByGroup.values.sum()
     val totalAllocated: Double get() = soldByProduct.values.sum()
+    val totalStaff: Double get() = staffByProduct.values.sum()
 }
 
 /** Faltante de una línea del conteo (0 si sobra o cuadra). */
@@ -66,8 +75,34 @@ val BreadCountLine.shortage: Double
  * residuo, así el reparto suma exacto y ningún pan queda con media pieza vendida.
  *
  * Lo que no alcanza a cubrir la venta queda como merma de esa línea (`faltante − vendido`).
+ *
+ * [staffUnitsByGroup] (pan de colaborador anotado en caja) se reparte **después** de la venta,
+ * con el mismo criterio, sobre el faltante que la venta no explicó: la venta es dinero que ya
+ * está en la gaveta y va primero. Lo que de las dos no cabe en el faltante sale en
+ * [GroupAllocation.unexplainedByGroup].
  */
 fun allocateGroupSales(
+    unitsSoldByGroup: Map<String, Double>,
+    groupProductIds: Map<String, Set<String>>,
+    lines: List<BreadCountLine>,
+    staffUnitsByGroup: Map<String, Double> = emptyMap()
+): GroupAllocation {
+    val sales = allocateDemand(unitsSoldByGroup, groupProductIds, lines)
+    if (staffUnitsByGroup.values.none { it > EPS }) return sales
+    // Lo que la venta ya explicó deja de faltar.
+    val afterSales = lines.map { it.copy(countedStock = it.countedStock + sales.soldOf(it.productId)) }
+    val staff = allocateDemand(staffUnitsByGroup, groupProductIds, afterSales)
+    val unexplained = (sales.unexplainedByGroup.keys + staff.unexplainedByGroup.keys).associateWith {
+        (sales.unexplainedByGroup[it] ?: 0.0) + (staff.unexplainedByGroup[it] ?: 0.0)
+    }
+    return sales.copy(
+        unexplainedByGroup = unexplained,
+        staffByProduct = staff.soldByProduct,
+        staffByGroup = staff.soldByGroup
+    )
+}
+
+private fun allocateDemand(
     unitsSoldByGroup: Map<String, Double>,
     groupProductIds: Map<String, Set<String>>,
     lines: List<BreadCountLine>

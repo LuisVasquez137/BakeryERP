@@ -23,6 +23,7 @@ import com.bakery.erp.model.User
 import com.bakery.erp.model.canAccessBranch
 import com.bakery.erp.model.counterRemovalError
 import com.bakery.erp.model.courtesyUsedOn
+import com.bakery.erp.model.staffBreadUsedOn
 import com.bakery.erp.util.fmtMoney
 import com.bakery.erp.util.fmtTrim
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,6 +42,10 @@ data class CounterRemovalUiState(
     /** Cuota diaria de la sucursal, leída fresca al abrir (el dueño la puede haber cambiado). */
     val courtesyQuota: Double = 0.0,
     val courtesyUsedToday: Double = 0.0,
+    /** Panes de colaborador por persona al día en esta sucursal (0 = no se da). */
+    val staffBreadLimit: Double = 0.0,
+    /** employeeId → panes de colaborador que ya tomó hoy, en cualquier sucursal. */
+    val staffBreadToday: Map<String, Double> = emptyMap(),
     val isPreparing: Boolean = false,
     val isBusy: Boolean = false,
     val error: String? = null,
@@ -79,23 +84,44 @@ class CounterRemovalViewModel(
                 val employees = employeeRepository.getEmployees(companyId)
                     .filter { it.active && it.status == EmployeeStatus.ACTIVE }
                     .sortedWith(compareBy<Employee> { it.branchId != branchId }.thenBy { it.name.lowercase() })
-                val (quota, used) = courtesyState(companyId, branchId)
-                Triple(employees, quota, used)
-            }.onSuccess { (employees, quota, used) ->
+                employees to dayState(companyId, branchId)
+            }.onSuccess { (employees, day) ->
                 _uiState.update {
-                    it.copy(isPreparing = false, employees = employees, courtesyQuota = quota, courtesyUsedToday = used)
+                    it.copy(
+                        isPreparing = false, employees = employees,
+                        courtesyQuota = day.courtesyQuota, courtesyUsedToday = day.courtesyUsed,
+                        staffBreadLimit = day.staffBreadLimit, staffBreadToday = day.staffBreadToday
+                    )
                 }
             }.onFailure { e -> _uiState.update { it.copy(isPreparing = false, error = e.message) } }
         }
     }
 
-    private suspend fun courtesyState(companyId: String, branchId: String): Pair<Double, Double> {
-        val quota = branchRepository.getBranch(companyId, branchId)?.dailyCourtesyQuota ?: 0.0
+    private data class DayState(
+        val courtesyQuota: Double,
+        val courtesyUsed: Double,
+        val staffBreadLimit: Double,
+        val staffBreadToday: Map<String, Double>
+    )
+
+    /**
+     * Cuota y tope de la sucursal, y lo usado hoy. Las salidas se leen de TODAS las sucursales:
+     * el pan de colaborador es por persona y se puede tomar en otra tienda.
+     */
+    private suspend fun dayState(companyId: String, branchId: String): DayState {
+        val branch = branchRepository.getBranch(companyId, branchId)
         val now = Clock.System.now()
         val tz = TimeZone.currentSystemDefault()
         val startOfDay = now.toLocalDateTime(tz).date.atStartOfDayIn(tz).toEpochMilliseconds()
-        val today = repository.getInRange(companyId, branchId, startOfDay, now.toEpochMilliseconds() + 60_000)
-        return quota to courtesyUsedOn(today, branchId, now.toEpochMilliseconds(), tz)
+        val today = repository.getInRange(companyId, "", startOfDay, now.toEpochMilliseconds() + 60_000)
+        val nowMs = now.toEpochMilliseconds()
+        return DayState(
+            courtesyQuota = branch?.dailyCourtesyQuota ?: 0.0,
+            courtesyUsed = courtesyUsedOn(today, branchId, nowMs, tz),
+            staffBreadLimit = branch?.dailyStaffBreadUnits ?: 0.0,
+            staffBreadToday = today.filter { it.isStaffBread }.map { it.responsibleEmployeeId }.distinct()
+                .associateWith { staffBreadUsedOn(today, it, nowMs, tz) }
+        )
     }
 
     /**
@@ -116,14 +142,25 @@ class CounterRemovalViewModel(
         viewModelScope.launch {
             _uiState.update { it.copy(isBusy = true, error = null) }
             runCatching {
-                // Cuota releída justo antes: dos cajas regalando a la vez no deben pasarla.
-                val (quota, used) = if (draft.kind == CounterRemovalKind.COURTESY)
-                    courtesyState(companyId, session.branchId)
-                else 0.0 to 0.0
-                counterRemovalError(draft, photo != null, quota, used)?.let { throw IllegalStateException(it) }
+                // Cuota y tope releídos justo antes: dos cajas a la vez no deben pasarlos.
+                val day = if (draft.kind == CounterRemovalKind.COURTESY || draft.isStaffBread)
+                    dayState(companyId, session.branchId) else null
+                counterRemovalError(
+                    draft, photo != null,
+                    day?.courtesyQuota ?: 0.0, day?.courtesyUsed ?: 0.0,
+                    day?.staffBreadLimit ?: 0.0, day?.staffBreadToday?.get(draft.responsibleEmployeeId) ?: 0.0
+                )?.let { throw IllegalStateException(it) }
 
                 var responsible: Employee? = null
                 var confirmation = ""
+                if (draft.isStaffBread) {
+                    // Sin PIN: todas tienen derecho y no todas tienen PIN. Basta saber a nombre de quién.
+                    val r = _uiState.value.employees.firstOrNull { it.id == draft.responsibleEmployeeId }
+                        ?: employeeRepository.getEmployee(companyId, draft.responsibleEmployeeId)
+                        ?: throw IllegalStateException("No se encontró a la colaboradora")
+                    responsible = r
+                    confirmation = if (r.id == selfEmployeeId(currentUser)) ResponsibleConfirmation.SELF else ""
+                }
                 if (draft.kind == CounterRemovalKind.ACCIDENT) {
                     val r = _uiState.value.employees.firstOrNull { it.id == draft.responsibleEmployeeId }
                         ?: employeeRepository.getEmployee(companyId, draft.responsibleEmployeeId)
@@ -171,7 +208,10 @@ class CounterRemovalViewModel(
                         notice = noticeFor(saved),
                         sessionRemovals = listOf(saved) + it.sessionRemovals.filter { r -> r.id != saved.id },
                         courtesyUsedToday = if (saved.kind == CounterRemovalKind.COURTESY)
-                            it.courtesyUsedToday + saved.totalPrice else it.courtesyUsedToday
+                            it.courtesyUsedToday + saved.totalPrice else it.courtesyUsedToday,
+                        staffBreadToday = if (saved.isStaffBread) it.staffBreadToday + (saved.responsibleEmployeeId to
+                            (it.staffBreadToday[saved.responsibleEmployeeId] ?: 0.0) + saved.groupUnits)
+                        else it.staffBreadToday
                     )
                 }
             }.onFailure { e -> _uiState.update { it.copy(isBusy = false, error = e.message ?: "No se pudo registrar") } }
@@ -184,6 +224,7 @@ class CounterRemovalViewModel(
             CounterRemovalKind.ACCIDENT ->
                 "Accidente registrado: $units, Q ${r.chargeAmount.fmtMoney(2)} a la cuenta de ${r.responsibleEmployeeName}"
             CounterRemovalKind.COURTESY -> "Regalo registrado: $units (Q ${r.totalPrice.fmtMoney(2)})"
+            CounterRemovalKind.STAFF_BREAD -> "Pan de colaborador: ${r.groupUnits.fmtTrim()} para ${r.responsibleEmployeeName}"
             else -> "Merma registrada: $units"
         }
     }

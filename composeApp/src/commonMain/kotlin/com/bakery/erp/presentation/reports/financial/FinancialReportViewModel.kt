@@ -54,7 +54,7 @@ data class FinancialReportUiState(
     val operatingProfit: Double
         get() = sales.totalRevenue - expenses.total - payroll.totalEmployerCost - merma.totalValue -
             // Lo sacado del mostrador con la caja abierta ya no llega al conteo como faltante.
-            stock.counterDamagedValue - stock.courtesyValue
+            stock.counterDamagedValue - stock.courtesyValue - stock.staffBreadValue
     val marginPct: Double
         get() = if (sales.totalRevenue > 0) operatingProfit / sales.totalRevenue * 100.0 else 0.0
 

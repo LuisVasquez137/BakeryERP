@@ -151,6 +151,8 @@ fun FinancialReportScreen(
                                 PnLLine("Venía mal (sacado en caja)", -state.stock.counterDamagedValue)
                             if (state.stock.courtesyValue > 0.004)
                                 PnLLine("Regalos desde la caja (a costo)", -state.stock.courtesyValue)
+                            if (state.stock.staffBreadValue > 0.004)
+                                PnLLine("Pan de colaboradores (a costo)", -state.stock.staffBreadValue)
                             PnLLine("Gastos operativos",  -state.expenses.total)
                             PnLLine("Planilla (costo patronal)", -state.payroll.totalEmployerCost)
                             Spacer(Modifier.height(8.dp))

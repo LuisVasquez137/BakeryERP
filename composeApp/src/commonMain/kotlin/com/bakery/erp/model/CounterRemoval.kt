@@ -24,6 +24,11 @@ import kotlin.time.Instant
  * - [CounterRemovalKind.COURTESY] — se regaló. Sin PIN, pero con **cuota diaria en quetzales por
  *   sucursal** ([Branch.dailyCourtesyQuota], la pone el dueño) que **bloquea** al pasarse. Se
  *   mide a precio de venta: es lo que la gente entiende por "regalé Q5 de pan".
+ * - [CounterRemovalKind.STAFF_BREAD] — pan de cortesía de una colaboradora (oct 2026). Solo del
+ *   pan por grupo (Q0.50) y **sin escoger el tipo**, como en la venta: se anotan unidades del
+ *   grupo y el conteo de cierre las reparte por pan (`allocateGroupSales`). Para quién va en
+ *   [CounterRemoval.responsibleEmployeeId], **sin PIN** (todas tienen derecho y no todas tienen
+ *   PIN). Tope diario **por persona** ([Branch.dailyStaffBreadUnits]) que bloquea.
  *
  * Lo que no se registra igual aparece: en el conteo de cierre falta pan, y en el pan por grupo
  * ese faltante se le cuenta a la caja como venta — le falta efectivo.
@@ -62,16 +67,23 @@ data class CounterRemoval(
     val forgivenAt: Long = 0L,
     val forgiveReason: String = "",
     val forgiveCreditMovementId: String = "",
+    // ── Pan de colaborador: unidades de un grupo de precio, sin producto (lo reparte el conteo) ──
+    val groupId: String = "",
+    val groupName: String = "",
+    val groupUnits: Double = 0.0,
+    val groupUnitPrice: Double = 0.0,
     // ── Quién lo registró ──
     val createdByUserId: String = "",
     val createdByUserName: String = "",
     val createdByEmployeeId: String = "",
     val createdAt: Long = 0L
 ) {
-    val totalUnits: Double get() = lines.sumOf { it.quantity }
+    val totalUnits: Double get() = lines.sumOf { it.quantity } + groupUnits
+    /** El pan de grupo no tiene costo hasta que el conteo de cierre lo reparte: aquí no entra. */
     val totalCost: Double get() = roundMoney(lines.sumOf { it.costValue })
-    val totalPrice: Double get() = roundMoney(lines.sumOf { it.priceValue })
+    val totalPrice: Double get() = roundMoney(lines.sumOf { it.priceValue } + groupUnits * groupUnitPrice)
     val isAccident: Boolean get() = kind == CounterRemovalKind.ACCIDENT
+    val isStaffBread: Boolean get() = kind == CounterRemovalKind.STAFF_BREAD
 }
 
 data class CounterRemovalLine(
@@ -91,18 +103,24 @@ object CounterRemovalKind {
     const val DAMAGED = "DAMAGED"
     const val ACCIDENT = "ACCIDENT"
     const val COURTESY = "COURTESY"
+    const val STAFF_BREAD = "STAFF_BREAD"
 
     fun label(kind: String) = when (kind) {
         DAMAGED -> "Venía mal"
         ACCIDENT -> "Accidente"
         COURTESY -> "Regalo"
+        STAFF_BREAD -> "Pan de colaborador"
         else -> kind
     }
 
-    /** Movimiento del inventario de tienda que escribe cada caso. */
+    /**
+     * Movimiento del inventario de tienda que escribe cada caso. El del pan de colaborador no
+     * sale al registrarlo sino en el conteo de cierre, que es cuando se sabe de qué pan fue.
+     */
     fun movementType(kind: String) = when (kind) {
         ACCIDENT -> FinishedMovementType.ACCIDENTE
         COURTESY -> FinishedMovementType.CORTESIA
+        STAFF_BREAD -> FinishedMovementType.PAN_COLABORADOR
         else -> FinishedMovementType.MERMA
     }
 }
@@ -133,18 +151,40 @@ fun courtesyUsedOn(
 }
 
 /**
+ * Panes de colaborador que [employeeId] ya tomó el día de [nowMillis], en **cualquier**
+ * sucursal: el tope es de la persona, no de la tienda.
+ */
+fun staffBreadUsedOn(
+    removals: List<CounterRemoval>,
+    employeeId: String,
+    nowMillis: Long,
+    tz: TimeZone = TimeZone.currentSystemDefault()
+): Double {
+    if (employeeId.isEmpty()) return 0.0
+    val today = Instant.fromEpochMilliseconds(nowMillis).toLocalDateTime(tz).date
+    return removals
+        .filter { it.isStaffBread && it.responsibleEmployeeId == employeeId }
+        .filter { Instant.fromEpochMilliseconds(it.createdAt).toLocalDateTime(tz).date == today }
+        .sumOf { it.groupUnits }
+}
+
+/**
  * Por qué no se puede registrar esta salida, o null si se puede.
  *
  * [hasPhoto]: ya se tomó la foto. [courtesyQuota]/[courtesyUsedToday]: cuota de la sucursal y
  * lo ya regalado hoy (solo cuentan en un regalo). Un costo que no se conoce en un accidente
- * bloquea: cargar Q0 sería perdonarlo sin que nadie lo decida.
+ * bloquea: cargar Q0 sería perdonarlo sin que nadie lo decida. [staffBreadLimit]/
+ * [staffBreadUsedToday]: tope diario por persona y lo que la elegida ya tomó hoy.
  */
 fun counterRemovalError(
     removal: CounterRemoval,
     hasPhoto: Boolean,
     courtesyQuota: Double,
-    courtesyUsedToday: Double
+    courtesyUsedToday: Double,
+    staffBreadLimit: Double = 0.0,
+    staffBreadUsedToday: Double = 0.0
 ): String? {
+    if (removal.isStaffBread) return staffBreadError(removal, staffBreadLimit, staffBreadUsedToday)
     val lines = removal.lines.filter { it.quantity > 0.0 }
     if (lines.isEmpty()) return "Agrega lo que se sacó del mostrador"
     return when (removal.kind) {
@@ -172,6 +212,21 @@ fun counterRemovalError(
     }
 }
 
+private fun staffBreadError(removal: CounterRemoval, limit: Double, usedToday: Double): String? {
+    val left = limit - usedToday
+    val who = removal.responsibleEmployeeName.ifBlank { "Esta persona" }
+    return when {
+        removal.groupId.isBlank() -> "Esta caja no vende pan por grupo: no hay de dónde darlo"
+        removal.responsibleEmployeeId.isBlank() -> "Indica para quién es el pan"
+        removal.groupUnits <= 0.0 -> "Indica cuántos panes"
+        limit <= 0.0 -> "Esta sucursal no da pan de colaborador. El dueño lo configura en Sucursales."
+        removal.groupUnits > left + 1e-6 ->
+            if (left <= 1e-6) "$who ya tomó sus ${limit.fmtTrim()} panes de hoy"
+            else "A $who solo le quedan ${left.fmtTrim()} panes hoy"
+        else -> null
+    }
+}
+
 /**
  * Por qué [forgiverEmployeeId] NO puede perdonar este accidente, o null si puede. Nadie se
  * perdona a sí misma: el permiso no es la forma de que el accidente propio desaparezca.
@@ -186,18 +241,20 @@ fun accidentForgiveBlocker(removal: CounterRemoval, forgiverEmployeeId: String):
 
 /** Una línea por cada caso, para el cierre de turno: "3 venía mal · 1 accidente (Ana) · …". */
 fun counterRemovalSummary(removals: List<CounterRemoval>): List<String> =
-    listOf(CounterRemovalKind.DAMAGED, CounterRemovalKind.ACCIDENT, CounterRemovalKind.COURTESY)
+    listOf(CounterRemovalKind.DAMAGED, CounterRemovalKind.ACCIDENT, CounterRemovalKind.COURTESY, CounterRemovalKind.STAFF_BREAD)
         .mapNotNull { kind ->
             val ofKind = removals.filter { it.kind == kind }
             if (ofKind.isEmpty()) return@mapNotNull null
             val units = ofKind.sumOf { it.totalUnits }
-            val who = if (kind == CounterRemovalKind.ACCIDENT)
+            val who = if (kind == CounterRemovalKind.ACCIDENT || kind == CounterRemovalKind.STAFF_BREAD)
                 ofKind.map { it.responsibleEmployeeName }.filter { it.isNotBlank() }.distinct()
                     .takeIf { it.isNotEmpty() }?.joinToString(prefix = " (", postfix = ")").orEmpty()
             else ""
-            val value = if (kind == CounterRemovalKind.COURTESY) ofKind.sumOf { it.totalPrice } else ofKind.sumOf { it.totalCost }
+            // El pan de colaborador todavía no tiene costo: se lo pone el conteo de cierre.
+            val atPrice = kind == CounterRemovalKind.COURTESY || kind == CounterRemovalKind.STAFF_BREAD
+            val value = if (atPrice) ofKind.sumOf { it.totalPrice } else ofKind.sumOf { it.totalCost }
             "${CounterRemovalKind.label(kind)}: ${units.fmtTrim()} u$who · Q ${roundMoney(value).fmtMoney(2)}" +
-                if (kind == CounterRemovalKind.COURTESY) " a precio de venta" else " a costo"
+                if (atPrice) " a precio de venta" else " a costo"
         }
 
 private fun roundMoney(v: Double): Double = round(v * 100) / 100.0
@@ -206,8 +263,8 @@ private fun roundMoney(v: Double): Double = round(v * 100) / 100.0
  * Lo de cada persona en el periodo. El caso suelto siempre parece normal; el patrón no: la
  * cajera que declara el triple de "venía mal" que las demás con el mismo pan se ve aquí.
  *
- * Merma y regalo cuentan para quien los REGISTRÓ (es quien dice qué pasó); el accidente, para
- * la RESPONSABLE.
+ * Merma y regalo cuentan para quien los REGISTRÓ (es quien dice qué pasó); el accidente y el
+ * pan de colaborador, para la RESPONSABLE (a quien se le cargó / quien se lo llevó).
  */
 data class CounterRemovalPersonStat(
     val name: String,
@@ -216,7 +273,10 @@ data class CounterRemovalPersonStat(
     val accidents: Int = 0,
     val accidentCharged: Double = 0.0,
     val accidentForgiven: Double = 0.0,
-    val courtesyValue: Double = 0.0
+    val courtesyValue: Double = 0.0,
+    val staffBreadUnits: Double = 0.0,
+    /** A precio de venta, como los regalos: "se llevó Q2 de pan". */
+    val staffBreadValue: Double = 0.0
 )
 
 fun counterRemovalByPerson(removals: List<CounterRemoval>): List<CounterRemovalPersonStat> {
@@ -233,6 +293,9 @@ fun counterRemovalByPerson(removals: List<CounterRemoval>): List<CounterRemovalP
                     accidentForgiven = it.accidentForgiven + if (r.forgiven) r.chargeAmount else 0.0
                 )
             }
+            CounterRemovalKind.STAFF_BREAD -> upd("e:${r.responsibleEmployeeId}", r.responsibleEmployeeName) {
+                it.copy(staffBreadUnits = it.staffBreadUnits + r.groupUnits, staffBreadValue = it.staffBreadValue + r.totalPrice)
+            }
             else -> {
                 val key = r.createdByEmployeeId.takeIf { it.isNotEmpty() }?.let { "e:$it" } ?: "u:${r.createdByUserId}"
                 upd(key, r.createdByUserName) {
@@ -242,5 +305,5 @@ fun counterRemovalByPerson(removals: List<CounterRemoval>): List<CounterRemovalP
             }
         }
     }
-    return acc.values.sortedByDescending { it.damagedCost + it.accidentCharged + it.courtesyValue }
+    return acc.values.sortedByDescending { it.damagedCost + it.accidentCharged + it.courtesyValue + it.staffBreadValue }
 }

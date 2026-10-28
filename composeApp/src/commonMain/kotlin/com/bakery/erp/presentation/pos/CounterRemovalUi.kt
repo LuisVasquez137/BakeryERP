@@ -24,6 +24,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -49,8 +50,11 @@ import com.bakery.erp.domain.PIN_LENGTH
 import com.bakery.erp.model.CounterRemoval
 import com.bakery.erp.model.CounterRemovalKind
 import com.bakery.erp.model.CounterRemovalLine
+import com.bakery.erp.model.Employee
 import com.bakery.erp.model.EmployeePinStatus
+import com.bakery.erp.model.POSCategory
 import com.bakery.erp.model.Product
+import com.bakery.erp.model.groupDisplayName
 import com.bakery.erp.model.counterRemovalError
 import com.bakery.erp.ui.ImagePickerButton
 import com.bakery.erp.ui.theme.BrandColors
@@ -62,10 +66,12 @@ import com.bakery.erp.util.fmtTrim
  * cada caso (foto, responsable + PIN, cuota de regalos). Ver `model/CounterRemoval.kt`.
  *
  * [unitCostOf] = costo promedio del inventario de tienda (lo que se carga en un accidente).
+ * [groups] = grupos de precio que vende esta caja ("Pan Q0.50"): de ahí sale el pan de colaborador.
  */
 @Composable
 fun CounterRemovalDialog(
     products: List<Product>,
+    groups: List<POSCategory>,
     stockOf: (productId: String) -> Double,
     unitCostOf: (productId: String) -> Double,
     state: CounterRemovalUiState,
@@ -81,23 +87,36 @@ fun CounterRemovalDialog(
     var note by remember { mutableStateOf("") }
     var responsibleId by remember(selfEmployeeId) { mutableStateOf(selfEmployeeId) }
     var pin by remember { mutableStateOf("") }
+    // Pan de colaborador: cuántos panes del grupo (sin tipo, como en la venta).
+    var groupId by remember(groups) { mutableStateOf(groups.firstOrNull()?.id.orEmpty()) }
+    var staffUnits by remember { mutableStateOf(1) }
 
     val byId = remember(products) { products.associateBy { it.id } }
-    val lines = quantities.mapNotNull { (id, q) ->
+    val isStaff = kind == CounterRemovalKind.STAFF_BREAD
+    val lines = if (isStaff) emptyList() else quantities.mapNotNull { (id, q) ->
         val p = byId[id] ?: return@mapNotNull null
         CounterRemovalLine(p.id, p.name, q.toDouble(), unitCostOf(p.id), p.salePrice)
     }
     val responsible = state.employees.firstOrNull { it.id == responsibleId }
+    val group = groups.firstOrNull { it.id == groupId }
     val draft = CounterRemoval(
         kind = kind ?: CounterRemovalKind.DAMAGED,
         lines = lines,
         note = note,
-        responsibleEmployeeId = responsibleId
+        responsibleEmployeeId = responsibleId,
+        responsibleEmployeeName = responsible?.name.orEmpty(),
+        groupId = if (isStaff) group?.id.orEmpty() else "",
+        groupName = if (isStaff) group?.groupDisplayName.orEmpty() else "",
+        groupUnits = if (isStaff) staffUnits.toDouble() else 0.0,
+        groupUnitPrice = if (isStaff) group?.groupUnitPrice ?: 0.0 else 0.0
     )
+    val staffUsed = state.staffBreadToday[responsibleId] ?: 0.0
+    // El pan de colaborador va sin PIN: todas tienen derecho y no todas tienen PIN.
     val needsPin = kind == CounterRemovalKind.ACCIDENT && responsible != null &&
         responsible.id != selfEmployeeId && responsible.pinStatus != EmployeePinStatus.NONE
-    val problem = counterRemovalError(draft, photo != null, state.courtesyQuota, state.courtesyUsedToday)
-        ?: if (needsPin && pin.length != PIN_LENGTH) "${responsible?.name} tiene que poner su PIN" else null
+    val problem = counterRemovalError(
+        draft, photo != null, state.courtesyQuota, state.courtesyUsedToday, state.staffBreadLimit, staffUsed
+    ) ?: if (needsPin && pin.length != PIN_LENGTH) "${responsible?.name} tiene que poner su PIN" else null
 
     Dialog(
         onDismissRequest = { if (!state.isBusy) onDismiss() },
@@ -122,6 +141,8 @@ fun CounterRemovalDialog(
                     KindChoice(
                         quota = state.courtesyQuota,
                         used = state.courtesyUsedToday,
+                        staffBreadLimit = state.staffBreadLimit,
+                        hasGroups = groups.isNotEmpty(),
                         isPreparing = state.isPreparing,
                         onPick = { kind = it }
                     )
@@ -142,6 +163,21 @@ fun CounterRemovalDialog(
                     TextButton(onClick = { kind = null }, enabled = !state.isBusy) { Text("Cambiar") }
                 }
 
+                if (isStaff) {
+                    StaffBreadBlock(
+                        state = state,
+                        groups = groups,
+                        groupId = groupId,
+                        onGroupChange = { groupId = it },
+                        units = staffUnits,
+                        onUnitsChange = { staffUnits = it.coerceAtLeast(1) },
+                        selfEmployeeId = selfEmployeeId,
+                        responsibleId = responsibleId,
+                        onResponsibleChange = { responsibleId = it },
+                        usedToday = staffUsed,
+                        enabled = !state.isBusy
+                    )
+                } else {
                 // ── Qué se saca ──
                 OutlinedTextField(
                     value = query,
@@ -222,6 +258,7 @@ fun CounterRemovalDialog(
                         )
                     }
                 }
+                }
 
                 OutlinedTextField(
                     value = note,
@@ -233,6 +270,7 @@ fun CounterRemovalDialog(
                         Text(when (k) {
                             CounterRemovalKind.COURTESY -> "Ej: señor de la esquina"
                             CounterRemovalKind.ACCIDENT -> "Ej: se cayó la bandeja al reponer"
+                            CounterRemovalKind.STAFF_BREAD -> "Ej: para el almuerzo"
                             else -> "Ej: venían aplastados en la canasta"
                         })
                     },
@@ -240,7 +278,7 @@ fun CounterRemovalDialog(
                 )
 
                 val shown = state.error ?: problem
-                if (shown != null && (state.error != null || quantities.isNotEmpty())) {
+                if (shown != null && (state.error != null || quantities.isNotEmpty() || isStaff)) {
                     Text(
                         shown,
                         color = if (state.error != null) BrandColors.Danger else BrandColors.MutedSlate,
@@ -268,11 +306,19 @@ fun CounterRemovalDialog(
 private fun kindTitle(kind: String) = when (kind) {
     CounterRemovalKind.DAMAGED -> "Venía mal"
     CounterRemovalKind.ACCIDENT -> "Se cayó o se arruinó aquí"
+    CounterRemovalKind.STAFF_BREAD -> "Pan de colaborador"
     else -> "Lo regalé"
 }
 
 @Composable
-private fun KindChoice(quota: Double, used: Double, isPreparing: Boolean, onPick: (String) -> Unit) {
+private fun KindChoice(
+    quota: Double,
+    used: Double,
+    staffBreadLimit: Double,
+    hasGroups: Boolean,
+    isPreparing: Boolean,
+    onPick: (String) -> Unit
+) {
     Text("¿Qué pasó?", style = MaterialTheme.typography.bodyLarge)
     KindOption(
         title = "Venía mal",
@@ -296,6 +342,146 @@ private fun KindChoice(quota: Double, used: Double, isPreparing: Boolean, onPick
         enabled = !isPreparing && quota > 0.0 && left > 0.004,
         onClick = { onPick(CounterRemovalKind.COURTESY) }
     )
+    KindOption(
+        title = "Pan de colaborador",
+        body = when {
+            isPreparing -> "Revisando…"
+            !hasGroups -> "Esta caja no vende pan por grupo."
+            staffBreadLimit <= 0.0 -> "Esta sucursal no da pan de colaborador."
+            else -> "Hasta ${staffBreadLimit.fmtTrim()} panes por persona al día, del pan por grupo."
+        },
+        enabled = !isPreparing && hasGroups && staffBreadLimit > 0.0,
+        onClick = { onPick(CounterRemovalKind.STAFF_BREAD) }
+    )
+}
+
+/**
+ * Pan de colaborador: para quién, de qué grupo y cuántos. Sin PIN (decisión del dueño: todas
+ * tienen derecho y no todas tienen PIN); el control es el tope diario por persona. No se escoge
+ * el tipo de pan: el conteo de cierre lo reparte, igual que la venta.
+ */
+@Composable
+private fun StaffBreadBlock(
+    state: CounterRemovalUiState,
+    groups: List<POSCategory>,
+    groupId: String,
+    onGroupChange: (String) -> Unit,
+    units: Int,
+    onUnitsChange: (Int) -> Unit,
+    selfEmployeeId: String,
+    responsibleId: String,
+    onResponsibleChange: (String) -> Unit,
+    usedToday: Double,
+    enabled: Boolean
+) {
+    EmployeePicker(
+        label = "¿Para quién es? *",
+        state = state,
+        selfEmployeeId = selfEmployeeId,
+        responsibleId = responsibleId,
+        onResponsibleChange = onResponsibleChange,
+        enabled = enabled
+    )
+    val responsible = state.employees.firstOrNull { it.id == responsibleId }
+    if (groups.size > 1) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            groups.forEach { g ->
+                FilterChip(
+                    selected = g.id == groupId,
+                    onClick = { onGroupChange(g.id) },
+                    label = { Text(g.groupDisplayName) },
+                    enabled = enabled
+                )
+            }
+        }
+    }
+    val group = groups.firstOrNull { it.id == groupId }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            group?.groupDisplayName ?: "Pan",
+            Modifier.weight(1f),
+            fontWeight = FontWeight.Medium
+        )
+        IconButton(onClick = { onUnitsChange(units - 1) }, enabled = enabled && units > 1) {
+            Icon(Icons.Default.Remove, "Uno menos")
+        }
+        Text("$units", fontWeight = FontWeight.Bold, modifier = Modifier.width(32.dp))
+        IconButton(onClick = { onUnitsChange(units + 1) }, enabled = enabled) {
+            Icon(Icons.Default.Add, "Uno más")
+        }
+    }
+    if (responsible != null) {
+        val left = (state.staffBreadLimit - usedToday).coerceAtLeast(0.0)
+        Text(
+            "${responsible.name} ya tomó ${usedToday.fmtTrim()} de ${state.staffBreadLimit.fmtTrim()} hoy · le quedan ${left.fmtTrim()}",
+            color = if (units > left + 1e-6) BrandColors.Danger else BrandColors.TextSlate,
+            style = MaterialTheme.typography.bodyMedium
+        )
+    }
+}
+
+/** Elegir a una colaboradora de la lista (la de la caja marcada con "(yo)"). */
+@Composable
+private fun EmployeePicker(
+    label: String,
+    state: CounterRemovalUiState,
+    selfEmployeeId: String,
+    responsibleId: String,
+    onResponsibleChange: (String) -> Unit,
+    enabled: Boolean
+) {
+    var open by remember { mutableStateOf(false) }
+    val responsible = state.employees.firstOrNull { it.id == responsibleId }
+    Text(label, style = MaterialTheme.typography.labelLarge)
+    Column {
+        OutlinedButton(onClick = { open = true }, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
+            Text(
+                responsible?.let { if (it.id == selfEmployeeId) "${it.name} (yo)" else it.name }
+                    ?: if (state.isPreparing) "Cargando colaboradores…" else "Elegir colaboradora"
+            )
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            state.employees.forEach { e ->
+                DropdownMenuItem(
+                    text = { Text(if (e.id == selfEmployeeId) "${e.name} (yo)" else e.name) },
+                    onClick = { onResponsibleChange(e.id); open = false }
+                )
+            }
+        }
+    }
+}
+
+/** PIN de la elegida si no es quien está en la caja; si no tiene PIN, el aviso de que va igual. */
+@Composable
+private fun PinOrNotice(
+    responsible: Employee?,
+    selfEmployeeId: String,
+    needsPin: Boolean,
+    pin: String,
+    onPinChange: (String) -> Unit,
+    pinHint: String,
+    noPinNotice: String,
+    enabled: Boolean
+) {
+    when {
+        responsible == null -> Unit
+        needsPin -> OutlinedTextField(
+            value = pin,
+            onValueChange = onPinChange,
+            label = { Text("PIN de ${responsible.name} *") },
+            supportingText = { Text(pinHint) },
+            singleLine = true,
+            enabled = enabled,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+            modifier = Modifier.fillMaxWidth()
+        )
+        responsible.id != selfEmployeeId -> Text(
+            "${responsible.name} $noPinNotice",
+            style = MaterialTheme.typography.bodySmall,
+            color = BrandColors.AccentDeep
+        )
+    }
 }
 
 @Composable
@@ -326,44 +512,24 @@ private fun AccidentBlock(
     charge: Double,
     enabled: Boolean
 ) {
-    var open by remember { mutableStateOf(false) }
-    val responsible = state.employees.firstOrNull { it.id == responsibleId }
-    Text("¿A quién se le cayó? *", style = MaterialTheme.typography.labelLarge)
-    Column {
-        OutlinedButton(onClick = { open = true }, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
-            Text(
-                responsible?.let { if (it.id == selfEmployeeId) "${it.name} (yo)" else it.name }
-                    ?: if (state.isPreparing) "Cargando colaboradores…" else "Elegir colaboradora"
-            )
-        }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            state.employees.forEach { e ->
-                DropdownMenuItem(
-                    text = { Text(if (e.id == selfEmployeeId) "${e.name} (yo)" else e.name) },
-                    onClick = { onResponsibleChange(e.id); open = false }
-                )
-            }
-        }
-    }
-    when {
-        responsible == null -> Unit
-        needsPin -> OutlinedTextField(
-            value = pin,
-            onValueChange = onPinChange,
-            label = { Text("PIN de ${responsible.name} *") },
-            supportingText = { Text("Ella lo confirma: nadie le carga un accidente a otra.") },
-            singleLine = true,
-            enabled = enabled,
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-            modifier = Modifier.fillMaxWidth()
-        )
-        responsible.id != selfEmployeeId -> Text(
-            "${responsible.name} todavía no tiene PIN: se registra igual y le llega aviso al dueño.",
-            style = MaterialTheme.typography.bodySmall,
-            color = BrandColors.AccentDeep
-        )
-    }
+    EmployeePicker(
+        label = "¿A quién se le cayó? *",
+        state = state,
+        selfEmployeeId = selfEmployeeId,
+        responsibleId = responsibleId,
+        onResponsibleChange = onResponsibleChange,
+        enabled = enabled
+    )
+    PinOrNotice(
+        responsible = state.employees.firstOrNull { it.id == responsibleId },
+        selfEmployeeId = selfEmployeeId,
+        needsPin = needsPin,
+        pin = pin,
+        onPinChange = onPinChange,
+        pinHint = "Ella lo confirma: nadie le carga un accidente a otra.",
+        noPinNotice = "todavía no tiene PIN: se registra igual y le llega aviso al dueño.",
+        enabled = enabled
+    )
     if (charge > 0.0) {
         Text(
             "Se le carga Q ${charge.fmtMoney(2)} (a costo) en su cuenta.",
